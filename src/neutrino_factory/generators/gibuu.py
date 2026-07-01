@@ -75,6 +75,10 @@ class GiBUUAdapter(GeneratorAdapter):
         task: dict,
         execution_mode: str,
     ) -> str:
+        # GiBUU writes its RootTuple output into the run CWD under a fixed name,
+        # not to raw_output_path; hand the real ROOT file to the normalizer.
+        root_path = Path(raw_output_path).parent / "EventOutput.Pert.00000001.root"
+        actual_path = root_path if root_path.exists() else Path(raw_output_path)
         return GiBUUNormalizer().normalize(
-            raw_output_path, normalized_output_path, task, execution_mode
+            actual_path, normalized_output_path, task, execution_mode
         )
