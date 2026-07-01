@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Local environment files
+.env
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Project outputs
+output/
+work/
+software/
+scratch/
+logs/
+
+# Editors
+.vscode/
+.DS_Store
+
+# Output artifacts
+*.root
+# ...but keep example flux histograms referenced by config examples
+!configs/examples/fluxes/*.root
+
+# Claude settings
+.claude
+CLAUDE.md
+ENVIRONMENT.md

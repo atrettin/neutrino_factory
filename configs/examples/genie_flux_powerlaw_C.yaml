@@ -1,0 +1,47 @@
+run:
+  name: genie_flux_powerlaw_c
+  events: 100
+  seed: 12345
+  executor: local
+  stub_mode: false   # real gevgen via the genie:R-3_06_00 Docker image
+
+flux:
+  type: power_law
+  particle: numu
+  emin_gev: 0.5
+  emax_gev: 5.0
+  gamma: -2.0        # flux density proportional to E^-2
+
+target:
+  nucleus: C12
+  pdg: 1000060120
+
+physics:
+  mode: inclusive
+  current: cc
+  # Restrict to CCQE: the default (MEC-inclusive) list segfaults under amd64
+  # emulation in this image (see STUBS.md).
+  event_generator_list: CCQE
+
+generators:
+  genie:
+    versions:
+      - enabled: true
+        code_version: "R-3_06_00"
+        config_version: "G18_10a_02_11a"
+
+splitting:
+  strategy: events
+  chunks: 1
+
+storage:
+  software_root: ${NF_SOFTWARE_ROOT:-./software}
+  output_root: ${NF_OUTPUT_ROOT:-./output}
+  work_root: ${NF_WORK_ROOT:-./work}
+  scratch_root: ${NF_SCRATCH_ROOT:-./scratch}
+
+slurm:
+  partition: standard
+  time: "00:10:00"
+  cpus_per_task: 1
+  mem: "2G"

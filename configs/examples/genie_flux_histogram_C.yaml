@@ -1,0 +1,47 @@
+run:
+  name: genie_flux_histogram_c
+  events: 100
+  seed: 12345
+  executor: local
+  stub_mode: false   # real gevgen via the genie:R-3_06_00 Docker image
+
+flux:
+  type: histogram
+  particle: numu
+  # Precomputed histogram flux: a ROOT TH1 whose bin contents are the flux
+  # density (arbitrary units) vs. neutrino energy in GeV. Path is resolved
+  # relative to this config file. Energy range is taken from the histogram edges.
+  histogram_file: fluxes/numu_hist_flux.root
+  histogram_name: numu_flux
+
+target:
+  nucleus: C12
+  pdg: 1000060120
+
+physics:
+  mode: inclusive
+  current: cc
+  event_generator_list: CCQE
+
+generators:
+  genie:
+    versions:
+      - enabled: true
+        code_version: "R-3_06_00"
+        config_version: "G18_10a_02_11a"
+
+splitting:
+  strategy: events
+  chunks: 1
+
+storage:
+  software_root: ${NF_SOFTWARE_ROOT:-./software}
+  output_root: ${NF_OUTPUT_ROOT:-./output}
+  work_root: ${NF_WORK_ROOT:-./work}
+  scratch_root: ${NF_SCRATCH_ROOT:-./scratch}
+
+slurm:
+  partition: standard
+  time: "00:10:00"
+  cpus_per_task: 1
+  mem: "2G"

@@ -1,0 +1,77 @@
+# Single-stage build for the GiBUU neutrino event generator on Linux x86_64,
+# with ROOT event output enabled via the RootTuple library.
+#
+# Unlike Dockerfile.genie / Dockerfile.nuwro (which compile ROOT from source),
+# this image is based on the prebuilt `rootproject/root` image. GiBUU only needs
+# a working ROOT to link RootTuple against, so the prebuilt base is far simpler
+# and faster and is sufficient for producing valid ROOT output. Recipe follows
+# the KM3NeT/km3buu container.
+#
+# GiBUU is distributed as HEPForge release tarballs (the GitHub mirror is stale
+# and must not be used); this Dockerfile downloads the release/buuinput/RootTuple
+# tarballs for the requested GIBUU_RELEASE.
+#
+# Build: docker build --platform linux/amd64 -t gibuu:release<GIBUU_RELEASE> \
+#                     --build-arg GIBUU_RELEASE=2025 \
+#                     -f setup/Dockerfile.gibuu setup/
+# Run:   GiBUU reads its jobcard (a Fortran namelist) from stdin and writes the
+#        ROOT event file into the working directory.
+#   docker run --platform linux/amd64 --rm -v $PWD:/work -w /work \
+#     gibuu:release2025 bash -c "GiBUU.x < /work/job.job"
+
+ARG ROOT_BASE_TAG=6.32.02-ubuntu22.04
+ARG GIBUU_RELEASE=2025
+ARG JOBS=4
+
+FROM --platform=linux/amd64 rootproject/root:${ROOT_BASE_TAG}
+
+ARG GIBUU_RELEASE
+ARG JOBS
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gfortran \
+    g++ \
+    make \
+    cmake \
+    wget \
+    ca-certificates \
+    libbz2-dev \
+    perl \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Download GiBUU release, input data, and the RootTuple ROOT-output library ──
+# `wget --content-disposition` resolves the ?f=<file> download links to their
+# real filenames (exactly as documented on the HEPForge download page).
+WORKDIR /opt/GiBUU
+RUN wget --content-disposition "https://gibuu.hepforge.org/downloads?f=release${GIBUU_RELEASE}.tar.gz" && \
+    tar -xzf release${GIBUU_RELEASE}.tar.gz && \
+    wget --content-disposition "https://gibuu.hepforge.org/downloads?f=buuinput${GIBUU_RELEASE}.tar.gz" && \
+    tar -xzf buuinput${GIBUU_RELEASE}.tar.gz && \
+    wget --content-disposition "https://gibuu.hepforge.org/downloads?f=libraries${GIBUU_RELEASE}_RootTuple.tar.gz" && \
+    tar -xzf libraries${GIBUU_RELEASE}_RootTuple.tar.gz && \
+    rm -f ./*.tar.gz
+
+# RootTuple's default CMakeLists does not force a C++ standard; modern ROOT
+# headers require C++17, so pin it (same fix the km3buu container applies).
+RUN sed -i '6 a set(CMAKE_CXX_STANDARD 17)\nset(CMAKE_CXX_STANDARD_REQUIRED ON)' \
+      /opt/GiBUU/libraries${GIBUU_RELEASE}/RootTuple/RootTuple-master/CMakeLists.txt
+
+# ── Build RootTuple (static) then GiBUU with ROOT output enabled ───────────────
+# Emulation note: unlike km3buu we do NOT pass -march=x86-64-v3 / MODE=lto, so
+# the binary stays safe under Rosetta amd64 emulation on Apple Silicon.
+# RootTuple is built WITHOUT -j: its target shells out to `cmake --build`, whose
+# nested make loses the parent jobserver fd under -j ("write jobserver: Bad file
+# descriptor"). It is tiny, so serial is fine; GiBUU itself still builds with -j.
+RUN cd /opt/GiBUU/release${GIBUU_RELEASE} && \
+    make buildRootTuple_POS && \
+    make -j"${JOBS}" FORT=gfortran withROOT=1
+
+ENV GIBUU_RELEASE=${GIBUU_RELEASE}
+ENV GIBUU_INPUT=/opt/GiBUU/buuinput
+ENV PATH=/opt/GiBUU/release${GIBUU_RELEASE}/objects:$PATH
+ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
+
+WORKDIR /work
+CMD ["/bin/bash"]

@@ -1,0 +1,57 @@
+run:
+  name: power_law_numu_ar40
+  events: 24
+  seed: 12345
+  executor: local
+  stub_mode: true
+
+flux:
+  type: power_law
+  particle: numu
+  emin_gev: 0.5
+  emax_gev: 10.0
+  gamma: -2.0
+
+target:
+  nucleus: Ar40
+  pdg: 1000180400
+
+physics:
+  mode: inclusive
+  current: cc
+
+generators:
+  genie:
+    versions:
+      - enabled: true
+        code_version: "R-3_06_00"       # git tag / release
+        config_version: "G18_10a_02_11a" # GENIE tune
+      - enabled: true
+        code_version: "R-3_06_00"
+        config_version: "AR23_20i_00_000"
+  neut:
+    versions:
+      - enabled: false
+        code_version: "5.x"
+        config_version: "default"
+  nuwro:
+    versions:
+      - enabled: true
+        code_version: "nuwro_25.11"
+        config_version: "default"
+
+splitting:
+  strategy: events
+  chunks: 2
+
+storage:
+  software_root: ${NF_SOFTWARE_ROOT:-./software}
+  output_root: ${NF_OUTPUT_ROOT:-./output}
+  work_root: ${NF_WORK_ROOT:-./work}
+  scratch_root: ${NF_SCRATCH_ROOT:-./scratch}
+
+slurm:
+  partition: standard
+  time: "00:10:00"
+  cpus_per_task: 1
+  mem: "2G"

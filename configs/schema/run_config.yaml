@@ -1,0 +1,63 @@
+# Common run configuration template for Neutrino Factory
+
+run:
+  name: example_run
+  events: 1000
+  seed: 12345
+  executor: local         # local | slurm
+  stub_mode: true         # keep true for local smoke tests without generator installs
+
+flux:
+  type: power_law
+  particle: numu
+  emin_gev: 0.5
+  emax_gev: 10.0
+  gamma: -2.0
+
+target:
+  nucleus: Ar40
+  pdg: 1000180400
+
+physics:
+  mode: inclusive
+  current: cc
+
+# Every generator version entry has two required, independent axes:
+#   code_version   - the code itself (git tag / release), must be catalogued
+#   config_version - the physics parameter set (GENIE tune; "default" elsewhere)
+# See catalogued options: neutrino-factory list-generators
+generators:
+  genie:
+    versions:
+      - enabled: true
+        code_version: "R-3_06_00"        # required
+        config_version: "G18_10a_02_11a" # required (GENIE tune)
+      - enabled: false
+        code_version: "R-3_06_00"
+        config_version: "AR23_20i_00_000"
+  neut:
+    versions:
+      - enabled: false
+        code_version: "5.x"
+        config_version: "default"
+  nuwro:
+    versions:
+      - enabled: true
+        code_version: "nuwro_25.11"
+        config_version: "default"
+
+splitting:
+  strategy: events
+  chunks: 4
+
+storage:
+  software_root: ${NF_SOFTWARE_ROOT:-./software}
+  output_root: ${NF_OUTPUT_ROOT:-./output}
+  work_root: ${NF_WORK_ROOT:-./work}
+  scratch_root: ${NF_SCRATCH_ROOT:-./scratch}
+
+slurm:
+  partition: standard
+  time: "00:30:00"
+  cpus_per_task: 1
+  mem: "2G"

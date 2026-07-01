@@ -1,0 +1,151 @@
+# Multi-stage build for NuWro neutrino event generator on Linux x86_64.
+# Build: docker build --platform linux/amd64 -t nuwro:<NUWRO_TAG> \
+#                     --build-arg NUWRO_TAG=<NUWRO_TAG> \
+#                     -f setup/Dockerfile.nuwro setup/
+# Run:   NuWro must run from /opt/nuwro so it can locate data/ relative to
+#        its binary. Output goes to the mounted /work directory.
+#   docker run --platform linux/amd64 --rm \
+#     -v $PWD:/work -w /opt/nuwro \
+#     nuwro:<NUWRO_TAG> nuwro -o /work/events.root -i /work/params.txt
+
+ARG NUWRO_TAG=nuwro_25.11
+ARG PYTHIA6_VERSION=6.4.28
+ARG ROOT_VERSION=6.30.10
+ARG JOBS=4
+
+# ── Stage 1: Builder ──────────────────────────────────────────────────────────
+FROM --platform=linux/amd64 ubuntu:22.04 AS builder
+
+ARG NUWRO_TAG
+ARG PYTHIA6_VERSION
+ARG ROOT_VERSION
+ARG JOBS
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gfortran \
+    cmake \
+    git \
+    curl \
+    ca-certificates \
+    libxml2-dev \
+    libxml2-utils \
+    libfreetype6-dev \
+    libpcre3-dev \
+    python3-dev \
+    python3 \
+    python-is-python3 \
+    perl \
+    xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Pythia6 ───────────────────────────────────────────────────────────────────
+# Reuse GENIE's upstream build_pythia6.sh rather than duplicating the build logic.
+RUN git clone --depth 1 https://github.com/GENIE-MC/Generator.git /tmp/genie-src
+
+RUN mkdir -p /opt/pythia6 && \
+    cd /opt/pythia6 && \
+    bash /tmp/genie-src/src/scripts/build/ext/build_pythia6.sh "${PYTHIA6_VERSION}" && \
+    rm -rf /tmp/genie-src
+
+# ── ROOT ──────────────────────────────────────────────────────────────────────
+# libssl-dev is kept as a separate layer so Pythia6 cache above stays valid
+# when this dependency changes. ROOT 6.30 uses OpenSSL via a builtin that
+# fails to install under emulation; system SSL is safer.
+RUN apt-get update && apt-get install -y --no-install-recommends libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pythia6 shared library path varies by version; derive it the same way
+# GENIE's own scripts do: v{major}_{minor}{tiny}.
+RUN PYTHIA6_LIBDIR="$(find /opt/pythia6 -maxdepth 2 -name 'libPythia6.so' \
+        -exec dirname {} \; | head -1)" && \
+    curl -fsSL \
+      "https://root.cern/download/root_v${ROOT_VERSION}.source.tar.gz" \
+      -o /tmp/root-src.tar.gz && \
+    tar -xzf /tmp/root-src.tar.gz -C /tmp && \
+    mv "/tmp/root-${ROOT_VERSION}" /tmp/root-src && \
+    cmake -S /tmp/root-src -B /tmp/root-build \
+      -DCMAKE_INSTALL_PREFIX=/opt/root \
+      -DCMAKE_BUILD_TYPE=Release \
+      -Dpythia6=ON \
+      -Dpythia6_library="${PYTHIA6_LIBDIR}/libPythia6.so" \
+      -Dmathmore=ON \
+      -Ddavix=OFF \
+      -Dxrootd=OFF \
+      -Dwebgui=OFF \
+      -Dasimage=OFF \
+      -Dopengl=OFF \
+      -Dx11=OFF \
+      -Dgviz=OFF \
+      -Dbuiltin_freetype=OFF \
+      -Dbuiltin_pcre=OFF \
+      -Dbuiltin_openssl=OFF \
+      -Dcxxmodules=OFF \
+      -Wno-dev && \
+    cmake --build /tmp/root-build --parallel "${JOBS}" && \
+    cmake --install /tmp/root-build && \
+    rm -rf /tmp/root-src /tmp/root-build /tmp/root-src.tar.gz
+
+# ── ROOTEGPythia6 ─────────────────────────────────────────────────────────────
+# ROOT 6.26+ no longer ships TPythia6 / libEGPythia6 internally.
+# ROOTEGPythia6 (Luke Pickering) is the replacement standalone package.
+# BUILTIN=ON makes it compile its own Pythia6, so no extra dependency.
+RUN git clone --depth 1 \
+      https://github.com/luketpickering/ROOTEGPythia6.git /opt/rooted-src && \
+    export ROOTSYS=/opt/root && \
+    export PATH=/opt/root/bin:${PATH} && \
+    export LD_LIBRARY_PATH=/opt/root/lib:${LD_LIBRARY_PATH:-} && \
+    cmake -S /opt/rooted-src -B /tmp/rooted-build \
+      -DCMAKE_INSTALL_PREFIX=/opt/ROOTEGPythia6 \
+      -DROOTEGPythia6_Pythia6_BUILTIN=ON \
+      -Wno-dev && \
+    cmake --build /tmp/rooted-build --parallel "${JOBS}" && \
+    cmake --install /tmp/rooted-build && \
+    rm -rf /tmp/rooted-build
+
+# ── NuWro ─────────────────────────────────────────────────────────────────────
+# NuWro's documented install method builds in place (its own CMakeLists.txt
+# hardcodes CMAKE_INSTALL_PREFIX to the source dir, so we use the top-level
+# Makefile directly, cloning straight into the final /opt/nuwro location).
+RUN git clone --depth 1 --branch "${NUWRO_TAG}" \
+      https://github.com/NuWro/nuwro.git /opt/nuwro
+
+RUN export ROOTSYS=/opt/root && \
+    export PATH=/opt/root/bin:${PATH} && \
+    export LD_LIBRARY_PATH=/opt/root/lib:${LD_LIBRARY_PATH:-} && \
+    export ROOTEGPythia6_ROOT=/opt/ROOTEGPythia6 && \
+    cd /opt/nuwro && \
+    make -j"${JOBS}" \
+      LDFLAGS="$(/opt/root/bin/root-config --libs) -L/opt/ROOTEGPythia6/lib -Wl,-rpath,/opt/ROOTEGPythia6/lib -lEGPythia6 -lPythia6 -lGeom -lMinuit -lgfortran"
+
+# ── Stage 2: Runtime ──────────────────────────────────────────────────────────
+FROM --platform=linux/amd64 ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    libgomp1 \
+    libgfortran5 \
+    libfreetype6 \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/root /opt/root
+COPY --from=builder /opt/ROOTEGPythia6 /opt/ROOTEGPythia6
+COPY --from=builder /opt/nuwro /opt/nuwro
+
+# The ROOTEGPythia6 PCM bakes in its build-time path. Symlink so Cling finds it.
+RUN mkdir -p /tmp/rooted-build && \
+    ln -s /opt/ROOTEGPythia6/lib/libTPythia6_rdict.pcm \
+          /tmp/rooted-build/libTPythia6_rdict.pcm
+
+ENV ROOTSYS=/opt/root
+ENV ROOTEGPythia6_ROOT=/opt/ROOTEGPythia6
+ENV PATH=/opt/nuwro/bin:/opt/root/bin:$PATH
+ENV LD_LIBRARY_PATH=/opt/nuwro/lib:/opt/root/lib:/opt/ROOTEGPythia6/lib
+
+WORKDIR /work
+CMD ["/bin/bash"]

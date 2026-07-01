@@ -1,0 +1,200 @@
+# Multi-stage build for GENIE neutrino event generator on Linux x86_64.
+# Build: docker build --platform linux/amd64 -t genie:<GENIE_TAG> \
+#                     --build-arg GENIE_TAG=<GENIE_TAG> \
+#                     -f setup/Dockerfile.genie setup/
+# Run:   docker run --platform linux/amd64 --rm -v $PWD:/work -w /work \
+#          genie:<GENIE_TAG> gevgen -n 100 -p 14 -t 1000060120 -e 0.5,5.0 \
+#            --tune G18_10a_02_11a --event-generator-list CCQE \
+#            --seed 12345 -o test_events.root
+#
+# ROOT 6.24.08 is used intentionally: it includes native TPythia6/libEGPythia6
+# and has TXMLEngine::GetAttr() returning "" for missing attributes. ROOT 6.26+
+# changed GetAttr() to return nullptr, which crashes GENIE R-3_06_00's
+# AlgConfigPool::LoadRegistries.
+#
+# Emulation caveats (amd64 via Rosetta): ROOT is built with -Dimt=OFF and
+# -Dclad=OFF because the builtin TBB and the clad cling plugin fail to compile
+# under emulation; neither is needed by GENIE. gevgen's MEC (2p2h) path also
+# crashes under emulation, so use --event-generator-list CCQE (see STUBS.md).
+
+ARG GENIE_TAG=R-3_06_00
+ARG LHAPDF_VERSION=6.5.6
+ARG ROOT_VERSION=6.24.08
+ARG PYTHIA6_VERSION=6.4.28
+ARG JOBS=4
+
+# ── Stage 1: Builder ──────────────────────────────────────────────────────────
+FROM --platform=linux/amd64 ubuntu:22.04 AS builder
+
+ARG GENIE_TAG
+ARG LHAPDF_VERSION
+ARG ROOT_VERSION
+ARG PYTHIA6_VERSION
+ARG JOBS
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gfortran \
+    cmake \
+    git \
+    curl \
+    ca-certificates \
+    libgsl-dev \
+    libxml2-dev \
+    liblog4cpp5-dev \
+    libfreetype6-dev \
+    libpcre3-dev \
+    libssl-dev \
+    python3-dev \
+    python3 \
+    python-is-python3 \
+    perl \
+    xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── GENIE source ──────────────────────────────────────────────────────────────
+# Clone straight into the final location and build in place. GENIE resolves its
+# tunes (config/) and physics data (data/) from $GENIE at runtime; a relocating
+# --prefix install of GENIE R-3 is fragile and drops the data/ tree, so we keep
+# $GENIE pointing at the build tree both at build and run time.
+RUN git clone --depth 1 --branch "${GENIE_TAG}" \
+      https://github.com/GENIE-MC/Generator.git /opt/genie
+
+# ── Pythia6 ───────────────────────────────────────────────────────────────────
+# Build using GENIE's own upstream build script (same approach as NuWro).
+RUN mkdir -p /opt/pythia6 && \
+    cd /opt/pythia6 && \
+    bash /opt/genie/src/scripts/build/ext/build_pythia6.sh "${PYTHIA6_VERSION}"
+
+# ── LHAPDF ────────────────────────────────────────────────────────────────────
+RUN curl -fsSL \
+      "https://lhapdf.hepforge.org/downloads/LHAPDF-${LHAPDF_VERSION}.tar.gz" \
+      -o /tmp/lhapdf.tar.gz && \
+    tar -xzf /tmp/lhapdf.tar.gz -C /tmp && \
+    cd "/tmp/LHAPDF-${LHAPDF_VERSION}" && \
+    ./configure --prefix=/opt/lhapdf6 --disable-pyext && \
+    make -j"${JOBS}" && \
+    make install && \
+    rm -rf "/tmp/LHAPDF-${LHAPDF_VERSION}" /tmp/lhapdf.tar.gz
+
+# ── ROOT 6.24.08 ──────────────────────────────────────────────────────────────
+# ROOT 6.24 ships native TPythia6/libEGPythia6 — no external workaround needed.
+# -Dbuiltin_openssl=OFF uses system libssl-dev instead of a bundled copy.
+#
+# Pythia6 detection: ROOT's FindPythia6 honours PYTHIA6_DIR (parent of lib/) and
+# requires an include anchor named general_pythia.inc. GENIE's build_pythia6.sh
+# produces lib/libPythia6.so and an inc/ dir but NOT general_pythia.inc, so we
+# create it and point ROOT at the right dir/library — otherwise ROOT silently
+# reports "Pythia6 not found" and disables pythia6, breaking GENIE.
+#
+# -Dimt=OFF disables ROOT implicit multithreading, which pulls in a builtin TBB
+# that fails to compile under amd64 emulation. GENIE does not need ROOT IMT.
+RUN PYTHIA6_LIBDIR="$(find /opt/pythia6 -maxdepth 4 -name 'libPythia6.so' \
+        -exec dirname {} \; | head -1)" && \
+    PYTHIA6_DIR="$(dirname "${PYTHIA6_LIBDIR}")" && \
+    touch "${PYTHIA6_DIR}/inc/general_pythia.inc" && \
+    curl -fsSL \
+      "https://root.cern/download/root_v${ROOT_VERSION}.source.tar.gz" \
+      -o /tmp/root-src.tar.gz && \
+    tar -xzf /tmp/root-src.tar.gz -C /tmp && \
+    mv "/tmp/root-${ROOT_VERSION}" /tmp/root-src && \
+    cmake -S /tmp/root-src -B /tmp/root-build \
+      -DCMAKE_INSTALL_PREFIX=/opt/root \
+      -DCMAKE_BUILD_TYPE=Release \
+      -Dpythia6=ON \
+      -DPYTHIA6_DIR="${PYTHIA6_DIR}" \
+      -DPYTHIA6_LIBRARY="${PYTHIA6_LIBDIR}/libPythia6.so" \
+      -Dmathmore=ON \
+      -Dimt=OFF \
+      -Dclad=OFF \
+      -Ddavix=OFF \
+      -Dxrootd=OFF \
+      -Dwebgui=OFF \
+      -Dasimage=OFF \
+      -Dopengl=OFF \
+      -Dx11=OFF \
+      -Dgviz=OFF \
+      -Dbuiltin_freetype=OFF \
+      -Dbuiltin_pcre=OFF \
+      -Dbuiltin_openssl=OFF \
+      -Dcxxmodules=OFF \
+      -Wno-dev && \
+    cmake --build /tmp/root-build --parallel "${JOBS}" && \
+    cmake --install /tmp/root-build && \
+    test -f /opt/root/lib/libEGPythia6.so && \
+    rm -rf /tmp/root-src /tmp/root-build /tmp/root-src.tar.gz
+
+# ── GENIE ─────────────────────────────────────────────────────────────────────
+# Build in place at $GENIE=/opt/genie (no relocating --prefix). After make, both
+# config/ and data/ must exist under /opt/genie for tunes/physics data to resolve
+# at runtime; the explicit test fails the build loudly if either is missing.
+# Set ROOT env explicitly instead of sourcing thisroot.sh: Docker RUN uses
+# /bin/sh (dash), and thisroot.sh is bash-only ("Bad substitution" under dash).
+# GENIE's configure only needs root-config on PATH and ROOTSYS set.
+RUN PYTHIA6_LIBDIR="$(find /opt/pythia6 -maxdepth 4 -name 'libPythia6.so' \
+        -exec dirname {} \; | head -1)" && \
+    export ROOTSYS=/opt/root && \
+    export PATH="/opt/root/bin:${PATH}" && \
+    export LD_LIBRARY_PATH="/opt/root/lib:/opt/lhapdf6/lib:${PYTHIA6_LIBDIR}" && \
+    export GENIE=/opt/genie && \
+    cd /opt/genie && \
+    ./configure \
+      --disable-lhapdf5 \
+      --enable-lhapdf6 \
+      --enable-pythia6 \
+      --disable-pythia8 \
+      --with-lhapdf6-inc=/opt/lhapdf6/include \
+      --with-lhapdf6-lib=/opt/lhapdf6/lib \
+      --with-libxml2-inc=/usr/include/libxml2 \
+      --with-libxml2-lib=/usr/lib/x86_64-linux-gnu \
+      --with-log4cpp-inc=/usr/include \
+      --with-log4cpp-lib=/usr/lib/x86_64-linux-gnu \
+      --with-pythia6-lib="${PYTHIA6_LIBDIR}" && \
+    make -j"${JOBS}" && \
+    test -d /opt/genie/config && test -d /opt/genie/data && \
+    test -x /opt/genie/bin/gevgen
+
+# ── Stage 2: Runtime ──────────────────────────────────────────────────────────
+FROM --platform=linux/amd64 ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgsl27 \
+    libxml2 \
+    liblog4cpp5v5 \
+    libssl3 \
+    libfreetype6 \
+    libpcre3 \
+    python3 \
+    libgomp1 \
+    perl \
+    libgfortran5 \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/root /opt/root
+COPY --from=builder /opt/genie /opt/genie
+COPY --from=builder /opt/lhapdf6 /opt/lhapdf6
+COPY --from=builder /opt/pythia6 /opt/pythia6
+
+ENV GENIE=/opt/genie
+ENV ROOTSYS=/opt/root
+ENV PATH=/opt/genie/bin:/opt/root/bin:$PATH
+
+# Pythia6 lib path is version-specific and not in the ENV below; register it with
+# ldconfig so non-interactive runs (e.g. `docker run ... gevgen`) can load
+# libPythia6.so without relying on a login shell sourcing /etc/environment.
+RUN PYTHIA6_LIBDIR="$(find /opt/pythia6 -maxdepth 4 -name 'libPythia6.so' \
+        -exec dirname {} \; | head -1)" && \
+    printf '%s\n' "${PYTHIA6_LIBDIR}" > /etc/ld.so.conf.d/pythia6.conf && \
+    printf '%s\n' /opt/genie/lib /opt/root/lib /opt/lhapdf6/lib \
+      > /etc/ld.so.conf.d/genie.conf && \
+    ldconfig
+
+ENV LD_LIBRARY_PATH=/opt/genie/lib:/opt/root/lib:/opt/lhapdf6/lib
+
+WORKDIR /work
+CMD ["/bin/bash"]
