@@ -10,8 +10,11 @@ neutrino ``particle`` it describes. ``to_histogram`` produces a binned
 representation used both to hand the shape to generators and to draw synthetic
 energies in stub mode (``sample_energies``).
 
-Per-generator translation of this abstraction lives in the translators; only
-GENIE consumes it for real today (see ``translators/genie.py``).
+Per-generator translation of this abstraction lives in the translators. GENIE
+consumes it via a ROOT TF1/TH1 flux driver (``translators/genie.py``); NuWro and
+GiBUU cannot take a continuous function, so they receive a finely-binned
+``to_histogram`` spectrum (NuWro's ``beam_energy`` histogram string; GiBUU's
+``nuExp=99`` user-flux file).
 """
 
 from __future__ import annotations

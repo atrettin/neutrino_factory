@@ -62,7 +62,7 @@ class NuWroAdapter(GeneratorAdapter):
             ]
             return [
                 "docker", "run", "--platform", "linux/amd64", "--rm",
-                "-v", f"{work_dir}:/work",
+                "-v", f"{Path(work_dir).resolve()}:/work",
                 "-w", "/opt/nuwro",
                 self._docker_image(code_version),
             ] + nuwro_args

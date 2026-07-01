@@ -34,10 +34,21 @@ class GiBUUAdapter(GeneratorAdapter):
         jobcard_path.write_text(jobcard, encoding="utf-8")
         return jobcard_path
 
+    @staticmethod
+    def _write_flux_file(work_dir: Path, flux_table: str) -> Path:
+        # Written as flux.dat and exposed to GiBUU at /work/flux.dat via the
+        # work-dir bind mount, matching the jobcard's FileNameFlux.
+        flux_path = work_dir / "flux.dat"
+        flux_path.write_text(flux_table, encoding="utf-8")
+        return flux_path
+
     def build_run_command(self, translated_config: dict, work_dir: Path) -> list[str]:
         code_version = translated_config.get("code_version")
         work_dir.mkdir(parents=True, exist_ok=True)
         self._write_jobcard(work_dir, translated_config["gibuu_jobcard"])
+        flux_table = translated_config.get("gibuu_flux_table")
+        if flux_table:
+            self._write_flux_file(work_dir, flux_table)
         (work_dir / "translated_config.json").write_text(
             json.dumps(translated_config), encoding="utf-8"
         )
@@ -49,7 +60,7 @@ class GiBUUAdapter(GeneratorAdapter):
         if self._docker_available(code_version):
             return [
                 "docker", "run", "--platform", "linux/amd64", "--rm",
-                "-v", f"{work_dir}:/work",
+                "-v", f"{Path(work_dir).resolve()}:/work",
                 "-w", "/work",
                 self._docker_image(code_version),
                 "bash", "-c", f"{self.binary_name()} < /work/job.job",
