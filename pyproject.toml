@@ -20,6 +20,11 @@ dependencies = [
   "awkward>=2.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pyright>=1.1",
+]
+
 [project.scripts]
 neutrino-factory = "neutrino_factory.cli:main"
 
@@ -31,3 +36,9 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.pyright]
+include = ["src", "tests"]
+typeCheckingMode = "basic"
+pythonVersion = "3.9"
+useLibraryCodeForTypes = false

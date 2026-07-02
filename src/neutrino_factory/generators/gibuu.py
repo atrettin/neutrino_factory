@@ -58,11 +58,13 @@ class GiBUUAdapter(GeneratorAdapter):
             return ["bash", "-c", f"{self.binary_name()} < job.job"]
 
         if self._docker_available(code_version):
+            docker_image = self._docker_image(code_version)
+            assert docker_image is not None
             return [
                 "docker", "run", "--platform", "linux/amd64", "--rm",
                 "-v", f"{Path(work_dir).resolve()}:/work",
                 "-w", "/work",
-                self._docker_image(code_version),
+                docker_image,
                 "bash", "-c", f"{self.binary_name()} < /work/job.job",
             ]
 

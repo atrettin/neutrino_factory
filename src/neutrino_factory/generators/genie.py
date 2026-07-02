@@ -125,7 +125,9 @@ class GenieAdapter(GeneratorAdapter):
             # Mount the histogram flux file's directory so gevgen can read it.
             if flux_file is not None:
                 docker_args.extend(["-v", f"{flux_file.parent.resolve()}:/flux:ro"])
-            docker_args.extend(["-w", "/work", self._docker_image(code_version)])
+            docker_image = self._docker_image(code_version)
+            assert docker_image is not None
+            docker_args.extend(["-w", "/work", docker_image])
 
             remapped: list[str] = []
             for arg in gevgen_args:

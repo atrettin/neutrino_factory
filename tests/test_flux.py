@@ -64,7 +64,8 @@ class HistogramFluxTests(unittest.TestCase):
         self.assertEqual(flux.emax_gev, 4.0)
         self.assertEqual(flux(1.5), 4.0)
         self.assertEqual(flux.source_name, "numu_flux")
-        self.assertEqual(Path(flux.source_path).name, "flux.root")
+        assert flux.source_path is not None
+        self.assertEqual(flux.source_path.name, "flux.root")
 
 
 class BuildFluxTests(unittest.TestCase):
