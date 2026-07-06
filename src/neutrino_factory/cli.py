@@ -12,6 +12,13 @@ from .config import ConfigError, load_config
 from .local import run_local, run_task_from_manifest
 from .merge import merge_outputs
 from .slurm import write_manifest, write_sbatch_script
+from .validate_output import (
+    expected_outputs,
+    format_report,
+    format_summary,
+    summarize,
+    validate_file,
+)
 
 
 def _print_json(payload: dict) -> None:
@@ -162,6 +169,41 @@ def cmd_list_generators(args: argparse.Namespace) -> int:
     for line in lines:
         print("  ".join(value.ljust(widths[col]) for col, value in enumerate(line)))
     return 0
+
+
+def cmd_check_status(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    outputs = expected_outputs(config)
+
+    merged_results = [
+        validate_file(entry["path"], entry["expected_events"], args.tolerance)
+        for entry in outputs["merged"]
+    ]
+    chunk_results = [
+        validate_file(entry["path"], entry["expected_events"], args.tolerance)
+        for entry in outputs["chunks"]
+    ]
+    chunks_summary = summarize(chunk_results)
+
+    if args.json:
+        _print_json(
+            {
+                "merged": merged_results,
+                "chunks_summary": chunks_summary,
+                "chunks": chunk_results,
+            }
+        )
+    else:
+        print(f"Merged files ({len(merged_results)}):")
+        for result in merged_results:
+            print(format_report(result))
+        print()
+        print(f"Chunk files ({chunks_summary['total']}):")
+        print(format_summary(chunks_summary))
+
+    all_merged_valid = all(r["valid"] for r in merged_results)
+    all_chunks_valid = chunks_summary["fraction_valid"] == 1.0
+    return 0 if all_merged_valid and all_chunks_valid else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -337,6 +379,39 @@ def build_parser() -> argparse.ArgumentParser:
     )
     list_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     list_parser.set_defaults(func=cmd_list_generators)
+
+    check_status_parser = subparsers.add_parser(
+        "check-status",
+        help="Validate the HDF5 outputs a config is expected to produce",
+        description=(
+            "Given a run configuration, compute every HDF5 file the run should "
+            "produce (per-chunk files plus the per-generator merged files) and "
+            "validate each one: that it exists, opens, carries the required "
+            "metadata and event columns, and holds approximately the expected "
+            "number of events. Prints full validation status for the merged files "
+            "and roll-up summary statistics (fraction existing/valid/with errors) "
+            "for the many per-chunk files. Exits non-zero if any merged file is "
+            "invalid or any chunk is invalid."
+        ),
+        epilog=(
+            "Example:\n"
+            "  neutrino-factory check-status --config configs/examples/power_law_numu_Ar.yaml"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    check_status_parser.add_argument(
+        "--config", required=True, help="Path to the run configuration YAML"
+    )
+    check_status_parser.add_argument(
+        "--tolerance",
+        type=float,
+        default=0.05,
+        help="Relative tolerance for the event-count check (default: 0.05)",
+    )
+    check_status_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON"
+    )
+    check_status_parser.set_defaults(func=cmd_check_status)
 
     return parser
 
