@@ -53,6 +53,9 @@ def cmd_submit(args: argparse.Namespace) -> int:
     manifest_path = write_manifest(config, args.manifest)
 
     if args.executor == "local":
+        if args.dry_run:
+            print("Nothing to do: --dry-run has no effect with --executor local, which always runs in-process.")
+            return 0
         result = run_local(config, manifest_path)
         _print_json(result)
         return 0
