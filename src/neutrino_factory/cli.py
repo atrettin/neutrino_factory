@@ -162,41 +162,171 @@ def cmd_list_generators(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Neutrino Factory CLI")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(
+        prog="neutrino-factory",
+        description=(
+            "Orchestrate Monte Carlo neutrino event generators (GENIE, NuWro, NEUT, GiBUU) "
+            "for Slurm clusters or local runs, normalizing every generator's output into a "
+            "common HDF5 format."
+        ),
+        epilog=(
+            "Typical workflow:\n"
+            "  1. neutrino-factory validate-config --config <cfg>   # check the config\n"
+            "  2. neutrino-factory submit --config <cfg> --executor local   # run it\n"
+            "  3. neutrino-factory merge --output all.h5 chunk_*.h5   # combine outputs\n"
+            "\n"
+            "Run 'neutrino-factory <command> --help' for detailed help on any subcommand."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    subparsers = parser.add_subparsers(
+        dest="command", required=True, metavar="<command>", title="commands"
+    )
 
-    validate_parser = subparsers.add_parser("validate-config", help="Validate a YAML configuration")
-    validate_parser.add_argument("--config", required=True)
+    validate_parser = subparsers.add_parser(
+        "validate-config",
+        help="Validate a YAML configuration",
+        description=(
+            "Load a run configuration, expand environment variables, apply defaults, and "
+            "validate it against the generator catalog. Prints a one-line summary of the "
+            "run name, executor, and the enabled generator instances. Exits non-zero with "
+            "an error message if the config is invalid. Nothing is executed or submitted."
+        ),
+        epilog="Example:\n  neutrino-factory validate-config --config configs/examples/power_law_numu_Ar.yaml",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    validate_parser.add_argument("--config", required=True, help="Path to the run configuration YAML")
     validate_parser.set_defaults(func=cmd_validate_config)
 
-    plan_parser = subparsers.add_parser("plan", help="Generate a task manifest")
-    plan_parser.add_argument("--config", required=True)
-    plan_parser.add_argument("--manifest")
-    plan_parser.add_argument("--executor", choices=["local", "slurm"])
+    plan_parser = subparsers.add_parser(
+        "plan",
+        help="Generate a task manifest",
+        description=(
+            "Expand the configuration into a task manifest (JSON) — one task per "
+            "generator-version x chunk — without running anything. Writes the manifest to "
+            "disk and prints its path, the resolved executor, run name, and total task "
+            "count. Useful for inspecting how a config fans out before submitting."
+        ),
+        epilog=(
+            "Example:\n"
+            "  neutrino-factory plan --config configs/examples/power_law_numu_Ar.yaml --manifest work/manifest.json"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    plan_parser.add_argument("--config", required=True, help="Path to the run configuration YAML")
+    plan_parser.add_argument(
+        "--manifest", help="Where to write the manifest JSON (default: derived from NF_WORK_ROOT)"
+    )
+    plan_parser.add_argument(
+        "--executor",
+        choices=["local", "slurm"],
+        help="Override the executor recorded in the manifest",
+    )
     plan_parser.set_defaults(func=cmd_plan)
 
-    submit_parser = subparsers.add_parser("submit", help="Run locally or render/submit Slurm scaffolding")
-    submit_parser.add_argument("--config", required=True)
-    submit_parser.add_argument("--manifest")
-    submit_parser.add_argument("--executor", choices=["local", "slurm"], default="local")
-    submit_parser.add_argument("--dry-run", action="store_true")
+    submit_parser = subparsers.add_parser(
+        "submit",
+        help="Run locally or render/submit Slurm scaffolding",
+        description=(
+            "Build the task manifest and then either run it or hand it to Slurm, depending "
+            "on --executor. With '--executor local' the full pipeline runs in-process "
+            "(translate config, run each generator or its stub, normalize to HDF5). With "
+            "'--executor slurm' an sbatch script is rendered and submitted; add --dry-run to "
+            "print the rendered script without submitting (useful with no cluster access)."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  # Run the whole pipeline locally\n"
+            "  neutrino-factory submit --config configs/examples/power_law_numu_Ar.yaml --executor local\n"
+            "\n"
+            "  # Render the Slurm sbatch script without submitting\n"
+            "  neutrino-factory submit --config configs/examples/power_law_numu_Ar.yaml --executor slurm --dry-run"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    submit_parser.add_argument("--config", required=True, help="Path to the run configuration YAML")
+    submit_parser.add_argument(
+        "--manifest", help="Where to write the manifest JSON (default: derived from NF_WORK_ROOT)"
+    )
+    submit_parser.add_argument(
+        "--executor",
+        choices=["local", "slurm"],
+        default="local",
+        help="Where to run: in-process (local) or via Slurm (default: local)",
+    )
+    submit_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --executor slurm, render the sbatch script but do not submit it",
+    )
     submit_parser.set_defaults(func=cmd_submit)
 
-    run_task_parser = subparsers.add_parser("run-task", help="Run one task from a manifest")
-    run_task_parser.add_argument("--config", required=True)
-    run_task_parser.add_argument("--manifest", required=True)
-    run_task_parser.add_argument("--task-index", required=True, type=int)
-    run_task_parser.add_argument("--execution-mode", choices=["local", "slurm"], default="slurm")
+    run_task_parser = subparsers.add_parser(
+        "run-task",
+        help="Run one task from a manifest",
+        description=(
+            "Execute a single task from an existing manifest, selected by its zero-based "
+            "index. This is the per-task entry point invoked inside a Slurm array job, but "
+            "it can also be run by hand to debug or re-run one chunk. Prints the path to the "
+            "normalized HDF5 output for that task."
+        ),
+        epilog=(
+            "Example:\n"
+            "  neutrino-factory run-task --config configs/examples/power_law_numu_Ar.yaml \\\n"
+            "      --manifest work/manifest.json --task-index 0 --execution-mode local"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    run_task_parser.add_argument("--config", required=True, help="Path to the run configuration YAML")
+    run_task_parser.add_argument(
+        "--manifest", required=True, help="Path to a manifest produced by 'plan' or 'submit'"
+    )
+    run_task_parser.add_argument(
+        "--task-index", required=True, type=int, help="Zero-based index of the task to run"
+    )
+    run_task_parser.add_argument(
+        "--execution-mode",
+        choices=["local", "slurm"],
+        default="slurm",
+        help="Execution context for the task (default: slurm)",
+    )
     run_task_parser.set_defaults(func=cmd_run_task)
 
-    merge_parser = subparsers.add_parser("merge", help="Merge normalized HDF5 outputs")
-    merge_parser.add_argument("--output", required=True)
-    merge_parser.add_argument("inputs", nargs="+")
+    merge_parser = subparsers.add_parser(
+        "merge",
+        help="Merge normalized HDF5 outputs",
+        description=(
+            "Merge several normalized HDF5 files (e.g. the per-chunk outputs of a run) into "
+            "a single HDF5 file in the common output format. Prints the path to the merged "
+            "file and how many inputs were combined."
+        ),
+        epilog=(
+            "Example:\n"
+            "  neutrino-factory merge --output output/all.h5 output/chunk_000.h5 output/chunk_001.h5"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    merge_parser.add_argument("--output", required=True, help="Path for the merged HDF5 file")
+    merge_parser.add_argument("inputs", nargs="+", help="One or more HDF5 files to merge")
     merge_parser.set_defaults(func=cmd_merge)
 
     list_parser = subparsers.add_parser(
         "list-generators",
         help="List catalogued generators, their code versions, and compatible config versions",
+        description=(
+            "Print the generator catalog (the single source of truth for which code and "
+            "config versions exist). For each generator it shows the catalogued code "
+            "versions, their compatible config versions, the derived Docker image name, and "
+            "whether that image is built locally. Use --built to hide generators whose image "
+            "is not built, --generator to focus on one, and --json for machine-readable output."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  neutrino-factory list-generators\n"
+            "  neutrino-factory list-generators --generator genie --built\n"
+            "  neutrino-factory list-generators --json"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     list_parser.add_argument("--generator", help="Restrict to a single generator")
     list_parser.add_argument(
