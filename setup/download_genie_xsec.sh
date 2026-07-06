@@ -7,7 +7,8 @@
 # splines. FNAL publishes ready-made splines per code version + tune at
 #   https://scisoft.fnal.gov/scisoft/packages/genie_xsec/<upsver>/
 #
-# For each catalogued tune this script downloads the matching tarball, extracts
+# For each requested tune (or every tune published on SciSoft when none are given)
+# this script downloads the matching tarball, extracts
 # only the master spline (gxspl-NUsmall.xml) out of its deep directory structure,
 # and stages it as:
 #   <software_root>/genie/genie_xsec/<tag-safe>/<tune>/xsecs.xml
@@ -28,8 +29,8 @@ Download GENIE cross-section spline XML files from FNAL SciSoft and stage them a
 
 Options:
   --code-version V   GENIE code version (default: R-3_06_00). Must be catalogued.
-  --tune NAME        Tune to download (repeatable). Default: all catalogued tunes
-                     for the code version.
+  --tune NAME        Tune to download (repeatable). Default: every tune published
+                     on SciSoft for the code version (discovered from the server).
   --software-root D  Root to stage into (default: $NF_SOFTWARE_ROOT or ./software).
   --force            Re-download and re-stage even if xsecs.xml already exists.
   --help             Show this help.
@@ -63,17 +64,30 @@ require_command curl
 require_command tar
 nf_validate_code_version genie "$CODE_VERSION"
 
-# If no tunes were given, download every catalogued tune for this code version.
-if ((${#TUNES[@]} == 0)); then
-  read -r -a TUNES <<< "$(nf_config_versions genie "$CODE_VERSION")"
-  ((${#TUNES[@]} > 0)) || fail "No catalogued tunes for genie $CODE_VERSION"
-fi
-
 # Derive SciSoft naming from the code version: R-3_06_00 -> ups v3_06_00, dotted 3.06.00.
 VER="${CODE_VERSION#R-}"
 UPSVER="v${VER}"
 DOTVER="${VER//_/.}"
 BASE_URL="https://scisoft.fnal.gov/scisoft/packages/genie_xsec/${UPSVER}"
+
+# If no tunes were given, discover every tune published for this code version by
+# scraping the SciSoft directory listing (no hard-coded tune list). Tarballs are
+# named genie_xsec-<dotver>-noarch-<TUNEKEY>-k250-e1000.tar.bz2; the <TUNEKEY> is
+# the compact (underscore-stripped) tune identifier.
+if ((${#TUNES[@]} == 0)); then
+  log "No --tune given; discovering published tunes from ${BASE_URL}/"
+  listing="$(curl -fsL "${BASE_URL}/" 2>/dev/null || true)"
+  read -r -a TUNES <<< "$(
+    printf '%s\n' "$listing" \
+      | grep -oE "genie_xsec-${DOTVER}-noarch-[A-Za-z0-9]+-k250-e1000\.tar\.bz2" \
+      | sed -E "s/^genie_xsec-${DOTVER}-noarch-(.*)-k250-e1000\.tar\.bz2$/\1/" \
+      | sort -u \
+      | tr '\n' ' '
+  )"
+  ((${#TUNES[@]} > 0)) || fail \
+    "Could not discover any published tunes for genie $CODE_VERSION at ${BASE_URL}/. Specify tunes explicitly with --tune NAME."
+  log "Discovered tunes: ${TUNES[*]}"
+fi
 
 TAGSAFE="$(nf_tag_safe "$CODE_VERSION")"
 XSEC_DIR="${SOFTWARE_ROOT}/genie/genie_xsec/${TAGSAFE}"

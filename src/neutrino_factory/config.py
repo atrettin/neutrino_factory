@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 import os
 import re
 from pathlib import Path
@@ -10,6 +11,9 @@ import yaml
 
 from . import catalog
 from . import flux as flux_module
+
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "run": {
@@ -148,6 +152,18 @@ def validate_config(config: Dict[str, Any]) -> None:
         errors.append("generators must be a mapping")
         generators = {}
 
+    # In stub mode we generate synthetic events, so config-version availability
+    # (e.g. staged GENIE cross-section splines) is not required. Real runs must
+    # validate strictly so a valid config is guaranteed to run.
+    stub_mode = bool(run.get("stub_mode", True))
+    if stub_mode and generators:
+        LOGGER.warning(
+            "run.stub_mode is enabled: generator config_versions are NOT checked "
+            "for availability (e.g. staged GENIE cross-section splines). Set "
+            "run.stub_mode: false to validate that configured versions can "
+            "actually run."
+        )
+
     enabled_instance_count = 0
     for generator_name, generator_block in generators.items():
         if not isinstance(generator_block, dict):
@@ -179,7 +195,14 @@ def validate_config(config: Dict[str, Any]) -> None:
                 continue
 
             try:
-                catalog.ensure_compatible(generator_name, code_version, config_version)
+                software_root = config.get("storage", {}).get("software_root")
+                catalog.ensure_compatible(
+                    generator_name,
+                    code_version,
+                    config_version,
+                    software_root,
+                    require_available=not stub_mode,
+                )
             except catalog.CatalogError as error:
                 errors.append(str(error))
                 continue

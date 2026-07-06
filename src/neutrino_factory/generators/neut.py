@@ -11,6 +11,16 @@ class NeutAdapter(GeneratorAdapter):
     name = "neut"
     executable = "neutmc"
 
+    # Catalogued for completeness, but not buildable: NEUT source is not freely
+    # available and no image exists (``git_ref`` is None).
+    CODE_VERSIONS = {
+        "5.x": {
+            "repo": None,
+            "git_ref": None,
+            "config_versions": ["default"],
+        },
+    }
+
     def translate_config(self, task: dict) -> dict:
         return NeutTranslator().translate(self.config, task)
 

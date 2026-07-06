@@ -12,6 +12,15 @@ class GeneratorAdapter(ABC):
     name = "base"
     executable = ""
 
+    # Per-generator version knowledge (single source of truth, replacing the old
+    # global GENERATOR_CATALOG). Maps a code_version to its build/config metadata:
+    #   {"repo": str | None, "git_ref": str | None, "config_versions": [str, ...]}
+    # ``git_ref`` truthiness marks a code version as buildable; ``config_versions``
+    # is optional and defaults to ["default"] for generators without a distinct
+    # parameter-set concept. GENIE overrides config-version handling to discover
+    # tunes from staged cross-section files on disk.
+    CODE_VERSIONS: dict[str, dict[str, Any]] = {}
+
     def __init__(self, config: dict[str, Any]):
         self.config = config
 
@@ -20,6 +29,76 @@ class GeneratorAdapter(ABC):
 
     def is_available(self, code_version: str | None = None) -> bool:
         return bool(self.binary_name()) and shutil.which(self.binary_name()) is not None
+
+    # --- Version catalog API (exposed per adapter, checked at runtime) --------
+
+    @classmethod
+    def known_code_versions(cls) -> list[str]:
+        return list(cls.CODE_VERSIONS)
+
+    @classmethod
+    def image_for(cls, code_version: str) -> str | None:
+        """Docker image tag for a code version (uniformly ``<name>:<code_version>``)."""
+        if code_version not in cls.CODE_VERSIONS:
+            return None
+        return f"{cls.name}:{code_version}"
+
+    @classmethod
+    def is_buildable(cls, code_version: str) -> bool:
+        """True if the adapter records a source ref the setup scripts can build."""
+        entry = cls.CODE_VERSIONS.get(code_version)
+        return bool(entry and entry.get("git_ref"))
+
+    @classmethod
+    def known_config_versions(cls, code_version: str) -> list[str]:
+        """Statically declared config versions for a code version."""
+        entry = cls.CODE_VERSIONS.get(code_version, {})
+        return list(entry.get("config_versions", ["default"]))
+
+    @classmethod
+    def available_config_versions(
+        cls, code_version: str, software_root: str | Path | None = None
+    ) -> list[str]:
+        """Config versions to surface in bookkeeping.
+
+        The default is the static ``known_config_versions``. GENIE overrides this
+        to discover tunes from staged cross-section files on disk.
+        """
+        return cls.known_config_versions(code_version)
+
+    @classmethod
+    def ensure_code_version(cls, code_version: str) -> None:
+        from .. import catalog
+
+        if code_version not in cls.CODE_VERSIONS:
+            raise catalog.CatalogError(
+                f"Unknown code_version '{code_version}' for generator '{cls.name}'. "
+                f"Available code_versions: {', '.join(cls.known_code_versions())}"
+            )
+
+    @classmethod
+    def ensure_compatible(
+        cls,
+        code_version: str,
+        config_version: str,
+        software_root: str | Path | None = None,
+        require_available: bool = False,
+    ) -> None:
+        """Raise if the (code_version, config_version) pair is invalid.
+
+        For statically-versioned generators the declared ``config_versions`` set
+        *is* the availability, so ``require_available`` makes no difference.
+        """
+        from .. import catalog
+
+        cls.ensure_code_version(code_version)
+        valid = cls.known_config_versions(code_version)
+        if config_version not in valid:
+            raise catalog.CatalogError(
+                f"config_version '{config_version}' is not compatible with "
+                f"{cls.name} code_version '{code_version}'. "
+                f"Compatible config_versions: {', '.join(valid)}"
+            )
 
     @abstractmethod
     def translate_config(self, task: dict[str, Any]) -> dict[str, Any]:

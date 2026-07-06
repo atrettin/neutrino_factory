@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -19,18 +21,109 @@ class GenieAdapter(GeneratorAdapter):
     name = "genie"
     executable = "gevgen"
 
+    # GENIE tunes are not statically enumerated: availability is discovered from
+    # the cross-section splines staged on disk (see ``available_config_versions``).
+    CODE_VERSIONS = {
+        "R-3_06_00": {
+            "repo": "https://github.com/GENIE-MC/Generator",
+            "git_ref": "R-3_06_00",
+        },
+    }
+
     @staticmethod
     def _tag_safe(value: str) -> str:
         return catalog._tag_safe(value)
 
     @staticmethod
     def _normalize_tune(value: str) -> str:
-        return catalog._normalize_tune(value)
+        """Case- and separator-insensitive key for matching tune directory names."""
+        return re.sub(r"[^A-Za-z0-9]", "", value).lower()
+
+    @classmethod
+    def _default_software_root(cls) -> str:
+        return os.environ.get("NF_SOFTWARE_ROOT", "./software")
+
+    @classmethod
+    def _xsec_dir(cls, software_root: str | Path, code_version: str) -> Path:
+        return Path(software_root) / "genie" / "genie_xsec" / cls._tag_safe(code_version)
+
+    @classmethod
+    def genie_xsecs_xml(
+        cls, software_root: str | Path, code_version: str, config_version: str
+    ) -> Path | None:
+        """Locate the staged GENIE cross-section spline for a (code, tune) pair.
+
+        Looks for ``<software_root>/genie/genie_xsec/<tag-safe>/<tune>/xsecs.xml``,
+        first by exact tune directory name, then by a separator-insensitive match
+        (the FNAL tarballs name tunes with underscores stripped, e.g.
+        ``G1810a0211a`` for ``G18_10a_02_11a``). Returns ``None`` if none exists.
+        """
+        tune = str(config_version or "").strip()
+        code = str(code_version or "").strip()
+        if not tune or not code:
+            return None
+
+        xsec_root = cls._xsec_dir(software_root, code)
+
+        exact = xsec_root / tune / "xsecs.xml"
+        if exact.is_file():
+            return exact
+
+        target = cls._normalize_tune(tune)
+        for candidate in sorted(xsec_root.glob("*/xsecs.xml")):
+            if cls._normalize_tune(candidate.parent.name) == target:
+                return candidate
+        return None
+
+    @classmethod
+    def available_config_versions(
+        cls, code_version: str, software_root: str | Path | None = None
+    ) -> list[str]:
+        """Discover tunes from staged ``xsecs.xml`` files (the literal dir names)."""
+        root = software_root if software_root is not None else cls._default_software_root()
+        xsec_root = cls._xsec_dir(root, code_version)
+        return sorted(p.parent.name for p in xsec_root.glob("*/xsecs.xml"))
+
+    @classmethod
+    def ensure_compatible(
+        cls,
+        code_version: str,
+        config_version: str,
+        software_root: str | Path | None = None,
+        require_available: bool = False,
+    ) -> None:
+        """Validate a GENIE (code_version, tune) pair.
+
+        GENIE tunes are not enumerated in advance, so there is no static list to
+        be "incompatible" with. Baseline check: known code version + non-empty
+        tune. When ``require_available`` is set (real, non-stub runs), the tune's
+        cross-section spline must also be staged on disk, so a valid config is
+        guaranteed to actually run.
+        """
+        cls.ensure_code_version(code_version)
+        tune = str(config_version or "").strip()
+        if not tune:
+            raise catalog.CatalogError(
+                f"config_version must be non-empty for {cls.name} "
+                f"code_version '{code_version}'"
+            )
+        if require_available:
+            root = software_root if software_root is not None else cls._default_software_root()
+            if cls.genie_xsecs_xml(root, code_version, tune) is None:
+                available = cls.available_config_versions(code_version, root)
+                raise catalog.CatalogError(
+                    f"GENIE tune '{tune}' has no staged cross-section spline for "
+                    f"code_version '{code_version}' under "
+                    f"{cls._xsec_dir(root, code_version)}. Stage it with "
+                    f"setup/download_genie_xsec.sh --tune {tune}, or enable "
+                    f"run.stub_mode. Available tunes: "
+                    f"{', '.join(available) or 'none'}"
+                )
 
     def _docker_image(self, code_version: str | None) -> str | None:
         if not code_version:
             return None
-        return catalog.image_for(self.name, code_version)
+        return self.image_for(code_version)
 
     def _docker_available(self, code_version: str | None) -> bool:
         return catalog.image_built(self._docker_image(code_version))
@@ -60,7 +153,7 @@ class GenieAdapter(GeneratorAdapter):
             return None
 
         software_root = self.config["storage"]["software_root"]
-        resolved = catalog.genie_xsecs_xml(software_root, code_version, tune)
+        resolved = self.genie_xsecs_xml(software_root, code_version, tune)
         if resolved is not None:
             return resolved
 

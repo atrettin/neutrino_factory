@@ -60,18 +60,6 @@ nf_code_versions() {
     | python3 -c 'import json,sys; print(" ".join(r["code_version"] for r in json.load(sys.stdin)["generators"]))'
 }
 
-# Echo the space-separated config versions (tunes) catalogued for a generator +
-# code version. Reads catalog.config_versions directly (the *unfiltered* list) so
-# it is not affected by list-generators' on-disk availability filtering.
-nf_config_versions() {
-  local generator="$1" code_version="$2"
-  nf_require_cli
-  python3 -c 'import sys
-from neutrino_factory import catalog
-print(" ".join(catalog.config_versions(sys.argv[1], sys.argv[2])))' \
-    "$generator" "$code_version"
-}
-
 # Echo the filesystem-safe directory name for a code_version (catalog._tag_safe).
 nf_tag_safe() {
   nf_require_cli

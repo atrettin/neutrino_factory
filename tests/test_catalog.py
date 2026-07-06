@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from neutrino_factory import catalog
 from neutrino_factory.cli import build_parser
+from neutrino_factory.generators.genie import GenieAdapter
 
 
 def _stage_xsecs(software_root: Path, code_version: str, tune_dir: str) -> Path:
@@ -45,8 +46,32 @@ class CatalogTests(unittest.TestCase):
             catalog.ensure_known("genie", "R-9_99_99")
 
     def test_ensure_compatible_rejects_incompatible_config_version(self) -> None:
+        # GENIE validation is availability-only (no static tune list), so an
+        # incompatible config_version is only meaningful for generators that
+        # declare a static config-version set (e.g. NuWro's "default").
         with self.assertRaises(catalog.CatalogError):
-            catalog.ensure_compatible("genie", "R-3_06_00", "not_a_real_tune")
+            catalog.ensure_compatible("nuwro", "nuwro_25.11", "not_a_real_config")
+
+    def test_ensure_compatible_genie_rejects_empty_config_version(self) -> None:
+        with self.assertRaises(catalog.CatalogError):
+            catalog.ensure_compatible("genie", "R-3_06_00", "")
+
+    def test_ensure_compatible_genie_strict_requires_staged_spline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _stage_xsecs(root, "R-3_06_00", "G1810a0211a")
+            # Staged (matched case-insensitively): passes strict.
+            catalog.ensure_compatible(
+                "genie", "R-3_06_00", "G18_10a_02_11a", root, require_available=True
+            )
+            # Not staged: relaxed passes, strict raises.
+            catalog.ensure_compatible(
+                "genie", "R-3_06_00", "AR23_20i_00_000", root, require_available=False
+            )
+            with self.assertRaises(catalog.CatalogError):
+                catalog.ensure_compatible(
+                    "genie", "R-3_06_00", "AR23_20i_00_000", root, require_available=True
+                )
 
     def test_neut_not_buildable(self) -> None:
         self.assertFalse(catalog.is_buildable("neut", "5.x"))
@@ -57,24 +82,34 @@ class CatalogTests(unittest.TestCase):
             root = Path(tmp)
             # Compact (underscore-stripped) directory name, as the FNAL tarballs use.
             staged = _stage_xsecs(root, "R-3_06_00", "G1810a0211a")
-            found = catalog.genie_xsecs_xml(root, "R-3_06_00", "G18_10a_02_11a")
+            found = GenieAdapter.genie_xsecs_xml(root, "R-3_06_00", "G18_10a_02_11a")
             self.assertEqual(found, staged)
             self.assertIsNone(
-                catalog.genie_xsecs_xml(root, "R-3_06_00", "AR23_20i_00_000")
+                GenieAdapter.genie_xsecs_xml(root, "R-3_06_00", "AR23_20i_00_000")
             )
 
-    def test_available_config_versions_filters_genie_by_disk(self) -> None:
+    def test_available_config_versions_discovers_genie_from_disk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            _stage_xsecs(root, "R-3_06_00", "G18_10a_02_11a")
+            # Two staged tunes plus one unstaged; only staged dir names surface.
+            _stage_xsecs(root, "R-3_06_00", "G1810a0211a")
+            _stage_xsecs(root, "R-3_06_00", "AR2320i00000")
             available = catalog.available_config_versions("genie", "R-3_06_00", root)
-            self.assertEqual(available, ["G18_10a_02_11a"])
+            self.assertEqual(available, ["AR2320i00000", "G1810a0211a"])
+            self.assertNotIn("N2420i0211b", available)
 
-    def test_available_config_versions_passthrough_for_non_genie(self) -> None:
+    def test_available_config_versions_genie_empty_when_nothing_staged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(
+                catalog.available_config_versions("genie", "R-3_06_00", Path(tmp)),
+                [],
+            )
+
+    def test_available_config_versions_static_for_non_genie(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(
                 catalog.available_config_versions("nuwro", "nuwro_25.11", Path(tmp)),
-                catalog.config_versions("nuwro", "nuwro_25.11"),
+                ["default"],
             )
 
 

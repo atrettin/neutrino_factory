@@ -86,22 +86,73 @@ class ConfigTests(unittest.TestCase):
             )
 
     def test_incompatible_config_version_raises(self) -> None:
+        # GENIE validation is availability-only (tunes are not enumerated in
+        # advance), so an incompatible config_version is checked against a
+        # generator that declares a static config-version set: NuWro's "default".
         with self.assertRaises(ConfigError):
             resolve_config(
                 {
                     "generators": {
-                        "genie": {
+                        "nuwro": {
                             "versions": [
                                 {
                                     "enabled": True,
-                                    "code_version": "R-3_06_00",
-                                    "config_version": "not_a_real_tune",
+                                    "code_version": "nuwro_25.11",
+                                    "config_version": "not_a_real_config",
                                 }
                             ]
                         }
                     }
                 }
             )
+
+    def _genie_config(self, software_root: str, stub_mode: bool, tune: str) -> dict:
+        return {
+            "run": {"stub_mode": stub_mode},
+            "storage": {"software_root": software_root},
+            "generators": {
+                "genie": {
+                    "versions": [
+                        {
+                            "enabled": True,
+                            "code_version": "R-3_06_00",
+                            "config_version": tune,
+                        }
+                    ]
+                }
+            },
+        }
+
+    @staticmethod
+    def _stage_xsecs(software_root: Path, tune_dir: str) -> None:
+        dest = software_root / "genie" / "genie_xsec" / "R-3_06_00" / tune_dir / "xsecs.xml"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text("<?xml version='1.0'?>", encoding="utf-8")
+
+    def test_non_stub_requires_staged_genie_spline(self) -> None:
+        # Real (non-stub) run: an unstaged tune must fail validation so a valid
+        # config is guaranteed to actually run.
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ConfigError):
+                resolve_config(
+                    self._genie_config(tmp, stub_mode=False, tune="G18_10a_02_11a")
+                )
+
+    def test_non_stub_accepts_staged_genie_spline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._stage_xsecs(Path(tmp), "G1810a0211a")
+            config = resolve_config(
+                self._genie_config(tmp, stub_mode=False, tune="G18_10a_02_11a")
+            )
+            self.assertEqual(config["enabled_generators"], ["genie"])
+
+    def test_stub_mode_skips_genie_availability(self) -> None:
+        # Same unstaged tune passes under stub mode (relaxed validation).
+        with tempfile.TemporaryDirectory() as tmp:
+            config = resolve_config(
+                self._genie_config(tmp, stub_mode=True, tune="G18_10a_02_11a")
+            )
+            self.assertEqual(config["enabled_generators"], ["genie"])
 
     def test_invalid_config_raises(self) -> None:
         with self.assertRaises(ConfigError):

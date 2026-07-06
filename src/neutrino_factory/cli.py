@@ -110,7 +110,7 @@ def _collect_catalog_rows(generator_filter: str | None, built_only: bool) -> lis
     rows: list[dict] = []
     generators = [generator_filter] if generator_filter else catalog.known_generators()
     for generator in generators:
-        if generator not in catalog.GENERATOR_CATALOG:
+        if generator not in catalog.known_generators():
             raise RuntimeError(
                 f"Unknown generator '{generator}'. Known generators: "
                 f"{', '.join(catalog.known_generators())}"

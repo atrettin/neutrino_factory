@@ -14,10 +14,20 @@ class NuWroAdapter(GeneratorAdapter):
     name = "nuwro"
     executable = "nuwro"
 
+    CODE_VERSIONS = {
+        "nuwro_25.11": {
+            "repo": "https://github.com/NuWro/nuwro",
+            "git_ref": "nuwro_25.11",
+            # NuWro parameter-set versioning is a non-blocking TODO; only
+            # "default" exists for now.
+            "config_versions": ["default"],
+        },
+    }
+
     def _docker_image(self, code_version: str | None) -> str | None:
         if not code_version:
             return None
-        return catalog.image_for(self.name, code_version)
+        return self.image_for(code_version)
 
     def _docker_available(self, code_version: str | None) -> bool:
         return catalog.image_built(self._docker_image(code_version))

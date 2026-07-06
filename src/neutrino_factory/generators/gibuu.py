@@ -14,10 +14,22 @@ class GiBUUAdapter(GeneratorAdapter):
     name = "gibuu"
     executable = "GiBUU.x"
 
+    CODE_VERSIONS = {
+        # GiBUU is distributed as HEPForge release tarballs; ``git_ref`` holds the
+        # release tag so it is treated as buildable (the GitHub mirror is stale).
+        "release2025": {
+            "repo": "https://gibuu.hepforge.org/downloads",
+            "git_ref": "release2025",
+            # GiBUU parameter-set versioning is a non-blocking TODO; only
+            # "default" exists for now.
+            "config_versions": ["default"],
+        },
+    }
+
     def _docker_image(self, code_version: str | None) -> str | None:
         if not code_version:
             return None
-        return catalog.image_for(self.name, code_version)
+        return self.image_for(code_version)
 
     def _docker_available(self, code_version: str | None) -> bool:
         return catalog.image_built(self._docker_image(code_version))
