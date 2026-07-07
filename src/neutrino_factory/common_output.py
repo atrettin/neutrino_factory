@@ -29,6 +29,11 @@ def version_metadata(generator_name: str, task: dict[str, Any], execution_mode: 
     Version info lives in metadata only (not per event): the two independent
     axes ``code_version`` and ``config_version`` plus the combined
     ``generator_version_id`` for convenience.
+
+    Also records the simulated ``flux`` (the framework flux block, so it can be
+    rebuilt with ``flux.build_flux`` for plotting) and ``expected_events`` (the
+    requested event count for this task, distinct from the actual number
+    written to ``run/event_count``).
     """
     return {
         "generator": generator_name,
@@ -39,6 +44,8 @@ def version_metadata(generator_name: str, task: dict[str, Any], execution_mode: 
         "run_name": task["run_name"],
         "chunk_id": int(task["chunk_id"]),
         "seed": int(task["seed"]),
+        "flux": dict(task.get("flux", {})),
+        "expected_events": int(task.get("event_count", 0)),
     }
 
 
@@ -132,6 +139,7 @@ def merge_hdf5_files(
     identity: tuple[str, ...] | None = None
     identity_source: str | None = None
     first_file_metadata: dict[str, Any] = {}
+    expected_events_total = 0
 
     for input_file in normalized_inputs:
         file_metadata, events = read_events(input_file)
@@ -146,6 +154,7 @@ def merge_hdf5_files(
                 f"{identity_source} is {dict(zip(VERSION_IDENTITY_KEYS, identity))} "
                 f"but {input_file} is {dict(zip(VERSION_IDENTITY_KEYS, current))}"
             )
+        expected_events_total += int(file_metadata.get("expected_events", 0))
         merged_events.extend(events)
 
     metadata = dict(run_metadata or {})
@@ -154,6 +163,12 @@ def merge_hdf5_files(
     for key in (*VERSION_IDENTITY_KEYS, "generator_version_id"):
         if key not in metadata and key in first_file_metadata:
             metadata[key] = first_file_metadata[key]
+
+    # Carry the (identical) flux from the inputs and sum the requested event
+    # counts so the merged file stays self-describing for plotting/validation.
+    if "flux" not in metadata and "flux" in first_file_metadata:
+        metadata["flux"] = first_file_metadata["flux"]
+    metadata.setdefault("expected_events", expected_events_total)
 
     metadata.setdefault("merged_inputs", normalized_inputs)
     metadata["merged_file_count"] = len(normalized_inputs)

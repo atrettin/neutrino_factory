@@ -21,9 +21,15 @@ import numpy as np
 from .common_output import VERSION_IDENTITY_KEYS
 from .slurm import build_task_manifest
 
-# Metadata attrs whose absence makes a file invalid (they identify the physics and
-# are what a merge would key on).
-REQUIRED_METADATA_KEYS = (*VERSION_IDENTITY_KEYS, "generator_version_id")
+# Metadata attrs whose absence makes a file invalid: the version identity (what a
+# merge keys on), the simulated ``flux`` and the requested ``expected_events``
+# (both needed to make a run's output self-describing for plotting).
+REQUIRED_METADATA_KEYS = (
+    *VERSION_IDENTITY_KEYS,
+    "generator_version_id",
+    "flux",
+    "expected_events",
+)
 
 # Metadata attrs we expect but only warn about when missing.
 OPTIONAL_METADATA_KEYS = ("execution_mode", "run_name", "chunk_id", "seed")

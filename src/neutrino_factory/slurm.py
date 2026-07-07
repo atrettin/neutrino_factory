@@ -58,6 +58,9 @@ def build_task_manifest(config: dict[str, Any]) -> dict[str, Any]:
                 "event_count": stop_event - start_event,
                 "seed": int(run["seed"]) + generator_offset * 1000 + chunk_id,
                 "run_name": run["name"],
+                # Carry the framework flux block so normalized output is
+                # self-describing (rebuildable via flux.build_flux for plots).
+                "flux": dict(config.get("flux", {})),
             }
             tasks.append(task)
             task_index += 1

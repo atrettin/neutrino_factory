@@ -11,6 +11,7 @@ from .common_output import MergeError
 from .config import ConfigError, load_config
 from .local import run_local, run_task_from_manifest
 from .merge import merge_outputs
+from .plots import make_plots
 from .slurm import write_manifest, write_sbatch_script
 from .validate_output import (
     expected_outputs,
@@ -113,6 +114,12 @@ def cmd_run_task(args: argparse.Namespace) -> int:
 def cmd_merge(args: argparse.Namespace) -> int:
     output = merge_outputs(args.inputs, args.output)
     _print_json({"merged_output": output, "input_count": len(args.inputs)})
+    return 0
+
+
+def cmd_plot_output(args: argparse.Namespace) -> int:
+    written = make_plots(args.input, args.output_dir, args.prefix)
+    _print_json({"input": args.input, "plots": written})
     return 0
 
 
@@ -412,6 +419,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="Emit machine-readable JSON"
     )
     check_status_parser.set_defaults(func=cmd_check_status)
+
+    plot_parser = subparsers.add_parser(
+        "plot-output",
+        help="Plot a normalized HDF5 output file",
+        description=(
+            "Render three diagnostic plots from a single common-output HDF5 file: "
+            "a stacked horizontal bar of event counts by interaction type (with the "
+            "expected event count indicated), the simulated flux vs. energy, and a "
+            "histogram of the simulated event energies. Writes three separate PNG "
+            "files (<prefix>_interactions.png, <prefix>_flux.png, <prefix>_energy.png)."
+        ),
+        epilog=(
+            "Example:\n"
+            "  neutrino-factory plot-output --input output/merged/run_genie_ver.h5"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    plot_parser.add_argument("--input", required=True, help="HDF5 file to plot")
+    plot_parser.add_argument(
+        "--output-dir", help="Directory to write PNGs into (default: alongside the input)"
+    )
+    plot_parser.add_argument(
+        "--prefix", help="Filename prefix for the PNGs (default: the input file stem)"
+    )
+    plot_parser.set_defaults(func=cmd_plot_output)
 
     return parser
 

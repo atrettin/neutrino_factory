@@ -25,6 +25,8 @@ def _write_valid(path: Path, n: int) -> str:
         "run_name": "test_run",
         "chunk_id": 0,
         "seed": 1,
+        "flux": {"type": "power_law", "particle": "numu", "emin_gev": 0.5, "emax_gev": 10.0, "gamma": -2.0},
+        "expected_events": n,
     }
     events = [
         {
