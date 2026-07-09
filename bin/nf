@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Run the neutrino-factory CLI inside the nf-base Apptainer image.
+#
+# This is the supported way to use the CLI on the HPC cluster, where the system
+# Python (3.9) is too old and there is no module system. The repo source is
+# put on PYTHONPATH inside the container, so code changes take effect without
+# rebuilding the image. MPCDF auto-mounts /u, /ptmp, /cvmfs and /scratch inside
+# containers, so paths under those trees resolve unchanged.
+#
+# Usage: bin/nf <neutrino-factory args...>     e.g.  bin/nf list-generators
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Load repo-root .env for any variable not already set (real env wins).
+if [[ -f "$REPO_ROOT/.env" ]]; then
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+    key="${BASH_REMATCH[1]}"
+    value="${BASH_REMATCH[2]%%#*}"
+    value="$(echo "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e "s/^['\"]//" -e "s/['\"]$//")"
+    if [[ -z "${!key:-}" ]]; then
+      export "$key=$value"
+    fi
+  done < "$REPO_ROOT/.env"
+fi
+
+command -v apptainer >/dev/null 2>&1 || {
+  echo "ERROR: apptainer not found. bin/nf is for cluster use; on a local" >&2
+  echo "machine install the package (pip install -e .) and use neutrino-factory." >&2
+  exit 1
+}
+
+NF_IMAGE_ROOT="${NF_IMAGE_ROOT:-$REPO_ROOT/software/images}"
+SIF="$NF_IMAGE_ROOT/nf-base.sif"
+if [[ ! -f "$SIF" ]]; then
+  echo "ERROR: $SIF not found." >&2
+  echo "Build it first (on odslserv01/02): bash setup/build_apptainer_images.sh --bootstrap" >&2
+  exit 1
+fi
+
+exec apptainer exec "$SIF" \
+  env PYTHONPATH="$REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+  python3 -m neutrino_factory.cli "$@"

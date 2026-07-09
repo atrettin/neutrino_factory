@@ -21,9 +21,9 @@ A generator instance is uniquely identified by two independent axes:
 from __future__ import annotations
 
 import re
-import shutil
-import subprocess
 from pathlib import Path
+
+from . import containers
 
 
 class CatalogError(ValueError):
@@ -106,18 +106,10 @@ def _tag_safe(value: str) -> str:
 
 
 def image_built(image: str | None) -> bool:
-    """True if a Docker image with this tag exists locally.
+    """True if the image exists for the active container runtime.
 
-    Uses ``docker images -q <image>`` (prints the image ID, empty if absent)
-    rather than ``docker image inspect``: under Docker Desktop's containerd
-    image store, ``inspect <name>`` can spuriously fail with "No such image"
-    for an image that plainly exists in ``docker images``.
+    Delegates to :func:`containers.image_available`: a local Docker image for
+    the ``docker`` runtime, a staged SIF file under ``NF_IMAGE_ROOT`` for the
+    ``apptainer`` runtime.
     """
-    if not image or not shutil.which("docker"):
-        return False
-    result = subprocess.run(
-        ["docker", "images", "-q", image],
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0 and bool(result.stdout.strip())
+    return containers.image_available(image)

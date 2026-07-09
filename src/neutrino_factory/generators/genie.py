@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 from .base import GeneratorAdapter
-from .. import catalog
+from .. import catalog, containers
 from ..normalizers.genie import GenieNormalizer
 from ..translators.genie import GenieTranslator
 
@@ -120,17 +120,6 @@ class GenieAdapter(GeneratorAdapter):
                     f"{', '.join(available) or 'none'}"
                 )
 
-    def _docker_image(self, code_version: str | None) -> str | None:
-        if not code_version:
-            return None
-        return self.image_for(code_version)
-
-    def _docker_available(self, code_version: str | None) -> bool:
-        return catalog.image_built(self._docker_image(code_version))
-
-    def is_available(self, code_version: str | None = None) -> bool:
-        return bool(shutil.which(self.binary_name())) or self._docker_available(code_version)
-
     def _xsec_root(self) -> Path:
         return (
             Path(self.config["storage"]["software_root"])
@@ -175,7 +164,7 @@ class GenieAdapter(GeneratorAdapter):
 
         work_dir.mkdir(parents=True, exist_ok=True)
         sidecar = dict(translated_config)
-        sidecar["docker_image"] = self._docker_image(code_version)
+        sidecar["image"] = self.container_image(code_version)
         (work_dir / "translated_config.json").write_text(
             json.dumps(sidecar), encoding="utf-8"
         )
@@ -204,23 +193,24 @@ class GenieAdapter(GeneratorAdapter):
         if xml_path is not None:
             gevgen_args.extend(["--cross-sections", str(xml_path)])
 
+        # Native binary first: on the cluster the Slurm task already runs inside
+        # the generator's Apptainer image (which cannot nest), so gevgen must be
+        # executed directly whenever it is on $PATH. Do not reorder these branches.
         if shutil.which(self.binary_name()):
             return gevgen_args
 
-        if self._docker_available(code_version):
+        if self.container_available(code_version):
+            self.ensure_container_wrappable()
             xsec_root = self._xsec_root()
-            # Docker requires absolute host paths for bind mounts.
-            docker_args = [
-                "docker", "run", "--platform", "linux/amd64", "--rm",
-                "-v", f"{xsec_root.resolve()}:/genie_xsec:ro",
-                "-v", f"{work_dir.resolve()}:/work",
+            binds: list[tuple] = [
+                (xsec_root, "/genie_xsec", "ro"),
+                (work_dir, "/work"),
             ]
             # Mount the histogram flux file's directory so gevgen can read it.
             if flux_file is not None:
-                docker_args.extend(["-v", f"{flux_file.parent.resolve()}:/flux:ro"])
-            docker_image = self._docker_image(code_version)
-            assert docker_image is not None
-            docker_args.extend(["-w", "/work", docker_image])
+                binds.append((flux_file.parent, "/flux", "ro"))
+            image = self.container_image(code_version)
+            assert image is not None
 
             remapped: list[str] = []
             for arg in gevgen_args:
@@ -230,7 +220,7 @@ class GenieAdapter(GeneratorAdapter):
                 elif flux_file is not None and arg == self._flux_arg(flux_spec, flux_file):
                     arg = f"/flux/{flux_file.name},{flux_spec['name']}"
                 remapped.append(arg)
-            return docker_args + remapped
+            return containers.docker_wrap(image, remapped, binds, "/work")
 
         return gevgen_args
 
@@ -246,19 +236,17 @@ class GenieAdapter(GeneratorAdapter):
         if shutil.which("gntpc"):
             subprocess.run(args, check=True, cwd=work_dir)
             return
-        if self._docker_available(code_version):
+        if self.container_available(code_version):
+            self.ensure_container_wrappable()
+            image = self.container_image(code_version)
+            assert image is not None
             subprocess.run(
-                [
-                    "docker", "run", "--platform", "linux/amd64", "--rm",
-                    "-v", f"{Path(work_dir).resolve()}:/work",
-                    "-w", "/work",
-                    self._docker_image(code_version),
-                ] + args,
+                containers.docker_wrap(image, args, [(work_dir, "/work")], "/work"),
                 check=True,
             )
             return
         raise RuntimeError(
-            "gntpc is unavailable: neither a local binary nor a Docker image was found. "
+            "gntpc is unavailable: neither a local binary nor a container image was found. "
             "Cannot convert GENIE GHEP output to analysis format."
         )
 

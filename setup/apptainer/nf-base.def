@@ -1,0 +1,39 @@
+# Apptainer definition for nf-base: the orchestration image for running the
+# neutrino-factory CLI on the HPC cluster (setup wizard, validate-config, plan,
+# submit rendering, merge, check-status, plot-output).
+#
+# The cluster's system Python (3.9) is too old and MPCDF provides no module
+# system, so all Python execution happens inside containers. This image holds
+# only a modern Python and the project's runtime dependencies — the project
+# code itself is used from the repo checkout via PYTHONPATH (see bin/nf), so
+# code changes never require an image rebuild.
+#
+# Dependencies mirror [project.dependencies] in pyproject.toml — update both
+# together.
+#
+# Build: apptainer build "$NF_IMAGE_ROOT/nf-base.sif" setup/apptainer/nf-base.def
+# Run:   apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" \
+#          env PYTHONPATH=<repo>/src python3 -m neutrino_factory.cli --help
+
+Bootstrap: docker
+From: python:3.13-slim
+
+%post
+    pip install --no-cache-dir \
+        "PyYAML>=6.0" \
+        "h5py>=3.10" \
+        "numpy>=1.24" \
+        "uproot>=5.0" \
+        "awkward>=2.0" \
+        "matplotlib>=3.7"
+
+%test
+    python3 -c "import yaml, h5py, numpy, uproot, awkward, matplotlib"
+
+%labels
+    org.neutrino-factory.image nf-base
+
+%help
+    neutrino-factory orchestration image (Python 3.13 + runtime deps).
+    Run the CLI via the bin/nf wrapper in the repo, which binds the repo
+    source onto PYTHONPATH.

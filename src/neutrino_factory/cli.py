@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import catalog
 from .common_output import MergeError
-from .config import ConfigError, load_config
+from .config import ConfigError, load_config, load_env_file
 from .local import run_local, run_task_from_manifest
 from .merge import merge_outputs
 from .plots import make_plots
@@ -82,7 +82,23 @@ def cmd_submit(args: argparse.Namespace) -> int:
         return 0
 
     if shutil.which("sbatch") is None:
-        raise RuntimeError("sbatch is not available on this machine; use --dry-run or the local executor")
+        # Expected when running inside the nf-base Apptainer container on the
+        # cluster: sbatch only exists in the host shell. Hand the command over.
+        print(
+            "sbatch is not available in this environment. "
+            "The Slurm script has been rendered; submit it from a host shell "
+            "on the Slurm head node with:\n\n"
+            f"  sbatch {sbatch_path}\n"
+        )
+        _print_json(
+            {
+                "manifest_path": manifest_path,
+                "sbatch_path": sbatch_path,
+                "submitted": False,
+                "mode": "rendered-only",
+            }
+        )
+        return 0
 
     completed = subprocess.run(["sbatch", sbatch_path], check=False, capture_output=True, text=True)
     if completed.returncode != 0:
@@ -213,6 +229,12 @@ def cmd_check_status(args: argparse.Namespace) -> int:
     return 0 if all_merged_valid and all_chunks_valid else 1
 
 
+def cmd_setup(args: argparse.Namespace) -> int:
+    from .setup_wizard import run_setup
+
+    return run_setup(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="neutrino-factory",
@@ -234,6 +256,48 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(
         dest="command", required=True, metavar="<command>", title="commands"
     )
+
+    setup_parser = subparsers.add_parser(
+        "setup",
+        help="Interactive first-time setup (pathway, storage directories, image builds)",
+        description=(
+            "Configure this checkout for one of the two container pathways: 'docker' for "
+            "local development or 'apptainer' for HPC cluster execution (MPCDF/ODSL). "
+            "Prompts for the storage directories (persistent output, work, volatile "
+            "scratch, container images), writes them to the repo-root .env file — which "
+            "every CLI invocation and setup script loads automatically — creates the "
+            "directories, and optionally kicks off the pathway's image builds. Re-running "
+            "setup prefills the prompts from the existing .env."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  neutrino-factory setup                          # interactive\n"
+            "  neutrino-factory setup --pathway apptainer      # preselect the pathway\n"
+            "  neutrino-factory setup --defaults --no-build    # accept all defaults, no prompts"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    setup_parser.add_argument(
+        "--pathway",
+        choices=["docker", "apptainer"],
+        help="Container pathway (skip the pathway prompt)",
+    )
+    setup_parser.add_argument(
+        "--defaults",
+        action="store_true",
+        help="Accept all defaults without prompting (non-interactive)",
+    )
+    setup_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing .env without asking",
+    )
+    setup_parser.add_argument(
+        "--no-build",
+        action="store_true",
+        help="Never offer to run image builds",
+    )
+    setup_parser.set_defaults(func=cmd_setup)
 
     validate_parser = subparsers.add_parser(
         "validate-config",
@@ -449,6 +513,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    # Apply the repo-root .env (written by `neutrino-factory setup`) before
+    # anything reads the environment; real environment variables win.
+    load_env_file()
     parser = build_parser()
     args = parser.parse_args()
 

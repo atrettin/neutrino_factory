@@ -10,8 +10,25 @@ The common YAML config is the source of truth for both the local and Slurm execu
 - `physics`: generic interaction settings
 - `generators`: versioned generator entries (multiple entries per generator are supported)
 - `splitting`: how the total event count is chunked into jobs
-- `storage`: roots for software, outputs, working files, and scratch
-- `slurm`: job resources for later MPP submission
+- `storage`: roots for software, outputs, working files, scratch, and container images
+- `slurm`: job resources for MPP submission (default partition: `short`)
+
+## Environment: `.env` and precedence
+
+`neutrino-factory setup` writes the storage roots and the container runtime
+choice (`NF_CONTAINER_RUNTIME=docker|apptainer|auto`) to a `.env` file at the
+repo root. Every CLI invocation, setup script, rendered sbatch script, and
+`bin/nf` loads this file automatically with **setdefault semantics**, giving
+the precedence order:
+
+1. real environment variables (always win),
+2. `.env` values,
+3. built-in defaults (`./software`, `./output`, `./work`, `./scratch`,
+   `./software/images`).
+
+The `storage` config values reference the same variables via `${VAR:-default}`
+expansion, so one `.env` drives the YAML config, the shell scripts, and the
+Slurm jobs consistently.
 
 ## Example
 
@@ -42,9 +59,9 @@ Each enabled generator entry computes a generator-specific version identifier. F
 `<code_version>+<config_version>`. This identifier is used in task planning and output layout so multiple versions of one
 generator can run in the same campaign.
 
-## Local-first recommendation
+## Stub-mode recommendation
 
-For early development on a machine without cluster access:
+For development on a machine without generator images:
 
 ```yaml
 run:

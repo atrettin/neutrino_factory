@@ -22,16 +22,38 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
 }
 
+# Load KEY=value pairs from the repo-root .env (written by `neutrino-factory
+# setup`) for any variable not already set — the real environment always wins.
+nf_load_env_file() {
+  local script_dir repo_root env_file line key value
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  repo_root="$(cd "$script_dir/../.." && pwd)"
+  env_file="$repo_root/.env"
+  [[ -f "$env_file" ]] || return 0
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+    key="${BASH_REMATCH[1]}"
+    value="${BASH_REMATCH[2]%%#*}"
+    value="$(echo "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e "s/^['\"]//" -e "s/['\"]$//")"
+    if [[ -z "${!key:-}" ]]; then
+      export "$key=$value"
+    fi
+  done < "$env_file"
+}
+
 nf_default_paths() {
+  nf_load_env_file
   export NF_SOFTWARE_ROOT="${NF_SOFTWARE_ROOT:-$PWD/software}"
   export NF_OUTPUT_ROOT="${NF_OUTPUT_ROOT:-$PWD/output}"
   export NF_WORK_ROOT="${NF_WORK_ROOT:-$PWD/work}"
   export NF_SCRATCH_ROOT="${NF_SCRATCH_ROOT:-$PWD/scratch}"
+  export NF_IMAGE_ROOT="${NF_IMAGE_ROOT:-$NF_SOFTWARE_ROOT/images}"
 
   ensure_dir "$NF_SOFTWARE_ROOT"
   ensure_dir "$NF_OUTPUT_ROOT"
   ensure_dir "$NF_WORK_ROOT"
   ensure_dir "$NF_SCRATCH_ROOT"
+  ensure_dir "$NF_IMAGE_ROOT"
 }
 
 # --- Generator catalog access -------------------------------------------------

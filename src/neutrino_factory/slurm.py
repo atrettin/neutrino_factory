@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import containers
 from .config import enabled_generator_instances
 
 
@@ -95,6 +97,39 @@ def render_sbatch_script(config: dict[str, Any], manifest_path: str | Path) -> s
     manifest = build_task_manifest(config)
     array_max = max(0, int(manifest["task_count"]) - 1)
     slurm = config["slurm"]
+    # Slurm executes a spool *copy* of the sbatch file, so BASH_SOURCE cannot
+    # locate the repo. Embed the absolute repo root at render time instead
+    # (valid for this project's editable install / source checkout).
+    repo_root = Path(__file__).resolve().parents[2]
+
+    if containers.runtime() == "apptainer":
+        # Inverted container layering: the array task enters the generator's
+        # SIF first and runs the CLI inside it, where the generator binary is
+        # native on $PATH (Apptainer cannot nest). One SIF path per task index;
+        # an empty entry (no catalogued image) runs on the host, e.g. stubs.
+        sif_entries = "\n".join(
+            f'  "{containers.sif_path(task["image"]) if task["image"] else ""}"'
+            for task in manifest["tasks"]
+        )
+        task_launcher = f"""TASK_SIFS=(
+{sif_entries}
+)
+SIF="${{TASK_SIFS[$SLURM_ARRAY_TASK_ID]}}"
+if [[ -n "$SIF" ]]; then
+  apptainer exec "$SIF" bash "{repo_root}/jobs/run_task.sh" "{config.get('config_path', '')}" "{manifest_path}" "${{SLURM_ARRAY_TASK_ID}}"
+else
+  bash "{repo_root}/jobs/run_task.sh" "{config.get('config_path', '')}" "{manifest_path}" "${{SLURM_ARRAY_TASK_ID}}"
+fi"""
+        python_export = ""
+    else:
+        task_launcher = (
+            f'bash "{repo_root}/jobs/run_task.sh" "{config.get("config_path", "")}" '
+            f'"{manifest_path}" "${{SLURM_ARRAY_TASK_ID}}"'
+        )
+        # Reuse the submitting interpreter (e.g. the project venv) on the
+        # compute node. Not set for apptainer: there the task runs inside the
+        # generator image, whose own python3 must be used.
+        python_export = f"export PYTHON={sys.executable}\n"
 
     return f"""#!/bin/bash -l
 #SBATCH -J nf_{config['run']['name']}
@@ -109,13 +144,14 @@ def render_sbatch_script(config: dict[str, Any], manifest_path: str | Path) -> s
 #SBATCH --array=0-{array_max}
 
 set -euo pipefail
+# Storage roots and container settings persisted by `neutrino-factory setup`.
+if [[ -f "{repo_root}/.env" ]]; then set -a; source "{repo_root}/.env"; set +a; fi
 export NF_EXECUTION_MODE=slurm
 export OMP_NUM_THREADS=${{SLURM_CPUS_PER_TASK:-1}}
-
-REPO_ROOT="$(cd "$(dirname "${{BASH_SOURCE[0]}}")/.." && pwd)"
+{python_export}
 mkdir -p "{config['storage']['work_root']}/logs"
 
-bash "${{REPO_ROOT}}/jobs/run_task.sh" "{config.get('config_path', '')}" "{manifest_path}" "${{SLURM_ARRAY_TASK_ID}}"
+{task_launcher}
 """
 
 

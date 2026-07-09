@@ -27,8 +27,41 @@ class GeneratorAdapter(ABC):
     def binary_name(self) -> str:
         return self.executable
 
+    def container_image(self, code_version: str | None) -> str | None:
+        if not code_version:
+            return None
+        return self.image_for(code_version)
+
+    def container_available(self, code_version: str | None) -> bool:
+        from .. import catalog
+
+        return catalog.image_built(self.container_image(code_version))
+
+    def ensure_container_wrappable(self) -> None:
+        """Raise unless this process may launch the container itself.
+
+        Only Docker can be invoked from Python. Apptainer cannot nest: on the
+        cluster the Slurm task enters the generator's SIF *before* Python runs
+        (see slurm.render_sbatch_script), so the binary is native on $PATH and
+        the adapters' native branch applies. Reaching the container branch
+        under the apptainer runtime therefore means this task was launched
+        outside its image — a setup error worth a clear message.
+        """
+        from .. import containers
+
+        if containers.runtime() != "docker":
+            raise RuntimeError(
+                f"The {self.name} binary is not on $PATH and the active "
+                "container runtime is not docker. Apptainer images cannot be "
+                "launched from inside Python (nesting is unsupported); run "
+                "this task through the rendered sbatch script, which enters "
+                "the generator image first."
+            )
+
     def is_available(self, code_version: str | None = None) -> bool:
-        return bool(self.binary_name()) and shutil.which(self.binary_name()) is not None
+        return (
+            bool(self.binary_name()) and shutil.which(self.binary_name()) is not None
+        ) or self.container_available(code_version)
 
     # --- Version catalog API (exposed per adapter, checked at runtime) --------
 

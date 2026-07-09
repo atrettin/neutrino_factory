@@ -1,6 +1,9 @@
 # Neutrino Factory
 
-`Neutrino Factory` is a Python CLI (`neutrino-factory`) plus Bash setup scripts for running multiple neutrino event generators from one common YAML configuration. Generators run inside Docker containers so their native dependencies are isolated and reproducible across local machines and HPC clusters.
+`Neutrino Factory` is a Python CLI (`neutrino-factory`) plus Bash setup scripts for running multiple neutrino event generators from one common YAML configuration. Generators run inside containers so their native dependencies are isolated and reproducible. Two container pathways are supported:
+
+- **Docker** — local development and testing (macOS/Linux laptops).
+- **Apptainer** — HPC cluster execution (MPCDF/ODSL), where Docker is unavailable. SIF images are built natively on the cluster from hand-written definition files (`setup/apptainer/*.def`) that mirror the Dockerfiles.
 
 Targets:
 - `GENIE` — Docker image built and working
@@ -8,10 +11,10 @@ Targets:
 - `GiBUU` — Docker image built and working (event generation; ROOT→HDF5 normalizer still a stub)
 - `NEUT` — catalogued but not buildable; NEUT source is not freely available, so this backend is blocked indefinitely
 
-The repository is structured around a **local-first workflow**:
-1. validate and plan runs locally,
-2. test the orchestration without cluster access,
-3. later submit the same manifest to the MPP Slurm cluster.
+The workflow is **develop locally, deploy to the cluster**:
+1. validate, plan, and smoke-test runs locally with Docker (or stub mode),
+2. deploy the same repo to the ODSL cluster with the Apptainer pathway,
+3. submit the same config as a Slurm job array on the MPP cluster.
 
 ## Features
 
@@ -28,94 +31,122 @@ The repository is structured around a **local-first workflow**:
 
 ```text
 .
+├── bin/                      # bin/nf — cluster CLI wrapper (runs inside nf-base.sif)
 ├── configs/                  # schema templates and example user configs
 ├── docs/                     # usage, cluster notes, extension guide
 ├── jobs/                     # Slurm wrappers
 ├── scripts/                  # helper utilities
-├── setup/                    # per-generator Docker build scripts + Dockerfiles
+├── setup/                    # Docker build scripts + Dockerfiles; apptainer/ defs + cluster build script
 ├── src/neutrino_factory/     # Python package
 └── tests/                    # unit and smoke tests
 ```
 
 ## Environment variables
 
+All of these are usually written once by `neutrino-factory setup` into the
+repo-root `.env` file, which every CLI invocation and setup script loads
+automatically (already-set environment variables always win).
+
 | Variable | Meaning |
 | --- | --- |
 | `NF_SOFTWARE_ROOT` | Root for generator binaries and staged cross-section (xsec) files |
 | `NF_OUTPUT_ROOT` | Final output location for normalized and merged products |
 | `NF_WORK_ROOT` | Manifests, plans, logs, and temporary metadata |
-| `NF_SCRATCH_ROOT` | Scratch area for heavy temporary I/O; on MPP this should point to `/ptmp/$USER/...` |
+| `NF_SCRATCH_ROOT` | Scratch area for heavy temporary I/O; on the cluster this is local SSD (`/scratch/$USER/...`) |
+| `NF_IMAGE_ROOT` | Container image storage (Apptainer SIF files) |
+| `NF_CONTAINER_RUNTIME` | `docker`, `apptainer`, or `auto` (default: prefer docker, then apptainer) |
 | `NF_EXECUTION_MODE` | `local` or `slurm`; defaults to `local` |
 
-## Quickstart
+## Quickstart A — local development (Docker)
 
-### 1. Install Python dependencies
+The two pathways diverge at installation: locally the CLI is pip-installed on
+the host; on the cluster the host Python is too old, so the CLI itself runs
+inside a container (see Quickstart B).
 
 ```bash
+# 1. Install the CLI
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
-```
 
-### 2. Review the example config
+# 2. Configure directories and the docker pathway (writes .env)
+neutrino-factory setup --pathway docker
 
-```bash
-cat configs/examples/power_law_numu_Ar.yaml
-```
+# 3. Build generator images + stage GENIE cross sections (hours; optional —
+#    every generator also runs in synthetic stub_mode without them)
+bash setup/setup_all.sh
+bash setup/download_genie_xsec.sh
 
-### 3. Validate the config
-
-```bash
+# 4. Validate and run a local smoke test
 neutrino-factory validate-config --config configs/examples/power_law_numu_Ar.yaml
+neutrino-factory submit --config configs/examples/power_law_numu_Ar.yaml --executor local
+
+# 5. Render the Slurm submission without submitting
+neutrino-factory submit --config configs/examples/power_law_numu_Ar.yaml \
+  --executor slurm --dry-run
 ```
 
-### 4. Run a local smoke test
+The local run creates a manifest, runs each enabled generator (or its stub),
+normalizes the outputs into `HDF5`, and merges them. Multiple version entries
+of the same generator can run side by side (for example, two GENIE tunes).
+
+## Quickstart B — HPC cluster (Apptainer, MPCDF/ODSL)
+
+Do **not** `pip install` on the cluster — the system Python (3.9) is too old
+and MPCDF has no module system. Everything Python runs inside the `nf-base`
+container via the `bin/nf` wrapper; the generator images additionally contain
+the generator binaries. Builds must run on an interactive node
+(`odslserv01`/`02`), not the Slurm head node.
 
 ```bash
-neutrino-factory submit \
-  --config configs/examples/power_law_numu_Ar.yaml \
-  --executor local
+# 1. On odslserv01: clone onto /ptmp (shared, 6 TB/user, not backed up)
+git clone <repo-url> /ptmp/mpp/$USER/neutrino_factory/repo
+cd /ptmp/mpp/$USER/neutrino_factory/repo
+
+# 2. Bootstrap the orchestration image (fast), then configure
+NF_IMAGE_ROOT=/ptmp/mpp/$USER/neutrino_factory/images \
+  bash setup/build_apptainer_images.sh --bootstrap
+bin/nf setup --pathway apptainer     # accept the /ptmp defaults
+
+# 3. Build the generator images (hours each) and stage GENIE cross sections
+bash setup/build_apptainer_images.sh
+bash setup/download_genie_xsec.sh
+bin/nf list-generators --built
+
+# 4. Render the Slurm job, then submit from a host shell on the head node
+bin/nf submit --config configs/examples/power_law_numu_Ar.yaml --executor slurm
+# ...prints:  sbatch /ptmp/.../work/slurm/<run>.sbatch   -> run that on mppui1
+bin/nf check-status --config configs/examples/power_law_numu_Ar.yaml
 ```
 
-This creates a manifest, runs synthetic stub tasks for enabled generators, normalizes the outputs into `HDF5`, and merges them.
-Multiple version entries for the same generator can run in parallel (for example, two GENIE tunes).
+The full runbook, including the verified partition table and filesystem
+guidance, is in `docs/mpp_cluster_usage.md`.
 
-### 5. Render the Slurm submission without submitting
+## Generator setup (containers)
 
-```bash
-neutrino-factory submit \
-  --config configs/examples/power_law_numu_Ar.yaml \
-  --executor slurm \
-  --dry-run
-```
+The image tag is derived from the catalog (`src/neutrino_factory/catalog.py`)
+via the config's `code_version` — there is no manual image config key. The
+active runtime is chosen by `NF_CONTAINER_RUNTIME` (persisted in `.env`).
 
-Later, on the MPP cluster, follow `docs/slurm_submission_testing.md`.
+**Docker (local):** each generator is built by its own setup script —
+`setup/setup_all.sh`, `setup/setup_genie.sh`, `setup/setup_nuwro.sh`,
+`setup/setup_gibuu.sh` (`setup/setup_neut.sh` is not buildable — NEUT source is
+not freely available). Each accepts `--list-versions` and validates the
+requested `code_version` against the catalog. At runtime the adapter prefers a
+native binary on `$PATH` and otherwise wraps the generator in `docker run`.
 
-## Local-first development notes
+**Apptainer (cluster):** SIFs are built by `setup/build_apptainer_images.sh`
+from the hand-written definitions in `setup/apptainer/*.def` (each mirrors its
+`setup/Dockerfile.*` — update both together). The container layering is
+*inverted*: Apptainer cannot nest, so the Slurm array task enters the
+generator's SIF first and runs the CLI inside it, where the generator binary is
+native on `$PATH`. The generator images therefore also contain a Python
+runtime; the small `nf-base.sif` covers everything else (wizard, validation,
+merge, plots) via `bin/nf`.
 
-This repository is being implemented from a machine **without active cluster-node access**, so:
-- all initial verification should use the `local` executor,
-- the Slurm path should be verified in `--dry-run` mode here,
-- real `sbatch` submission should wait until the repo is on the MPP cluster.
-
-## Generator setup (Docker)
-
-Each generator is built into a Docker image by its own setup script. The image
-tag is derived from the catalog (`src/neutrino_factory/catalog.py`) via the
-config's `code_version` — there is no manual `docker_image` config key. At
-runtime the adapter runs the generator inside that image if it is present, and
-otherwise falls back to a native binary on `$PATH`.
-
-- `setup/setup_all.sh`
-- `setup/setup_genie.sh`
-- `setup/setup_nuwro.sh`
-- `setup/setup_gibuu.sh`
-- `setup/setup_neut.sh` (not buildable — NEUT source is not freely available)
-
-Each script accepts `--list-versions` (delegates to `neutrino-factory
-list-generators`) and validates the requested `code_version` against the
-catalog. Use `neutrino-factory list-generators --built` to see which catalogued
-images are present locally.
+Use `neutrino-factory list-generators --built` (or `bin/nf list-generators
+--built` on the cluster) to see which catalogued images are present for the
+active runtime.
 
 ### GENIE code versions and cross-section splines
 
@@ -150,10 +181,10 @@ versions of the same generator coexist without file collisions.
 
 ## Status
 
-Early-stage but functional locally. GENIE, NuWro, and GiBUU build and run in
-Docker, and every generator also runs in synthetic `stub_mode` for
+Functional locally; first real HPC deployment (ODSL/MPP cluster via the
+Apptainer pathway) is the current objective. GENIE, NuWro, and GiBUU build and
+run in Docker, and every generator also runs in synthetic `stub_mode` for
 development without real binaries. Known gaps are tracked in the source tree:
-NuWro/GiBUU still use a monoenergetic flux approximation, the GiBUU ROOT→HDF5
-normalizer is a stub, NEUT is blocked on source availability, and the Slurm
-submission path has only been exercised in `--dry-run` mode (no live cluster
-access yet).
+the GiBUU ROOT→HDF5 normalizer is a stub, NEUT is blocked on source
+availability, and the Apptainer pathway is written but not yet verified on the
+cluster (the dev machine is macOS, where Apptainer cannot run).

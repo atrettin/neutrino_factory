@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 from .base import GeneratorAdapter
-from .. import catalog
+from .. import containers
 from ..normalizers.gibuu import GiBUUNormalizer
 from ..translators.gibuu import GiBUUTranslator
 
@@ -25,17 +25,6 @@ class GiBUUAdapter(GeneratorAdapter):
             "config_versions": ["default"],
         },
     }
-
-    def _docker_image(self, code_version: str | None) -> str | None:
-        if not code_version:
-            return None
-        return self.image_for(code_version)
-
-    def _docker_available(self, code_version: str | None) -> bool:
-        return catalog.image_built(self._docker_image(code_version))
-
-    def is_available(self, code_version: str | None = None) -> bool:
-        return bool(shutil.which(self.binary_name())) or self._docker_available(code_version)
 
     def translate_config(self, task: dict) -> dict:
         return GiBUUTranslator().translate(self.config, task)
@@ -66,19 +55,21 @@ class GiBUUAdapter(GeneratorAdapter):
         )
 
         # GiBUU reads its jobcard from stdin and writes ROOT output into the CWD.
+        # Native binary first: on the cluster the Slurm task already runs inside
+        # the generator's Apptainer image (which cannot nest). Do not reorder.
         if shutil.which(self.binary_name()):
             return ["bash", "-c", f"{self.binary_name()} < job.job"]
 
-        if self._docker_available(code_version):
-            docker_image = self._docker_image(code_version)
-            assert docker_image is not None
-            return [
-                "docker", "run", "--platform", "linux/amd64", "--rm",
-                "-v", f"{Path(work_dir).resolve()}:/work",
-                "-w", "/work",
-                docker_image,
-                "bash", "-c", f"{self.binary_name()} < /work/job.job",
-            ]
+        if self.container_available(code_version):
+            self.ensure_container_wrappable()
+            image = self.container_image(code_version)
+            assert image is not None
+            return containers.docker_wrap(
+                image,
+                ["bash", "-c", f"{self.binary_name()} < /work/job.job"],
+                [(work_dir, "/work")],
+                "/work",
+            )
 
         return ["bash", "-c", f"{self.binary_name()} < job.job"]
 

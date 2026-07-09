@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -60,7 +61,7 @@ class GenieAdapterTests(unittest.TestCase):
             flux_file = Path(tmpdir) / "flux.root"
             flux_file.write_text("dummy", encoding="utf-8")
             adapter = GenieAdapter(self._base_config(tmpdir))
-            with patch.object(GenieAdapter, "_docker_available", return_value=False):
+            with patch.object(GenieAdapter, "container_available", return_value=False):
                 command = adapter.build_run_command(
                     self._translated_config(
                         "G18_10a_02_11a",
@@ -85,7 +86,7 @@ class GenieAdapterTests(unittest.TestCase):
             xml_file.write_text("dummy", encoding="utf-8")
 
             adapter = GenieAdapter(self._base_config(tmpdir))
-            with patch.object(GenieAdapter, "_docker_available", return_value=False):
+            with patch.object(GenieAdapter, "container_available", return_value=False):
                 command = adapter.build_run_command(self._translated_config("G18_10a_02_11a"), Path(tmpdir))
 
         self.assertIn("--cross-sections", command)
@@ -105,11 +106,54 @@ class GenieAdapterTests(unittest.TestCase):
             xml_file.write_text("dummy", encoding="utf-8")
 
             adapter = GenieAdapter(self._base_config(tmpdir))
-            with patch.object(GenieAdapter, "_docker_available", return_value=False):
+            with patch.object(GenieAdapter, "container_available", return_value=False):
                 command = adapter.build_run_command(self._translated_config("G18_10a_02_11a"), Path(tmpdir))
 
         self.assertIn("--cross-sections", command)
         self.assertEqual(command[command.index("--cross-sections") + 1], str(xml_file))
+
+    def test_native_binary_wins_over_available_container(self) -> None:
+        # Cluster-critical branch: inside the generator's Apptainer image the
+        # binary is on $PATH and must be run directly (no container wrapping).
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = GenieAdapter(self._base_config(tmpdir))
+            with patch("neutrino_factory.generators.genie.shutil.which", return_value="/opt/genie/bin/gevgen"):
+                with patch.object(GenieAdapter, "container_available", return_value=True):
+                    command = adapter.build_run_command(
+                        self._translated_config("G18_10a_02_11a"), Path(tmpdir)
+                    )
+
+        self.assertEqual(command[0], "gevgen")
+        self.assertNotIn("docker", command)
+        self.assertNotIn("apptainer", command)
+
+    def test_docker_runtime_wraps_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = GenieAdapter(self._base_config(tmpdir))
+            env = {"NF_CONTAINER_RUNTIME": "docker"}
+            with patch.dict(os.environ, env, clear=False):
+                with patch("neutrino_factory.generators.genie.shutil.which", return_value=None):
+                    with patch.object(GenieAdapter, "container_available", return_value=True):
+                        command = adapter.build_run_command(
+                            self._translated_config("G18_10a_02_11a"), Path(tmpdir)
+                        )
+
+        self.assertEqual(command[:3], ["docker", "run", "--platform"])
+        self.assertIn("genie:R-3_06_00", command)
+
+    def test_apptainer_runtime_refuses_to_wrap(self) -> None:
+        # Apptainer cannot nest: reaching the container branch without a native
+        # binary means the task was launched outside its image — fail clearly.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = GenieAdapter(self._base_config(tmpdir))
+            env = {"NF_CONTAINER_RUNTIME": "apptainer", "NF_IMAGE_ROOT": tmpdir}
+            (Path(tmpdir) / "genie_R-3_06_00.sif").write_text("", encoding="utf-8")
+            with patch.dict(os.environ, env, clear=False):
+                with patch("neutrino_factory.generators.genie.shutil.which", return_value=None):
+                    with self.assertRaises(RuntimeError):
+                        adapter.build_run_command(
+                            self._translated_config("G18_10a_02_11a"), Path(tmpdir)
+                        )
 
     def test_build_command_warns_when_tune_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

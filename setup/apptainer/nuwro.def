@@ -1,0 +1,174 @@
+# Apptainer definition for the NuWro neutrino event generator on Linux x86_64.
+# Hand-translated from setup/Dockerfile.nuwro — UPDATE BOTH TOGETHER.
+# Differences from the Dockerfile (deliberate, see docs/design_decisions.md):
+#   * No --platform pinning: cluster builds run on native x86_64.
+#   * The runtime stage additionally installs the neutrino-factory Python
+#     runtime dependencies, because on the cluster the Slurm task runs the CLI
+#     *inside* this image (Apptainer cannot nest containers).
+#
+# Build (on odslserv01/02, NOT the Slurm head node):
+#   apptainer build --build-arg JOBS=32 \
+#     "$NF_IMAGE_ROOT/nuwro_nuwro_25.11.sif" setup/apptainer/nuwro.def
+#
+# NuWro must run from /opt/nuwro so it can locate data/ relative to its binary.
+
+# ── Stage 1: Builder ──────────────────────────────────────────────────────────
+Bootstrap: docker
+From: ubuntu:22.04
+Stage: builder
+
+%arguments
+    NUWRO_TAG=nuwro_25.11
+    PYTHIA6_VERSION=6.4.28
+    ROOT_VERSION=6.30.10
+    JOBS=4
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        gfortran \
+        cmake \
+        git \
+        curl \
+        ca-certificates \
+        libxml2-dev \
+        libxml2-utils \
+        libfreetype6-dev \
+        libpcre3-dev \
+        libssl-dev \
+        python3-dev \
+        python3 \
+        python-is-python3 \
+        perl \
+        xz-utils \
+        && rm -rf /var/lib/apt/lists/*
+
+    # ── Pythia6 (reuse GENIE's upstream build_pythia6.sh) ─────────────────────
+    git clone --depth 1 https://github.com/GENIE-MC/Generator.git /tmp/genie-src
+    mkdir -p /opt/pythia6
+    cd /opt/pythia6
+    bash /tmp/genie-src/src/scripts/build/ext/build_pythia6.sh "{{ PYTHIA6_VERSION }}"
+    rm -rf /tmp/genie-src
+
+    # ── ROOT ──────────────────────────────────────────────────────────────────
+    PYTHIA6_LIBDIR="$(find /opt/pythia6 -maxdepth 2 -name 'libPythia6.so' \
+        -exec dirname {} \; | head -1)"
+    curl -fsSL \
+        "https://root.cern/download/root_v{{ ROOT_VERSION }}.source.tar.gz" \
+        -o /tmp/root-src.tar.gz
+    tar -xzf /tmp/root-src.tar.gz -C /tmp
+    mv "/tmp/root-{{ ROOT_VERSION }}" /tmp/root-src
+    cmake -S /tmp/root-src -B /tmp/root-build \
+        -DCMAKE_INSTALL_PREFIX=/opt/root \
+        -DCMAKE_BUILD_TYPE=Release \
+        -Dpythia6=ON \
+        -Dpythia6_library="${PYTHIA6_LIBDIR}/libPythia6.so" \
+        -Dmathmore=ON \
+        -Ddavix=OFF \
+        -Dxrootd=OFF \
+        -Dwebgui=OFF \
+        -Dasimage=OFF \
+        -Dopengl=OFF \
+        -Dx11=OFF \
+        -Dgviz=OFF \
+        -Dbuiltin_freetype=OFF \
+        -Dbuiltin_pcre=OFF \
+        -Dbuiltin_openssl=OFF \
+        -Dcxxmodules=OFF \
+        -Wno-dev
+    cmake --build /tmp/root-build --parallel "{{ JOBS }}"
+    cmake --install /tmp/root-build
+    rm -rf /tmp/root-src /tmp/root-build /tmp/root-src.tar.gz
+
+    # ── ROOTEGPythia6 ─────────────────────────────────────────────────────────
+    # ROOT 6.26+ no longer ships TPythia6/libEGPythia6; ROOTEGPythia6 is the
+    # standalone replacement. BUILTIN=ON compiles its own Pythia6.
+    git clone --depth 1 \
+        https://github.com/luketpickering/ROOTEGPythia6.git /opt/rooted-src
+    export ROOTSYS=/opt/root
+    export PATH=/opt/root/bin:${PATH}
+    export LD_LIBRARY_PATH=/opt/root/lib:${LD_LIBRARY_PATH:-}
+    # Build under /opt (not /tmp): the build dir path is baked into the PCM,
+    # and Apptainer bind-mounts the host /tmp over the image's at runtime, so a
+    # /tmp path would be shadowed and Cling could not find the dictionary.
+    cmake -S /opt/rooted-src -B /opt/rooted-build \
+        -DCMAKE_INSTALL_PREFIX=/opt/ROOTEGPythia6 \
+        -DROOTEGPythia6_Pythia6_BUILTIN=ON \
+        -Wno-dev
+    cmake --build /opt/rooted-build --parallel "{{ JOBS }}"
+    cmake --install /opt/rooted-build
+    rm -rf /opt/rooted-build
+
+    # ── NuWro ─────────────────────────────────────────────────────────────────
+    # NuWro's documented install builds in place (its CMakeLists hardcodes the
+    # install prefix to the source dir), so clone into the final location and
+    # use the top-level Makefile.
+    git clone --depth 1 --branch "{{ NUWRO_TAG }}" \
+        https://github.com/NuWro/nuwro.git /opt/nuwro
+    export ROOTEGPythia6_ROOT=/opt/ROOTEGPythia6
+    cd /opt/nuwro
+    make -j"{{ JOBS }}" \
+        LDFLAGS="$(/opt/root/bin/root-config --libs) -L/opt/ROOTEGPythia6/lib -Wl,-rpath,/opt/ROOTEGPythia6/lib -lEGPythia6 -lPythia6 -lGeom -lMinuit -lgfortran"
+
+# ── Stage 2: Runtime ──────────────────────────────────────────────────────────
+Bootstrap: docker
+From: ubuntu:22.04
+Stage: final
+
+# Defaults must be redeclared per stage; {{ }} placeholders below need them.
+%arguments
+    NUWRO_TAG=nuwro_25.11
+    ROOT_VERSION=6.30.10
+
+%files from builder
+    /opt/root /opt/root
+    /opt/ROOTEGPythia6 /opt/ROOTEGPythia6
+    /opt/nuwro /opt/nuwro
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
+        libgomp1 \
+        libgfortran5 \
+        libfreetype6 \
+        g++ \
+        && rm -rf /var/lib/apt/lists/*
+
+    # neutrino-factory runtime deps: the Slurm task runs the CLI inside this
+    # image (Apptainer cannot nest). Mirrors pyproject.toml [project.dependencies].
+    pip3 install --no-cache-dir \
+        "PyYAML>=6.0" \
+        "h5py>=3.10" \
+        "numpy>=1.24" \
+        "uproot>=5.0" \
+        "awkward>=2.0" \
+        "matplotlib>=3.7"
+
+    # The ROOTEGPythia6 PCM bakes in its build-time path (/opt/rooted-build,
+    # persistent — unlike /tmp, which Apptainer shadows with a host bind at
+    # runtime); symlink so Cling finds it.
+    mkdir -p /opt/rooted-build
+    ln -s /opt/ROOTEGPythia6/lib/libTPythia6_rdict.pcm \
+        /opt/rooted-build/libTPythia6_rdict.pcm
+
+%environment
+    export ROOTSYS=/opt/root
+    export ROOTEGPythia6_ROOT=/opt/ROOTEGPythia6
+    export PATH=/opt/nuwro/bin:/opt/root/bin:$PATH
+    export LD_LIBRARY_PATH=/opt/nuwro/lib:/opt/root/lib:/opt/ROOTEGPythia6/lib
+
+%test
+    test -x /opt/nuwro/bin/nuwro
+    python3 -c "import yaml, h5py, numpy, uproot, awkward"
+
+%labels
+    org.neutrino-factory.image nuwro
+    org.neutrino-factory.source setup/Dockerfile.nuwro
+
+%help
+    NuWro {{ NUWRO_TAG }} with ROOT {{ ROOT_VERSION }}, ROOTEGPythia6, and the
+    neutrino-factory Python runtime. Run nuwro from /opt/nuwro so it can find
+    its data/ directory.

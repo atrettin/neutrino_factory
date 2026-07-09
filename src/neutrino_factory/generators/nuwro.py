@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 from .base import GeneratorAdapter
-from .. import catalog
+from .. import containers
 from ..normalizers.nuwro import NuWroNormalizer
 from ..translators.nuwro import NuWroTranslator
 
@@ -23,17 +23,6 @@ class NuWroAdapter(GeneratorAdapter):
             "config_versions": ["default"],
         },
     }
-
-    def _docker_image(self, code_version: str | None) -> str | None:
-        if not code_version:
-            return None
-        return self.image_for(code_version)
-
-    def _docker_available(self, code_version: str | None) -> bool:
-        return catalog.image_built(self._docker_image(code_version))
-
-    def is_available(self, code_version: str | None = None) -> bool:
-        return bool(shutil.which(self.binary_name())) or self._docker_available(code_version)
 
     def translate_config(self, task: dict) -> dict:
         return NuWroTranslator().translate(self.config, task)
@@ -59,23 +48,23 @@ class NuWroAdapter(GeneratorAdapter):
             "-i", "params.txt",
         ]
 
+        # Native binary first: on the cluster the Slurm task already runs inside
+        # the generator's Apptainer image (which cannot nest). Do not reorder.
         if shutil.which(self.binary_name()):
             return nuwro_args
 
-        if self._docker_available(code_version):
+        if self.container_available(code_version):
+            self.ensure_container_wrappable()
+            image = self.container_image(code_version)
+            assert image is not None
             # NuWro resolves data/ relative to its binary; run from /opt/nuwro
             # and write output explicitly to the mounted work dir.
-            nuwro_args = [
-                self.binary_name(),
-                "-o", "/work/events.root",
-                "-i", "/work/params.txt",
-            ]
-            return [
-                "docker", "run", "--platform", "linux/amd64", "--rm",
-                "-v", f"{Path(work_dir).resolve()}:/work",
-                "-w", "/opt/nuwro",
-                self._docker_image(code_version),
-            ] + nuwro_args
+            return containers.docker_wrap(
+                image,
+                [self.binary_name(), "-o", "/work/events.root", "-i", "/work/params.txt"],
+                [(work_dir, "/work")],
+                "/opt/nuwro",
+            )
 
         return nuwro_args
 

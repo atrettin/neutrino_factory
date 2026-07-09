@@ -1,6 +1,6 @@
 run:
-  name: genie_xsec_numu_c12
-  events: 100
+  name: power_law_numu_ar40
+  events: 100000
   seed: 12345
   executor: local
   stub_mode: false
@@ -9,25 +9,26 @@ flux:
   type: power_law
   particle: numu
   emin_gev: 0.5
-  emax_gev: 5.0
+  emax_gev: 10.0
   gamma: -2.0
 
 target:
-  nucleus: C12
-  pdg: 1000060120
+  nucleus: Ar40
+  pdg: 1000180400
 
 physics:
   mode: inclusive
   current: cc
-  # Avoid the known MEC (2p2h) crash under amd64 emulation (see STUBS.md).
-  event_generator_list: CCQE
 
 generators:
   genie:
     versions:
-      - enabled: true
+      - enabled: false
+        code_version: "R-3_06_00"       # git tag / release
+        config_version: "G18_10a_02_11a" # GENIE tune
+      - enabled: false
         code_version: "R-3_06_00"
-        config_version: "G18_10a_02_11a"
+        config_version: "AR23_20i_00_000"
   neut:
     versions:
       - enabled: false
@@ -35,9 +36,15 @@ generators:
         config_version: "default"
   nuwro:
     versions:
-      - enabled: false
+      - enabled: true
         code_version: "nuwro_25.11"
         config_version: "default"
+  gibuu:
+    versions:
+      - enabled: true
+        code_version: "release2025"
+        config_version: "default"
+        
 
 splitting:
   strategy: events

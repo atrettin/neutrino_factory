@@ -1,35 +1,116 @@
-# MPP cluster usage
+# ODSL / MPP cluster usage (Apptainer pathway)
 
-This repository is designed around a **local-first** workflow and an **MPP Slurm** submission path.
+End-to-end runbook for deploying and running neutrino-factory on the
+MPCDF/ODSL cluster. The cluster has **no Docker**, **no module system**, and a
+system Python (3.9) too old for a native install — everything Python runs
+inside Apptainer containers.
 
-## Before you have cluster access
+## Execution model
 
-Use the local executor for all testing:
+- **Build on odslserv01/02** (interactive nodes) — unprivileged `apptainer
+  build` works there and is known to *fail* on the Slurm head node.
+- **Submit from mppui1.t2.rzg.mpg.de** (Slurm head node; `ssh mppui1` from an
+  odslserv node). All storage is on shared `/ptmp`, so both hosts see the same
+  repo, images, and outputs.
+- **Inverted container layering**: Apptainer cannot nest, so the sbatch array
+  task runs `apptainer exec <generator>.sif bash jobs/run_task.sh …` — the CLI
+  executes *inside* the generator image, where the generator binary is native
+  on `$PATH`. All other CLI use goes through `bin/nf`, which wraps the small
+  `nf-base.sif` orchestration image.
+- Run everything from a **plain host shell**. The cenv-based VSCode environment
+  is itself an Apptainer container, and `apptainer` does not work inside it.
+
+## Filesystems
+
+| Path | Properties | Use for |
+| --- | --- | --- |
+| `/u/...` (home) | 125 GB, backed up, slow | nothing from this project |
+| `/ptmp/mpp/$USER` | 6 TB/user GPFS, shared, **no backup** | repo, SIF images, software, output, work |
+| `/scratch/$USER` | local SSD, auto-purged | volatile high-I/O scratch |
+
+MPCDF auto-mounts `/u`, `/ptmp`, `/cvmfs`, and `/scratch` inside every
+Apptainer container, so paths under those trees resolve unchanged inside.
+
+## Slurm partitions (MPP cluster, verified)
+
+| Partition | Time limit | Notes |
+| --- | --- | --- |
+| `supershort` | 30 min | |
+| `short` | 4 h | default partition; the config default |
+| `standard` | 1 day | 64 cores / 256 GB nodes |
+| `long` | 4 days | |
+| `extralong` | 31 days | |
+| `alma`, `special` | — | special-purpose |
+
+Set `slurm.partition` in the run config to override the `short` default.
+
+## First-time setup
 
 ```bash
-neutrino-factory validate-config --config configs/examples/power_law_numu_Ar.yaml
-neutrino-factory submit --config configs/examples/power_law_numu_Ar.yaml --executor local
-neutrino-factory submit --config configs/examples/power_law_numu_Ar.yaml --executor slurm --dry-run
+# 1. On odslserv01: clone onto /ptmp
+git clone <repo-url> /ptmp/mpp/$USER/neutrino_factory/repo
+cd /ptmp/mpp/$USER/neutrino_factory/repo
+
+# 2. Bootstrap the orchestration image (fast: python:3.13-slim + pip deps)
+NF_IMAGE_ROOT=/ptmp/mpp/$USER/neutrino_factory/images \
+  bash setup/build_apptainer_images.sh --bootstrap
+
+# 3. Interactive setup: choose the apptainer pathway, accept the /ptmp defaults.
+#    Writes .env (storage roots, NF_CONTAINER_RUNTIME=apptainer, cache dir).
+bin/nf setup --pathway apptainer
+
+# 4. Build the generator images (ROOT/GENIE compile from source — hours each;
+#    GiBUU is fastest, it reuses a prebuilt ROOT base). Rerunning is safe:
+#    existing SIFs are skipped without --force.
+bash setup/build_apptainer_images.sh --only gibuu
+bash setup/build_apptainer_images.sh --only genie
+bash setup/build_apptainer_images.sh --only nuwro
+
+# 5. Stage GENIE cross-section splines and check the catalog
+bash setup/download_genie_xsec.sh
+bin/nf list-generators --built
 ```
 
-## Environment variables
+If step 2 was run before `bin/nf setup` (so the bootstrap SIF landed somewhere
+other than the configured `NF_IMAGE_ROOT`), just rerun
+`bash setup/build_apptainer_images.sh --bootstrap` — it re-creates nf-base at
+the configured location quickly.
+
+## Submitting a run
 
 ```bash
-export NF_SOFTWARE_ROOT=/path/to/shared/software
-export NF_OUTPUT_ROOT=/path/to/shared/output
-export NF_WORK_ROOT=/path/to/shared/work
-export NF_SCRATCH_ROOT=/ptmp/$USER/neutrino_factory
-export NF_EXECUTION_MODE=local
+# On mppui1 (ssh from odslserv01), in the repo:
+bin/nf validate-config --config configs/examples/power_law_numu_Ar.yaml
+bin/nf submit --config configs/examples/power_law_numu_Ar.yaml --executor slurm
 ```
 
-## MPP-oriented execution model
+`sbatch` is not visible inside the container, so `submit` renders the job
+array script and prints the exact command to run in the host shell:
 
-- use **job arrays** instead of many individual `sbatch` calls,
-- stage heavy temporary work into `/ptmp` or node-local scratch,
-- copy final products back to `NF_OUTPUT_ROOT`,
-- keep logs and manifests under `NF_WORK_ROOT`,
-- record Slurm job IDs and task IDs for reproducibility.
+```bash
+sbatch /ptmp/mpp/$USER/neutrino_factory/work/slurm/<run_name>.sbatch
+```
 
-## Later, on the cluster
+The rendered script sources the repo `.env`, maps each array task index to its
+generator's SIF, and runs the task inside it. Monitor and validate with:
 
-When the repository is moved onto the MPP environment, follow `docs/slurm_submission_testing.md` for the first real submission test.
+```bash
+squeue --me
+bin/nf check-status --config configs/examples/power_law_numu_Ar.yaml
+```
+
+Per-generator merged HDF5 files appear under `$NF_OUTPUT_ROOT/merged/`. Chunk
+merging currently happens in the local pipeline; after a Slurm run, merge
+chunks explicitly with `bin/nf merge` if needed.
+
+## Troubleshooting
+
+- `apptainer build` fails → are you on odslserv01/02? Builds fail on mppui1.
+- "binary not on $PATH and runtime is not docker" from a task → the task was
+  launched outside its generator image; use the rendered sbatch script (or
+  `apptainer exec <generator sif> bash jobs/run_task.sh …` manually).
+- `bin/nf` reports nf-base.sif missing → run
+  `bash setup/build_apptainer_images.sh --bootstrap` on an odslserv node.
+- GENIE MEC (2p2h) crashes were only ever observed under amd64 *emulation* on
+  the dev laptop; on the cluster's native x86_64, re-test the default
+  event-generator list before restricting to CCQE (see STUBS.md).

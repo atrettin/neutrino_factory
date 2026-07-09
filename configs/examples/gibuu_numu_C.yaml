@@ -1,6 +1,6 @@
 run:
   name: gibuu_numu_c12
-  events: 100
+  events: 100000
   seed: 12345
   executor: local
   stub_mode: false
@@ -54,7 +54,7 @@ storage:
   scratch_root: ${NF_SCRATCH_ROOT:-./scratch}
 
 slurm:
-  partition: standard
+  partition: short
   time: "00:20:00"
   cpus_per_task: 1
   mem: "2G"

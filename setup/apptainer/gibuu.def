@@ -1,0 +1,95 @@
+# Apptainer definition for the GiBUU neutrino event generator on Linux x86_64,
+# with ROOT event output enabled via the RootTuple library.
+# Hand-translated from setup/Dockerfile.gibuu — UPDATE BOTH TOGETHER.
+# Differences from the Dockerfile (deliberate, see docs/design_decisions.md):
+#   * No --platform pinning: cluster builds run on native x86_64.
+#   * Additionally installs the neutrino-factory Python runtime dependencies,
+#     because on the cluster the Slurm task runs the CLI *inside* this image
+#     (Apptainer cannot nest containers).
+#
+# Based on the prebuilt rootproject/root image (GiBUU only needs a working ROOT
+# to link RootTuple against). GiBUU is distributed as HEPForge release tarballs
+# (the GitHub mirror is stale and must not be used).
+#
+# Build (on odslserv01/02, NOT the Slurm head node):
+#   apptainer build --build-arg JOBS=32 \
+#     "$NF_IMAGE_ROOT/gibuu_release2025.sif" setup/apptainer/gibuu.def
+#
+# Run: GiBUU reads its jobcard from stdin and writes ROOT output into the CWD:
+#   apptainer exec gibuu_release2025.sif bash -c "GiBUU.x < job.job"
+
+Bootstrap: docker
+From: rootproject/root:{{ ROOT_BASE_TAG }}
+
+%arguments
+    ROOT_BASE_TAG=6.32.02-ubuntu22.04
+    GIBUU_RELEASE=2025
+    JOBS=4
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y --no-install-recommends \
+        gfortran \
+        g++ \
+        make \
+        cmake \
+        wget \
+        ca-certificates \
+        libbz2-dev \
+        python3-pip \
+        perl \
+        && rm -rf /var/lib/apt/lists/*
+
+    # neutrino-factory runtime deps: the Slurm task runs the CLI inside this
+    # image (Apptainer cannot nest). Mirrors pyproject.toml [project.dependencies].
+    pip3 install --no-cache-dir \
+        "PyYAML>=6.0" \
+        "h5py>=3.10" \
+        "numpy>=1.24" \
+        "uproot>=5.0" \
+        "awkward>=2.0" \
+        "matplotlib>=3.7"
+
+    # ── Download GiBUU release, input data, and RootTuple ─────────────────────
+    # `wget --content-disposition` resolves the ?f=<file> download links to
+    # their real filenames (as documented on the HEPForge download page).
+    mkdir -p /opt/GiBUU
+    cd /opt/GiBUU
+    wget --content-disposition "https://gibuu.hepforge.org/downloads?f=release{{ GIBUU_RELEASE }}.tar.gz"
+    tar -xzf release{{ GIBUU_RELEASE }}.tar.gz
+    wget --content-disposition "https://gibuu.hepforge.org/downloads?f=buuinput{{ GIBUU_RELEASE }}.tar.gz"
+    tar -xzf buuinput{{ GIBUU_RELEASE }}.tar.gz
+    wget --content-disposition "https://gibuu.hepforge.org/downloads?f=libraries{{ GIBUU_RELEASE }}_RootTuple.tar.gz"
+    tar -xzf libraries{{ GIBUU_RELEASE }}_RootTuple.tar.gz
+    rm -f ./*.tar.gz
+
+    # RootTuple's default CMakeLists does not force a C++ standard; modern ROOT
+    # headers require C++17, so pin it (same fix the km3buu container applies).
+    sed -i '6 a set(CMAKE_CXX_STANDARD 17)\nset(CMAKE_CXX_STANDARD_REQUIRED ON)' \
+        /opt/GiBUU/libraries{{ GIBUU_RELEASE }}/RootTuple/RootTuple-master/CMakeLists.txt
+
+    # ── Build RootTuple (static) then GiBUU with ROOT output enabled ──────────
+    # RootTuple is built WITHOUT -j: its target shells out to `cmake --build`,
+    # whose nested make loses the parent jobserver fd under -j. It is tiny, so
+    # serial is fine; GiBUU itself still builds with -j.
+    cd /opt/GiBUU/release{{ GIBUU_RELEASE }}
+    make buildRootTuple_POS
+    make -j"{{ JOBS }}" FORT=gfortran withROOT=1
+
+%environment
+    export GIBUU_RELEASE={{ GIBUU_RELEASE }}
+    export GIBUU_INPUT=/opt/GiBUU/buuinput
+    export PATH=/opt/GiBUU/release{{ GIBUU_RELEASE }}/objects:$PATH
+    export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
+
+%test
+    test -x /opt/GiBUU/release{{ GIBUU_RELEASE }}/objects/GiBUU.x
+    python3 -c "import yaml, h5py, numpy, uproot, awkward"
+
+%labels
+    org.neutrino-factory.image gibuu
+    org.neutrino-factory.source setup/Dockerfile.gibuu
+
+%help
+    GiBUU release{{ GIBUU_RELEASE }} with RootTuple ROOT output and the
+    neutrino-factory Python runtime. GiBUU.x reads a jobcard from stdin.

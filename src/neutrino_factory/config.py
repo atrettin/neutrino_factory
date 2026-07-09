@@ -76,9 +76,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "output_root": "${NF_OUTPUT_ROOT:-./output}",
         "work_root": "${NF_WORK_ROOT:-./work}",
         "scratch_root": "${NF_SCRATCH_ROOT:-./scratch}",
+        # Container image storage (Apptainer SIFs). containers.py reads the env
+        # var directly; this key surfaces the resolved value for bookkeeping.
+        "image_root": "${NF_IMAGE_ROOT:-./software/images}",
     },
     "slurm": {
-        "partition": "standard",
+        # "short" is the MPP cluster's default partition (4h limit) — the right
+        # size for chunked MC generation tasks.
+        "partition": "short",
         "time": "00:10:00",
         "cpus_per_task": 1,
         "mem": "2G",
@@ -219,6 +224,42 @@ def validate_config(config: Dict[str, Any]) -> None:
 
     if errors:
         raise ConfigError("; ".join(errors))
+
+
+def find_repo_root(start: str | Path | None = None) -> Path | None:
+    """Walk upward from ``start`` (default: CWD) to the directory containing
+    ``pyproject.toml``. Returns ``None`` if no repo root is found."""
+    current = Path(start or Path.cwd()).resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / "pyproject.toml").is_file():
+            return candidate
+    return None
+
+
+def load_env_file(start: str | Path | None = None) -> Path | None:
+    """Load ``KEY=value`` pairs from the repo-root ``.env`` into the environment.
+
+    Values are applied with setdefault semantics: variables already set in the
+    real environment always win. Blank lines and ``#`` comments are ignored, as
+    are malformed lines. Returns the path of the file that was loaded, if any.
+    """
+    root = find_repo_root(start)
+    if root is None:
+        return None
+    env_path = root / ".env"
+    if not env_path.is_file():
+        return None
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        key = key.strip()
+        # Drop any trailing inline comment, then surrounding quotes.
+        value = value.split("#", 1)[0].strip().strip("'\"")
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            os.environ.setdefault(key, value)
+    return env_path
 
 
 def resolve_config(config: Dict[str, Any], source_path: str | Path | None = None) -> Dict[str, Any]:
