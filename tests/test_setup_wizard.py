@@ -85,6 +85,29 @@ class SetupWizardTests(unittest.TestCase):
             self.assertTrue((root / "software" / "images").is_dir())
             self.assertTrue((root / "work").is_dir())
 
+    def test_inside_apptainer_container_defaults_to_apptainer_pathway(self) -> None:
+        # bin/nf runs the wizard inside nf-base.sif, where no container binary
+        # is on $PATH; APPTAINER_CONTAINER marks that case and must select the
+        # apptainer pathway without offering to run builds.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "pyproject.toml").write_text("", encoding="utf-8")
+            env = {"APPTAINER_CONTAINER": "/ptmp/images/nf-base.sif"}
+            with patch.dict(os.environ, env, clear=False):
+                with patch("neutrino_factory.setup_wizard.shutil.which", return_value=None):
+                    with patch("neutrino_factory.setup_wizard.getpass.getuser", return_value="testuser"):
+                        with patch("neutrino_factory.setup_wizard.find_repo_root", return_value=root):
+                            # no_build=False: the build offer must be a printed
+                            # hand-off, never a subprocess, inside the container.
+                            with patch("neutrino_factory.setup_wizard._run_script") as run_script:
+                                self.assertEqual(
+                                    run_setup(_wizard_args(no_build=False)), 0
+                                )
+            content = (root / ".env").read_text(encoding="utf-8")
+
+        self.assertIn("NF_CONTAINER_RUNTIME=apptainer", content)
+        run_script.assert_not_called()
+
     def test_rerun_prefills_from_existing_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

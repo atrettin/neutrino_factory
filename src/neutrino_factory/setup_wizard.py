@@ -141,19 +141,29 @@ def run_setup(args: argparse.Namespace) -> int:
     env_path = repo_root / ".env"
     existing = _parse_env_file(env_path)
 
-    # 1. Detect container runtimes.
+    # 1. Detect container runtimes. When the wizard itself runs inside an
+    # Apptainer container (bin/nf on the cluster), the apptainer binary is not
+    # on $PATH inside — but that *is* the apptainer pathway.
+    inside_apptainer = bool(
+        os.environ.get("APPTAINER_CONTAINER") or os.environ.get("SINGULARITY_CONTAINER")
+    )
     have_docker = shutil.which("docker") is not None
     have_apptainer = shutil.which("apptainer") is not None
     print("Detected container runtimes:")
     print(f"  docker:    {'yes' if have_docker else 'no'}")
-    print(f"  apptainer: {'yes' if have_apptainer else 'no'}")
+    if inside_apptainer:
+        print("  apptainer: running inside an Apptainer container (bin/nf)")
+    else:
+        print(f"  apptainer: {'yes' if have_apptainer else 'no'}")
 
     # 2. Pathway.
     if args.pathway:
         pathway = args.pathway
     else:
         default_pathway = existing.get("NF_CONTAINER_RUNTIME") or (
-            "docker" if have_docker or not have_apptainer else "apptainer"
+            "apptainer"
+            if inside_apptainer or (have_apptainer and not have_docker)
+            else "docker"
         )
         if default_pathway not in ("docker", "apptainer"):
             default_pathway = "docker"
@@ -220,7 +230,16 @@ def run_setup(args: argparse.Namespace) -> int:
         else:
             hostname = socket.gethostname()
             on_build_host = hostname.startswith("odslserv")
-            if not have_apptainer:
+            if inside_apptainer:
+                # Apptainer cannot nest, so builds must run in a host shell.
+                print(
+                    "\nThis wizard is running inside a container (bin/nf), so it "
+                    "cannot launch apptainer builds itself. Run in a host shell "
+                    "on odslserv01/02:\n"
+                    "  bash setup/build_apptainer_images.sh\n"
+                    "  bash setup/download_genie_xsec.sh"
+                )
+            elif not have_apptainer:
                 print("\nApptainer is not on $PATH — skipping image builds.")
             elif not on_build_host:
                 print(
@@ -234,7 +253,7 @@ def run_setup(args: argparse.Namespace) -> int:
                 interactive=interactive,
             ):
                 _run_script(repo_root, "setup/build_apptainer_images.sh")
-            if _confirm(
+            if not inside_apptainer and _confirm(
                 "Download GENIE cross-section splines (~430 MB per tune)?",
                 default=False,
                 interactive=interactive,
@@ -250,8 +269,8 @@ def run_setup(args: argparse.Namespace) -> int:
         print("  4. Smoke test:          neutrino-factory submit "
               "--config configs/examples/power_law_numu_Ar.yaml --executor local")
     else:
-        print("  1. On odslserv01/02:    bash setup/build_apptainer_images.sh")
-        print("  2. Stage GENIE splines: bash setup/download_genie_xsec.sh")
+        print("  1. On odslserv01/02 (host shell): bash setup/build_apptainer_images.sh")
+        print("  2. Stage GENIE splines (host shell): bash setup/download_genie_xsec.sh")
         print("  3. Check the catalog:   bin/nf list-generators --built")
         print("  4. Render + submit:     bin/nf submit --config <cfg> --executor slurm")
         print("     then run the printed `sbatch ...` command in a host shell on mppui1.")
