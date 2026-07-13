@@ -47,7 +47,6 @@ storage:
   software_root: ${NF_SOFTWARE_ROOT:-./software}
   output_root: ${NF_OUTPUT_ROOT:-./output}
   work_root: ${NF_WORK_ROOT:-./work}
-  scratch_root: ${NF_SCRATCH_ROOT:-./scratch}
 
 slurm:
   partition: short

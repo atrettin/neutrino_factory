@@ -26,10 +26,11 @@ inside Apptainer containers.
 | --- | --- | --- |
 | `/u/...` (home) | 125 GB, backed up, slow | nothing from this project |
 | `/ptmp/mpp/$USER` | 6 TB/user GPFS, shared, **no backup** | repo, SIF images, software, output, work |
-| `/scratch/$USER` | local SSD, auto-purged | volatile high-I/O scratch |
 
-MPCDF auto-mounts `/u`, `/ptmp`, `/cvmfs`, and `/scratch` inside every
-Apptainer container, so paths under those trees resolve unchanged inside.
+MPCDF auto-mounts `/u`, `/ptmp`, and `/cvmfs` inside every Apptainer
+container, so paths under those trees resolve unchanged inside. `/scratch`
+(node-local SSD) is **not** accessible from inside containers, so the project
+does not use it — everything lives on `/ptmp`.
 
 ## Slurm partitions (MPP cluster, verified)
 
@@ -51,9 +52,11 @@ Set `slurm.partition` in the run config to override the `short` default.
 git clone <repo-url> /ptmp/mpp/$USER/neutrino_factory/repo
 cd /ptmp/mpp/$USER/neutrino_factory/repo
 
-# 2. Bootstrap the orchestration image (fast: python:3.13-slim + pip deps)
-NF_IMAGE_ROOT=/ptmp/mpp/$USER/neutrino_factory/images \
-  bash setup/build_apptainer_images.sh --bootstrap
+# 2. Bootstrap the orchestration image (fast: python:3.13-slim + pip deps).
+#    The image root defaults to <repo>/software/images (on /ptmp, since the
+#    repo is) and is recorded in .env so bin/nf and later builds agree on it;
+#    set NF_IMAGE_ROOT beforehand to choose a different location.
+bash setup/build_apptainer_images.sh --bootstrap
 
 # 3. Interactive setup: choose the apptainer pathway, accept the /ptmp defaults.
 #    Writes .env (storage roots, NF_CONTAINER_RUNTIME=apptainer, cache dir).
@@ -71,10 +74,9 @@ bash setup/download_genie_xsec.sh
 bin/nf list-generators --built
 ```
 
-If step 2 was run before `bin/nf setup` (so the bootstrap SIF landed somewhere
-other than the configured `NF_IMAGE_ROOT`), just rerun
+If you later change `NF_IMAGE_ROOT` (via `.env` or the wizard), rerun
 `bash setup/build_apptainer_images.sh --bootstrap` — it re-creates nf-base at
-the configured location quickly.
+the new location quickly.
 
 ## Submitting a run
 

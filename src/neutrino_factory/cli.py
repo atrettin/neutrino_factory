@@ -263,8 +263,8 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Configure this checkout for one of the two container pathways: 'docker' for "
             "local development or 'apptainer' for HPC cluster execution (MPCDF/ODSL). "
-            "Prompts for the storage directories (persistent output, work, volatile "
-            "scratch, container images), writes them to the repo-root .env file — which "
+            "Prompts for the storage directories (software, persistent output, work, "
+            "container images), writes them to the repo-root .env file — which "
             "every CLI invocation and setup script loads automatically — creates the "
             "directories, and optionally kicks off the pathway's image builds. Re-running "
             "setup prefills the prompts from the existing .env."

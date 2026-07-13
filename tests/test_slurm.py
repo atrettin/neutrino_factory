@@ -19,7 +19,6 @@ class SlurmPlanningTests(unittest.TestCase):
             env = {
                 "NF_OUTPUT_ROOT": f"{tmpdir}/output",
                 "NF_WORK_ROOT": f"{tmpdir}/work",
-                "NF_SCRATCH_ROOT": f"{tmpdir}/scratch",
             }
             with patch.dict(os.environ, env, clear=False):
                 config = load_config(config_path)
@@ -44,7 +43,6 @@ class SlurmPlanningTests(unittest.TestCase):
             env = {
                 "NF_OUTPUT_ROOT": f"{tmpdir}/output",
                 "NF_WORK_ROOT": f"{tmpdir}/work",
-                "NF_SCRATCH_ROOT": f"{tmpdir}/scratch",
                 "NF_CONTAINER_RUNTIME": "apptainer",
                 "NF_IMAGE_ROOT": f"{tmpdir}/images",
             }
@@ -71,7 +69,6 @@ class SlurmPlanningTests(unittest.TestCase):
             env = {
                 "NF_OUTPUT_ROOT": f"{tmpdir}/output",
                 "NF_WORK_ROOT": f"{tmpdir}/work",
-                "NF_SCRATCH_ROOT": f"{tmpdir}/scratch",
                 "NF_CONTAINER_RUNTIME": "docker",
             }
             with patch.dict(os.environ, env, clear=False):

@@ -33,7 +33,6 @@ _PATH_KEYS = [
     ("NF_SOFTWARE_ROOT", "Software root (generator data, GENIE xsec splines)"),
     ("NF_OUTPUT_ROOT", "Output root (normalized HDF5 results — persistent)"),
     ("NF_WORK_ROOT", "Work root (manifests, raw outputs, logs)"),
-    ("NF_SCRATCH_ROOT", "Scratch root (volatile high-I/O space)"),
     ("NF_IMAGE_ROOT", "Image root (container images / Apptainer SIFs)"),
 ]
 
@@ -41,7 +40,6 @@ _ODSL_FILESYSTEM_NOTE = """\
 ODSL/MPCDF filesystem guidance:
   /u (home)  125 GB, backed up, slow  -> keep code only, never images or data
   /ptmp      6 TB/user, NO backup     -> images, software, output, work
-  /scratch   local SSD, auto-purged   -> volatile high-I/O scratch
 """
 
 
@@ -51,7 +49,6 @@ def _docker_defaults(repo_root: Path) -> dict[str, str]:
         "NF_SOFTWARE_ROOT": str(repo_root / "software"),
         "NF_OUTPUT_ROOT": str(repo_root / "output"),
         "NF_WORK_ROOT": str(repo_root / "work"),
-        "NF_SCRATCH_ROOT": str(repo_root / "scratch"),
         "NF_IMAGE_ROOT": str(repo_root / "software" / "images"),
     }
 
@@ -64,7 +61,6 @@ def _apptainer_defaults() -> dict[str, str]:
         "NF_SOFTWARE_ROOT": f"{base}/software",
         "NF_OUTPUT_ROOT": f"{base}/output",
         "NF_WORK_ROOT": f"{base}/work",
-        "NF_SCRATCH_ROOT": f"/scratch/{user}/neutrino_factory",
         "NF_IMAGE_ROOT": f"{base}/images",
         "APPTAINER_CACHEDIR": f"/ptmp/mpp/{user}/apptainer_cache",
     }

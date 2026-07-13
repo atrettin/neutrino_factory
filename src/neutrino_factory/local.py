@@ -17,7 +17,7 @@ def _load_manifest(manifest: str | Path | dict[str, Any]) -> dict[str, Any]:
 
 
 def _ensure_layout(config: dict[str, Any]) -> None:
-    for key in ("work_root", "output_root", "scratch_root"):
+    for key in ("work_root", "output_root"):
         Path(config["storage"][key]).mkdir(parents=True, exist_ok=True)
     (Path(config["storage"]["work_root"]) / "logs").mkdir(parents=True, exist_ok=True)
 

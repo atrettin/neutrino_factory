@@ -52,7 +52,6 @@ automatically (already-set environment variables always win).
 | `NF_SOFTWARE_ROOT` | Root for generator binaries and staged cross-section (xsec) files |
 | `NF_OUTPUT_ROOT` | Final output location for normalized and merged products |
 | `NF_WORK_ROOT` | Manifests, plans, logs, and temporary metadata |
-| `NF_SCRATCH_ROOT` | Scratch area for heavy temporary I/O; on the cluster this is local SSD (`/scratch/$USER/...`) |
 | `NF_IMAGE_ROOT` | Container image storage (Apptainer SIF files) |
 | `NF_CONTAINER_RUNTIME` | `docker`, `apptainer`, or `auto` (default: prefer docker, then apptainer) |
 | `NF_EXECUTION_MODE` | `local` or `slurm`; defaults to `local` |
@@ -103,9 +102,9 @@ the generator binaries. Builds must run on an interactive node
 git clone <repo-url> /ptmp/mpp/$USER/neutrino_factory/repo
 cd /ptmp/mpp/$USER/neutrino_factory/repo
 
-# 2. Bootstrap the orchestration image (fast), then configure
-NF_IMAGE_ROOT=/ptmp/mpp/$USER/neutrino_factory/images \
-  bash setup/build_apptainer_images.sh --bootstrap
+# 2. Bootstrap the orchestration image (fast; records NF_IMAGE_ROOT in .env),
+#    then configure
+bash setup/build_apptainer_images.sh --bootstrap
 bin/nf setup --pathway apptainer     # accept the /ptmp defaults
 
 # 3. Build the generator images (hours each) and stage GENIE cross sections

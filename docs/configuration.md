@@ -10,7 +10,7 @@ The common YAML config is the source of truth for both the local and Slurm execu
 - `physics`: generic interaction settings
 - `generators`: versioned generator entries (multiple entries per generator are supported)
 - `splitting`: how the total event count is chunked into jobs
-- `storage`: roots for software, outputs, working files, scratch, and container images
+- `storage`: roots for software, outputs, working files, and container images
 - `slurm`: job resources for MPP submission (default partition: `short`)
 
 ## Environment: `.env` and precedence
@@ -23,8 +23,7 @@ the precedence order:
 
 1. real environment variables (always win),
 2. `.env` values,
-3. built-in defaults (`./software`, `./output`, `./work`, `./scratch`,
-   `./software/images`).
+3. built-in defaults (`./software`, `./output`, `./work`, `./software/images`).
 
 The `storage` config values reference the same variables via `${VAR:-default}`
 expansion, so one `.env` drives the YAML config, the shell scripts, and the

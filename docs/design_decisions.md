@@ -32,9 +32,11 @@ other CLI use via `bin/nf`.
   cannot transfer.
 - MPCDF removed the module system; the host Python is 3.9. Any modern Python
   must itself come from a container — so the container must come first anyway.
-- MPCDF auto-mounts `/u`, `/ptmp`, `/cvmfs`, `/scratch` inside containers, so
-  host paths resolve unchanged inside and the adapters' native branch needs no
-  path remapping.
+- MPCDF auto-mounts `/u`, `/ptmp`, `/cvmfs` inside containers, so host paths
+  resolve unchanged inside and the adapters' native branch needs no path
+  remapping. (`/scratch` turned out not to be mounted inside containers, so
+  the project dropped its scratch-root concept entirely — everything lives on
+  `/ptmp`.)
 
 **Consequences.**
 - The native-binary-first ordering in every adapter's `build_run_command` is

@@ -75,7 +75,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "software_root": "${NF_SOFTWARE_ROOT:-./software}",
         "output_root": "${NF_OUTPUT_ROOT:-./output}",
         "work_root": "${NF_WORK_ROOT:-./work}",
-        "scratch_root": "${NF_SCRATCH_ROOT:-./scratch}",
         # Container image storage (Apptainer SIFs). containers.py reads the env
         # var directly; this key surfaces the resolved value for bookkeeping.
         "image_root": "${NF_IMAGE_ROOT:-./software/images}",

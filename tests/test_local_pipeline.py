@@ -21,7 +21,6 @@ class LocalPipelineTests(unittest.TestCase):
                 "NF_SOFTWARE_ROOT": f"{tmpdir}/software",
                 "NF_OUTPUT_ROOT": f"{tmpdir}/output",
                 "NF_WORK_ROOT": f"{tmpdir}/work",
-                "NF_SCRATCH_ROOT": f"{tmpdir}/scratch",
                 "NF_EXECUTION_MODE": "local",
             }
             with patch.dict(os.environ, env, clear=False):

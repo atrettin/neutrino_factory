@@ -68,8 +68,8 @@ class SetupWizardTests(unittest.TestCase):
 
         self.assertIn("NF_CONTAINER_RUNTIME=apptainer", content)
         self.assertIn("NF_IMAGE_ROOT=/ptmp/mpp/testuser/neutrino_factory/images", content)
-        self.assertIn("NF_SCRATCH_ROOT=/scratch/testuser/neutrino_factory", content)
         self.assertIn("APPTAINER_CACHEDIR=/ptmp/mpp/testuser/apptainer_cache", content)
+        self.assertNotIn("NF_SCRATCH_ROOT", content)
 
     def test_defaults_docker_writes_repo_local_layout(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

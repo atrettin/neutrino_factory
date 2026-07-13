@@ -20,7 +20,6 @@ Use a very small config first:
 export NF_SOFTWARE_ROOT=/path/to/shared/software
 export NF_OUTPUT_ROOT=/path/to/shared/output
 export NF_WORK_ROOT=/path/to/shared/work
-export NF_SCRATCH_ROOT=/ptmp/$USER/neutrino_factory
 export NF_EXECUTION_MODE=slurm
 ```
 
@@ -61,7 +60,6 @@ Check that:
 - logs are written under `NF_WORK_ROOT/logs/`,
 - normalized chunk outputs appear under `NF_OUTPUT_ROOT/chunks/`,
 - the merged HDF5 appears under `NF_OUTPUT_ROOT/merged/`,
-- temporary scratch data in `NF_SCRATCH_ROOT` is removed or minimized after completion.
 
 ## 7. Move from scheduler smoke test to real generator execution
 

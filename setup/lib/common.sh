@@ -46,13 +46,11 @@ nf_default_paths() {
   export NF_SOFTWARE_ROOT="${NF_SOFTWARE_ROOT:-$PWD/software}"
   export NF_OUTPUT_ROOT="${NF_OUTPUT_ROOT:-$PWD/output}"
   export NF_WORK_ROOT="${NF_WORK_ROOT:-$PWD/work}"
-  export NF_SCRATCH_ROOT="${NF_SCRATCH_ROOT:-$PWD/scratch}"
   export NF_IMAGE_ROOT="${NF_IMAGE_ROOT:-$NF_SOFTWARE_ROOT/images}"
 
   ensure_dir "$NF_SOFTWARE_ROOT"
   ensure_dir "$NF_OUTPUT_ROOT"
   ensure_dir "$NF_WORK_ROOT"
-  ensure_dir "$NF_SCRATCH_ROOT"
   ensure_dir "$NF_IMAGE_ROOT"
 }
 
