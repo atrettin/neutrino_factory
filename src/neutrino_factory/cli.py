@@ -57,12 +57,14 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
 def cmd_submit(args: argparse.Namespace) -> int:
     config = load_config(args.config)
-    config["run"]["executor"] = args.executor
+    if args.executor is not None:
+        config["run"]["executor"] = args.executor
+    executor = str(config["run"]["executor"])
     manifest_path = write_manifest(config, args.manifest)
 
-    if args.executor == "local":
+    if executor == "local":
         if args.dry_run:
-            print("Nothing to do: --dry-run has no effect with --executor local, which always runs in-process.")
+            print("Nothing to do: --dry-run has no effect when the resolved executor is local, which always runs in-process.")
             return 0
         result = run_local(config, manifest_path)
         _print_json(result)
@@ -367,8 +369,7 @@ def build_parser() -> argparse.ArgumentParser:
     submit_parser.add_argument(
         "--executor",
         choices=["local", "slurm"],
-        default="local",
-        help="Where to run: in-process (local) or via Slurm (default: local)",
+        help="Where to run: in-process (local) or via Slurm (default: use run.executor from the config)",
     )
     submit_parser.add_argument(
         "--dry-run",
@@ -403,8 +404,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_task_parser.add_argument(
         "--execution-mode",
         choices=["local", "slurm"],
-        default="slurm",
-        help="Execution context for the task (default: slurm)",
+        help="Execution context for the task (default: use the executor recorded in the manifest)",
     )
     run_task_parser.set_defaults(func=cmd_run_task)
 

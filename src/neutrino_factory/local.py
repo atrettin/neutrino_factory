@@ -119,13 +119,16 @@ def run_task_from_manifest(
     config: dict[str, Any],
     manifest_path: str | Path,
     task_index: int,
-    execution_mode: str = "slurm",
+    execution_mode: str | None = None,
 ) -> str:
     manifest = _load_manifest(manifest_path)
     matching = [task for task in manifest["tasks"] if int(task["task_index"]) == int(task_index)]
     if not matching:
         raise IndexError(f"Task index {task_index} not found in manifest")
-    return run_task(config, matching[0], execution_mode=execution_mode)
+    resolved_execution_mode = execution_mode or str(
+        manifest.get("executor") or config.get("run", {}).get("executor", "slurm")
+    )
+    return run_task(config, matching[0], execution_mode=resolved_execution_mode)
 
 
 def plan_and_run_local(config: dict[str, Any]) -> dict[str, Any]:
