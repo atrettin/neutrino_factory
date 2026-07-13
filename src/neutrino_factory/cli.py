@@ -85,7 +85,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
         # Expected when running inside the nf-base Apptainer container on the
         # cluster: sbatch only exists in the host shell. Hand the command over.
         print(
-            "sbatch is not available in this environment. "
+            "sbatch is not available in this environment (possibly due to running inside a container). "
             "The Slurm script has been rendered; submit it from a host shell "
             "on the Slurm head node with:\n\n"
             f"  sbatch {sbatch_path}\n"
