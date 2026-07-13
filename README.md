@@ -89,6 +89,17 @@ The local run creates a manifest, runs each enabled generator (or its stub),
 normalizes the outputs into `HDF5`, and merges them. Multiple version entries
 of the same generator can run side by side (for example, two GENIE tunes).
 
+You can also merge from a config directly:
+
+```bash
+neutrino-factory merge --config configs/examples/power_law_numu_Ar.yaml
+```
+
+In this mode, the CLI discovers expected chunk and merged outputs from the
+config, validates each chunk for required metadata/columns, warns about
+missing or invalid chunks, and merges the valid subset per expected merged
+output.
+
 ## Quickstart B — HPC cluster (Apptainer, MPCDF/ODSL)
 
 Do **not** `pip install` on the cluster — the system Python (3.9) is too old

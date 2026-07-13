@@ -130,6 +130,105 @@ def cmd_run_task(args: argparse.Namespace) -> int:
 
 
 def cmd_merge(args: argparse.Namespace) -> int:
+    if args.config:
+        if args.output is not None:
+            raise RuntimeError("--output cannot be combined with --config")
+        if args.inputs:
+            raise RuntimeError("Positional input files cannot be combined with --config")
+
+        config = load_config(args.config)
+        outputs = expected_outputs(config)
+
+        chunks_by_key: dict[tuple[str, str], list[dict]] = {}
+        for chunk in outputs["chunks"]:
+            key = (str(chunk["generator"]), str(chunk["version_id"]))
+            chunks_by_key.setdefault(key, []).append(chunk)
+
+        merged_outputs_written: list[str] = []
+        per_target: list[dict] = []
+
+        for merged in outputs["merged"]:
+            key = (str(merged["generator"]), str(merged["version_id"]))
+            candidate_chunks = chunks_by_key.get(key, [])
+
+            valid_inputs: list[str | Path] = []
+            skipped_chunks: list[dict[str, object]] = []
+            for chunk in candidate_chunks:
+                result = validate_file(chunk["path"], expected_events=None)
+                if result["valid"]:
+                    valid_inputs.append(chunk["path"])
+                    continue
+
+                reasons = result["errors"] or ["failed validation"]
+                skipped_chunks.append(
+                    {
+                        "path": str(chunk["path"]),
+                        "reasons": reasons,
+                    }
+                )
+                print(
+                    "Warning: skipping chunk "
+                    f"{chunk['path']} for {merged['path']}: {reasons[0]}"
+                )
+
+            if not valid_inputs:
+                print(
+                    "Warning: no valid chunk files available for expected merged output "
+                    f"{merged['path']}; skipping."
+                )
+                per_target.append(
+                    {
+                        "generator": merged["generator"],
+                        "version_id": merged["version_id"],
+                        "merged_output": str(merged["path"]),
+                        "expected_chunk_count": len(candidate_chunks),
+                        "merged_input_count": 0,
+                        "skipped_chunks": skipped_chunks,
+                        "status": "skipped",
+                    }
+                )
+                continue
+
+            print(
+                "Merging files into "
+                f"{merged['path']}: {', '.join(str(path) for path in valid_inputs)}"
+            )
+            output = merge_outputs(valid_inputs, merged["path"])
+            merged_outputs_written.append(output)
+            per_target.append(
+                {
+                    "generator": merged["generator"],
+                    "version_id": merged["version_id"],
+                    "merged_output": output,
+                    "expected_chunk_count": len(candidate_chunks),
+                    "merged_input_count": len(valid_inputs),
+                    "skipped_chunks": skipped_chunks,
+                    "status": "merged",
+                }
+            )
+
+        _print_json(
+            {
+                "config": args.config,
+                "targets": per_target,
+                "merged_outputs": merged_outputs_written,
+                "merged_target_count": len(merged_outputs_written),
+                "skipped_target_count": sum(
+                    1 for target in per_target if target["status"] == "skipped"
+                ),
+            }
+        )
+        return 0
+
+    if args.output is None:
+        raise RuntimeError("--output is required unless --config is provided")
+    if not args.inputs:
+        raise RuntimeError("At least one input HDF5 file is required unless --config is provided")
+
+    print(
+        "Merging files into "
+        f"{args.output}: {', '.join(str(path) for path in args.inputs)}"
+    )
     output = merge_outputs(args.inputs, args.output)
     _print_json({"merged_output": output, "input_count": len(args.inputs)})
     return 0
@@ -412,18 +511,25 @@ def build_parser() -> argparse.ArgumentParser:
         "merge",
         help="Merge normalized HDF5 outputs",
         description=(
-            "Merge several normalized HDF5 files (e.g. the per-chunk outputs of a run) into "
-            "a single HDF5 file in the common output format. Prints the path to the merged "
-            "file and how many inputs were combined."
+            "Merge normalized HDF5 outputs in one of two modes. Explicit mode takes one "
+            "output path plus an explicit list of input HDF5 files. Config mode takes "
+            "--config, discovers the expected chunk files and merged outputs, validates each "
+            "candidate chunk (without expected-event-count checks), and merges each expected "
+            "target from the available valid chunks while warning about missing/invalid chunks."
         ),
         epilog=(
-            "Example:\n"
-            "  neutrino-factory merge --output output/all.h5 output/chunk_000.h5 output/chunk_001.h5"
+            "Examples:\n"
+            "  # Explicit input list\n"
+            "  neutrino-factory merge --output output/all.h5 output/chunk_000.h5 output/chunk_001.h5\n"
+            "\n"
+            "  # Config-driven merge (one merge per expected merged output)\n"
+            "  neutrino-factory merge --config configs/examples/power_law_numu_Ar.yaml"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    merge_parser.add_argument("--output", required=True, help="Path for the merged HDF5 file")
-    merge_parser.add_argument("inputs", nargs="+", help="One or more HDF5 files to merge")
+    merge_parser.add_argument("--config", help="Path to the run configuration YAML")
+    merge_parser.add_argument("--output", help="Path for the merged HDF5 file (explicit mode only)")
+    merge_parser.add_argument("inputs", nargs="*", help="One or more HDF5 files to merge (explicit mode only)")
     merge_parser.set_defaults(func=cmd_merge)
 
     list_parser = subparsers.add_parser(
