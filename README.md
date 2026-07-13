@@ -118,7 +118,7 @@ bin/nf submit --config configs/examples/power_law_numu_Ar.yaml --executor slurm
 bin/nf check-status --config configs/examples/power_law_numu_Ar.yaml
 ```
 
-The full runbook, including the verified partition table and filesystem
+The full runbook, including the new-cluster Slurm requirements and filesystem
 guidance, is in `docs/mpp_cluster_usage.md`.
 
 ## Generator setup (containers)

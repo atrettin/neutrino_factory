@@ -32,18 +32,24 @@ container, so paths under those trees resolve unchanged inside. `/scratch`
 (node-local SSD) is **not** accessible from inside containers, so the project
 does not use it — everything lives on `/ptmp`.
 
-## Slurm partitions (MPP cluster, verified)
+## Slurm: the NEW MPP cluster requires `--partition=alma`
 
-| Partition | Time limit | Notes |
-| --- | --- | --- |
-| `supershort` | 30 min | |
-| `short` | 4 h | default partition; the config default |
-| `standard` | 1 day | 64 cores / 256 GB nodes |
-| `long` | 4 days | |
-| `extralong` | 31 days | |
-| `alma`, `special` | — | special-purpose |
+Submitting from `mppui1`/`mppui2` targets the **new** MPP Slurm cluster
+(see https://docs.t2.mpcdf.mpg.de/resources/computing-new/), which **requires
+`#SBATCH --partition=alma`**. The config default is therefore `alma`.
 
-Set `slurm.partition` in the run config to override the `short` default.
+| Property | Value |
+| --- | --- |
+| Partition | `alma` (mandatory) |
+| Max job duration | 1 day (`1-00:00:00`) |
+| Nodes | 28× Intel Xeon (32 cores / 187 GB) + 12× AMD EPYC (64 cores / 256 GB) |
+| Queue limits | 25 000 queued / 10 000 running jobs per user |
+
+Beware: a job submitted there with an old-cluster partition name (`short`,
+`standard`, …) is accepted, runs for a few seconds, and dies **without ever
+creating its log files** — an easy failure mode to misdiagnose. Note also that
+`/u` and `/ptmp` are *not* shared between the old and new clusters; the
+odslserv nodes share `/ptmp` with the new cluster.
 
 ## First-time setup
 

@@ -80,9 +80,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "image_root": "${NF_IMAGE_ROOT:-./software/images}",
     },
     "slurm": {
-        # "short" is the MPP cluster's default partition (4h limit) — the right
-        # size for chunked MC generation tasks.
-        "partition": "short",
+        # "alma" targets the *new* MPP Slurm cluster (submit from mppui1/2),
+        # which requires --partition=alma; max job duration 1 day. The old
+        # cluster's partitions (short, standard, ...) are not valid there.
+        "partition": "alma",
         "time": "00:10:00",
         "cpus_per_task": 1,
         "mem": "2G",

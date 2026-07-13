@@ -11,7 +11,7 @@ The common YAML config is the source of truth for both the local and Slurm execu
 - `generators`: versioned generator entries (multiple entries per generator are supported)
 - `splitting`: how the total event count is chunked into jobs
 - `storage`: roots for software, outputs, working files, and container images
-- `slurm`: job resources for MPP submission (default partition: `short`)
+- `slurm`: job resources for MPP submission (default partition: `alma` — required by the new MPP Slurm cluster)
 
 ## Environment: `.env` and precedence
 
