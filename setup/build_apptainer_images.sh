@@ -68,6 +68,14 @@ ensure_dir "$APPTAINER_CACHEDIR"
 log "Image root:      $NF_IMAGE_ROOT"
 log "Apptainer cache: $APPTAINER_CACHEDIR"
 
+# Persist the image root so later invocations (bin/nf, the setup wizard, the
+# sbatch scripts) resolve the same location without exporting it by hand.
+# The wizard prefills its prompts from .env, so this value carries through.
+if ! grep -q '^NF_IMAGE_ROOT=' "$REPO_ROOT/.env" 2>/dev/null; then
+  printf 'NF_IMAGE_ROOT=%s\n' "$NF_IMAGE_ROOT" >> "$REPO_ROOT/.env"
+  log "Recorded NF_IMAGE_ROOT in $REPO_ROOT/.env"
+fi
+
 # Map an image tag (gen:code_version) to its SIF path, mirroring
 # containers.sif_path: non-[A-Za-z0-9._-] characters become '_'.
 sif_path_for() {
