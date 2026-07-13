@@ -37,8 +37,9 @@ class GiBUUAdapter(GeneratorAdapter):
 
     @staticmethod
     def _write_flux_file(work_dir: Path, flux_table: str) -> Path:
-        # Written as flux.dat and exposed to GiBUU at /work/flux.dat via the
-        # work-dir bind mount, matching the jobcard's FileNameFlux.
+        # Written as flux.dat in the work dir; the jobcard's FileNameFlux
+        # references it CWD-relatively ('./flux.dat'), and GiBUU always runs
+        # with the work dir as CWD in every pathway.
         flux_path = work_dir / "flux.dat"
         flux_path.write_text(flux_table, encoding="utf-8")
         return flux_path

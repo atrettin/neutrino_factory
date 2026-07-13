@@ -11,10 +11,13 @@ from ..flux import build_flux
 # GiBUU user flux file (nuExp=99). GiBUU allocates the flux arrays dynamically.
 FLUX_NBINS = 500
 
-# Container path (mounted work dir) where the adapter writes the flux table and
-# the jobcard's FileNameFlux points. A path containing '/' is used verbatim by
-# GiBUU (ExpandPath), matching the already-hardcoded path_to_input container path.
-FLUX_FILE_CONTAINER_PATH = "/work/flux.dat"
+# Jobcard path of the flux table the adapter writes into the work directory.
+# Deliberately CWD-relative: every pathway runs GiBUU with the work dir as its
+# CWD (local subprocess cwd=, docker -w /work, apptainer natively inside the
+# SIF at the real work dir), so an absolute /work path would only be valid
+# under docker. The leading './' matters: GiBUU's ExpandPath uses a filename
+# verbatim only if it contains a '/'.
+FLUX_FILE_JOBCARD_PATH = "./flux.dat"
 
 # GiBUU neutrino flavour_ID (independent of neutrino vs antineutrino, which is
 # carried by the sign of process_ID).
@@ -165,7 +168,7 @@ class GiBUUTranslator(ConfigTranslator):
         if enu_gev is None:
             xsection_block = f"""      nuXsectionMode = 16             ! EXP_dSigmaMC (flux-integrated)
       nuExp          = 99             ! user-defined flux from file
-      FileNameFlux   = '{FLUX_FILE_CONTAINER_PATH}'"""
+      FileNameFlux   = '{FLUX_FILE_JOBCARD_PATH}'"""
             sigma_mc_block = ""
         else:
             xsection_block = """      nuXsectionMode = 6              ! dSigmaMC (fixed energy)

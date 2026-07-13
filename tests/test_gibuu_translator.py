@@ -33,7 +33,7 @@ class GiBUUTranslatorFluxTests(unittest.TestCase):
         jobcard = translated["gibuu_jobcard"]
         self.assertIn("nuXsectionMode = 16", jobcard)
         self.assertIn("nuExp          = 99", jobcard)
-        self.assertIn("FileNameFlux   = '/work/flux.dat'", jobcard)
+        self.assertIn("FileNameFlux   = './flux.dat'", jobcard)
         # Fixed-energy namelist must not be present in flux mode.
         self.assertNotIn("&nl_SigmaMC", jobcard)
 
