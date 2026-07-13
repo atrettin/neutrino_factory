@@ -9,6 +9,7 @@
 # Usage:
 #   setup/build_apptainer_images.sh [--bootstrap] [--only genie,gibuu]
 #                                   [--code-version V] [--jobs N] [--force]
+#                                   [--accept-defaults]
 #
 #   --bootstrap       Build only nf-base.sif (no generator images). Works
 #                     before any .env exists; pass NF_IMAGE_ROOT explicitly or
@@ -21,6 +22,7 @@
 #                     odslserv nodes have 128 cores but user CPU time is capped
 #                     at 1/4; builds also run under nice -n 15).
 #   --force           Rebuild SIFs even if they already exist.
+#   --accept-defaults Skip interactive prompts and use default values.
 
 set -euo pipefail
 
@@ -34,6 +36,75 @@ ONLY=""
 CODE_VERSION=""
 JOBS="${NF_BUILD_JOBS:-32}"
 FORCE=0
+ACCEPT_DEFAULTS=0
+
+prompt_image_root() {
+  local default_root="$1" response custom
+
+  if [[ ! -t 0 ]]; then
+    fail "Interactive prompt required for bootstrap image root. Re-run with --accept-defaults to skip prompts."
+  fi
+
+  log "Bootstrap image root default: $default_root"
+  while true; do
+    printf 'Use default NF_IMAGE_ROOT [%s]? [Y/n]: ' "$default_root"
+    IFS= read -r response
+    response="${response:-y}"
+
+    case "$response" in
+      y|Y|yes|YES|Yes)
+        export NF_IMAGE_ROOT="$default_root"
+        return 0
+        ;;
+      n|N|no|NO|No)
+        while true; do
+          printf 'Enter NF_IMAGE_ROOT path: '
+          IFS= read -r custom
+          custom="$(echo "$custom" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          [[ -n "$custom" ]] || { log "Path cannot be empty."; continue; }
+          if [[ "$custom" == ~* ]]; then
+            custom="${custom/#\~/$HOME}"
+          fi
+          export NF_IMAGE_ROOT="$custom"
+          return 0
+        done
+        ;;
+      *)
+        log "Please answer y or n."
+        ;;
+    esac
+  done
+}
+
+persist_image_root() {
+  local env_file="$REPO_ROOT/.env" tmp_file
+
+  if [[ ! -f "$env_file" ]]; then
+    printf 'NF_IMAGE_ROOT=%s\n' "$NF_IMAGE_ROOT" > "$env_file"
+    log "Recorded NF_IMAGE_ROOT in $env_file"
+    return 0
+  fi
+
+  tmp_file="$(mktemp)"
+  awk -v value="$NF_IMAGE_ROOT" '
+    BEGIN { written = 0 }
+    /^NF_IMAGE_ROOT=/ {
+      if (!written) {
+        print "NF_IMAGE_ROOT=" value
+        written = 1
+      }
+      next
+    }
+    { print }
+    END {
+      if (!written) {
+        print "NF_IMAGE_ROOT=" value
+      }
+    }
+  ' "$env_file" > "$tmp_file"
+  mv "$tmp_file" "$env_file"
+  log "Recorded NF_IMAGE_ROOT in $env_file"
+}
 
 while (($#)); do
   case "$1" in
@@ -42,8 +113,9 @@ while (($#)); do
     --code-version) CODE_VERSION="$2"; shift ;;
     --jobs) JOBS="$2"; shift ;;
     --force) FORCE=1 ;;
+    --accept-defaults) ACCEPT_DEFAULTS=1 ;;
     --help|-h)
-      sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) fail "Unknown argument: $1" ;;
@@ -53,6 +125,11 @@ done
 
 require_command apptainer
 nf_default_paths
+
+if [[ "$BOOTSTRAP_ONLY" -eq 1 && "$ACCEPT_DEFAULTS" -ne 1 ]]; then
+  prompt_image_root "$NF_IMAGE_ROOT"
+  ensure_dir "$NF_IMAGE_ROOT"
+fi
 
 case "$(hostname)" in
   odslserv*) : ;;
@@ -71,10 +148,7 @@ log "Apptainer cache: $APPTAINER_CACHEDIR"
 # Persist the image root so later invocations (bin/nf, the setup wizard, the
 # sbatch scripts) resolve the same location without exporting it by hand.
 # The wizard prefills its prompts from .env, so this value carries through.
-if ! grep -q '^NF_IMAGE_ROOT=' "$REPO_ROOT/.env" 2>/dev/null; then
-  printf 'NF_IMAGE_ROOT=%s\n' "$NF_IMAGE_ROOT" >> "$REPO_ROOT/.env"
-  log "Recorded NF_IMAGE_ROOT in $REPO_ROOT/.env"
-fi
+persist_image_root
 
 # Map an image tag (gen:code_version) to its SIF path, mirroring
 # containers.sif_path: non-[A-Za-z0-9._-] characters become '_'.
