@@ -72,6 +72,10 @@ Stage: builder
     ./configure --prefix=/opt/lhapdf6 --disable-pyext
     make -j"{{ JOBS }}"
     make install
+    # %post is one continuous shell (unlike Dockerfile RUN steps): leave the
+    # build dir before deleting it, or every later command runs from a deleted
+    # cwd and cmake aborts with "Current working directory cannot be established".
+    cd /
     rm -rf "/tmp/LHAPDF-{{ LHAPDF_VERSION }}" /tmp/lhapdf.tar.gz
 
     # ── ROOT ──────────────────────────────────────────────────────────────────
