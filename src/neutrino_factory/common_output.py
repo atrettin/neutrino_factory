@@ -9,6 +9,9 @@ import numpy as np
 
 
 STRING_DTYPE = h5py.string_dtype(encoding="utf-8")
+EVENT_NUMERIC_FIELDS = ("event_id", "seed", "energy_gev", "weight")
+EVENT_STRING_FIELDS = ("interaction", "probe", "target", "generator")
+EVENT_FIELDS = (*EVENT_NUMERIC_FIELDS, *EVENT_STRING_FIELDS)
 
 # Metadata keys that uniquely identify a generator version. Files that differ on
 # any of these describe different physics and must never be merged together.
@@ -57,6 +60,62 @@ def _serialize_attr(value: Any) -> Any:
     return str(value)
 
 
+def _decode_text_array(values: np.ndarray) -> np.ndarray:
+    if values.dtype.kind == "S":
+        return np.char.decode(values, "utf-8")
+    return np.asarray(values, dtype=object).astype(str)
+
+
+def _read_event_columns(handle: h5py.File) -> dict[str, np.ndarray]:
+    event_group = handle["events"]
+    columns: dict[str, np.ndarray] = {
+        "event_id": np.asarray(event_group["event_id"][()], dtype=np.int64),
+        "seed": np.asarray(event_group["seed"][()], dtype=np.int64),
+        "energy_gev": np.asarray(event_group["energy_gev"][()], dtype=np.float64),
+        "weight": np.asarray(event_group["weight"][()], dtype=np.float64),
+    }
+    for key in EVENT_STRING_FIELDS:
+        columns[key] = _decode_text_array(np.asarray(event_group[key][()]))
+    return columns
+
+
+def _rows_from_event_columns(columns: dict[str, np.ndarray]) -> list[dict[str, Any]]:
+    count = len(columns["event_id"])
+    return [
+        {
+            "event_id": int(columns["event_id"][index]),
+            "seed": int(columns["seed"][index]),
+            "energy_gev": float(columns["energy_gev"][index]),
+            "weight": float(columns["weight"][index]),
+            "interaction": str(columns["interaction"][index]),
+            "probe": str(columns["probe"][index]),
+            "target": str(columns["target"][index]),
+            "generator": str(columns["generator"][index]),
+        }
+        for index in range(count)
+    ]
+
+
+def _concat_event_columns(chunks: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
+    if not chunks:
+        return {
+            "event_id": np.array([], dtype=np.int64),
+            "seed": np.array([], dtype=np.int64),
+            "energy_gev": np.array([], dtype=np.float64),
+            "weight": np.array([], dtype=np.float64),
+            "interaction": np.array([], dtype="U"),
+            "probe": np.array([], dtype="U"),
+            "target": np.array([], dtype="U"),
+            "generator": np.array([], dtype="U"),
+        }
+
+    merged: dict[str, np.ndarray] = {}
+    for key in EVENT_FIELDS:
+        arrays = [chunk[key] for chunk in chunks]
+        merged[key] = np.concatenate(arrays) if len(arrays) > 1 else arrays[0]
+    return merged
+
+
 def write_common_hdf5(output_path: str | Path, metadata: dict[str, Any], events: list[dict[str, Any]]) -> str:
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -93,37 +152,14 @@ def write_common_hdf5(output_path: str | Path, metadata: dict[str, Any], events:
 
 def read_events(input_path: str | Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     metadata: dict[str, Any] = {}
-    events: list[dict[str, Any]] = []
 
     with h5py.File(input_path, "r") as handle:
         for key, value in handle["metadata"].attrs.items():
             metadata[key] = value.decode() if isinstance(value, bytes) else value
 
-        event_group: Any = handle["events"]
-        event_id_ds: Any = event_group["event_id"]
-        seed_ds: Any = event_group["seed"]
-        energy_ds: Any = event_group["energy_gev"]
-        weight_ds: Any = event_group["weight"]
-        interaction_ds: Any = event_group["interaction"]
-        probe_ds: Any = event_group["probe"]
-        target_ds: Any = event_group["target"]
-        generator_ds: Any = event_group["generator"]
+        columns = _read_event_columns(handle)
 
-        count = len(event_id_ds)
-        for index in range(count):
-            event = {
-                "event_id": int(event_id_ds[index]),
-                "seed": int(seed_ds[index]),
-                "energy_gev": float(energy_ds[index]),
-                "weight": float(weight_ds[index]),
-                "interaction": interaction_ds[index].decode() if isinstance(interaction_ds[index], bytes) else str(interaction_ds[index]),
-                "probe": probe_ds[index].decode() if isinstance(probe_ds[index], bytes) else str(probe_ds[index]),
-                "target": target_ds[index].decode() if isinstance(target_ds[index], bytes) else str(target_ds[index]),
-                "generator": generator_ds[index].decode() if isinstance(generator_ds[index], bytes) else str(generator_ds[index]),
-            }
-            events.append(event)
-
-    return metadata, events
+    return metadata, _rows_from_event_columns(columns)
 
 
 def merge_hdf5_files(
@@ -131,7 +167,7 @@ def merge_hdf5_files(
     output_path: str | Path,
     run_metadata: dict[str, Any] | None = None,
 ) -> str:
-    merged_events: list[dict[str, Any]] = []
+    merged_chunks: list[dict[str, np.ndarray]] = []
     normalized_inputs = [str(Path(path)) for path in input_files]
     if not normalized_inputs:
         raise MergeError("No input files provided to merge")
@@ -142,7 +178,12 @@ def merge_hdf5_files(
     expected_events_total = 0
 
     for input_file in normalized_inputs:
-        file_metadata, events = read_events(input_file)
+        with h5py.File(input_file, "r") as handle:
+            file_metadata: dict[str, Any] = {}
+            for key, value in handle["metadata"].attrs.items():
+                file_metadata[key] = value.decode() if isinstance(value, bytes) else value
+            columns = _read_event_columns(handle)
+
         current = _version_identity(file_metadata)
         if identity is None:
             identity = current
@@ -155,7 +196,10 @@ def merge_hdf5_files(
                 f"but {input_file} is {dict(zip(VERSION_IDENTITY_KEYS, current))}"
             )
         expected_events_total += int(file_metadata.get("expected_events", 0))
-        merged_events.extend(events)
+        merged_chunks.append(columns)
+
+    merged_columns = _concat_event_columns(merged_chunks)
+    merged_events = _rows_from_event_columns(merged_columns)
 
     metadata = dict(run_metadata or {})
     # Guarantee the merged file records the (single, consistent) version identity,
@@ -172,6 +216,6 @@ def merge_hdf5_files(
 
     metadata.setdefault("merged_inputs", normalized_inputs)
     metadata["merged_file_count"] = len(normalized_inputs)
-    metadata["merged_event_count"] = len(merged_events)
+    metadata["merged_event_count"] = int(len(merged_columns["event_id"]))
 
     return write_common_hdf5(output_path, metadata, merged_events)
