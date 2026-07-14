@@ -64,9 +64,22 @@ RUN git clone --depth 1 --branch "${GENIE_TAG}" \
 
 # ── Pythia6 ───────────────────────────────────────────────────────────────────
 # Build using GENIE's own upstream build script (same approach as NuWro).
-RUN mkdir -p /opt/pythia6 && \
+# pythia.org now 302-redirects the Fortran source to pythia8.web.cern.ch, but
+# the script fetches with `curl -f -O` (no -L) and silently saves the 85-byte
+# redirect page — libPythia6.so then lacks pyevnt_ etc. and the ROOT
+# libEGPythia6 link fails. Pre-stage the file where the script looks
+# (<topdir>/download/<basef>_with_dummies) so it skips its own fetch.
+RUN PY6_MAJ="$(echo "${PYTHIA6_VERSION}" | cut -d. -f1)" && \
+    PY6_MIN="$(echo "${PYTHIA6_VERSION}" | cut -d. -f2)" && \
+    PY6_TINY="$(echo "${PYTHIA6_VERSION}" | cut -d. -f3)" && \
+    PY6_DL="/opt/pythia6/v${PY6_MAJ}_${PY6_MIN}${PY6_TINY}/download" && \
+    mkdir -p "${PY6_DL}" && \
+    curl -fsSL \
+      "https://pythia.org/download/pythia6/pythia${PY6_MAJ}${PY6_MIN}${PY6_TINY}.f" \
+      -o "${PY6_DL}/pythia${PY6_MAJ}${PY6_MIN}${PY6_TINY}.f_with_dummies" && \
     cd /opt/pythia6 && \
-    bash /opt/genie/src/scripts/build/ext/build_pythia6.sh "${PYTHIA6_VERSION}"
+    bash /opt/genie/src/scripts/build/ext/build_pythia6.sh "${PYTHIA6_VERSION}" && \
+    test -s "$(find /opt/pythia6 -maxdepth 4 -name 'libPythia6.so' | head -1)"
 
 # ── LHAPDF ────────────────────────────────────────────────────────────────────
 RUN curl -fsSL \
