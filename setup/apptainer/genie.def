@@ -77,6 +77,10 @@ Stage: builder
     test -s "$(find /opt/pythia6 -maxdepth 4 -name 'libPythia6.so' | head -1)"
 
     # ── LHAPDF ────────────────────────────────────────────────────────────────
+    # Unprivileged apptainer builds bind the HOST /tmp into %post, so leftovers
+    # from a previous failed build survive — clear them before extracting, or
+    # tar/mv land on top of stale trees.
+    rm -rf "/tmp/LHAPDF-{{ LHAPDF_VERSION }}" /tmp/lhapdf.tar.gz
     curl -fsSL \
         "https://lhapdf.hepforge.org/downloads/LHAPDF-{{ LHAPDF_VERSION }}.tar.gz" \
         -o /tmp/lhapdf.tar.gz
@@ -102,6 +106,9 @@ Stage: builder
         -exec dirname {} \; | head -1)"
     PYTHIA6_DIR="$(dirname "${PYTHIA6_LIBDIR}")"
     touch "${PYTHIA6_DIR}/inc/general_pythia.inc"
+    # Same host-/tmp caveat as above: a stale /tmp/root-src makes the mv nest
+    # the new tree inside it instead of renaming.
+    rm -rf /tmp/root-src /tmp/root-build "/tmp/root-{{ ROOT_VERSION }}" /tmp/root-src.tar.gz
     curl -fsSL \
         "https://root.cern/download/root_v{{ ROOT_VERSION }}.source.tar.gz" \
         -o /tmp/root-src.tar.gz

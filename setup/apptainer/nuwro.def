@@ -49,6 +49,9 @@ Stage: builder
     # with `curl -f -O` (no -L) and saves the redirect page — libPythia6.so
     # then lacks the real Pythia6 symbols. Pre-stage the file where the script
     # looks (<topdir>/download/<basef>_with_dummies) so it skips its own fetch.
+    # Unprivileged apptainer builds bind the HOST /tmp into %post, so leftovers
+    # from a previous failed build survive — clear them or the clone fails.
+    rm -rf /tmp/genie-src
     git clone --depth 1 https://github.com/GENIE-MC/Generator.git /tmp/genie-src
     PY6_MAJ="$(echo "{{ PYTHIA6_VERSION }}" | cut -d. -f1)"
     PY6_MIN="$(echo "{{ PYTHIA6_VERSION }}" | cut -d. -f2)"
@@ -67,6 +70,9 @@ Stage: builder
     # ── ROOT ──────────────────────────────────────────────────────────────────
     PYTHIA6_LIBDIR="$(find /opt/pythia6 -maxdepth 2 -name 'libPythia6.so' \
         -exec dirname {} \; | head -1)"
+    # Host-/tmp caveat again: a stale /tmp/root-src makes the mv nest the new
+    # tree inside it instead of renaming.
+    rm -rf /tmp/root-src /tmp/root-build "/tmp/root-{{ ROOT_VERSION }}" /tmp/root-src.tar.gz
     curl -fsSL \
         "https://root.cern/download/root_v{{ ROOT_VERSION }}.source.tar.gz" \
         -o /tmp/root-src.tar.gz
