@@ -102,6 +102,10 @@ Stage: builder
     # pythia6 and GENIE breaks.
     # -Dimt=OFF / -Dclad=OFF are kept from the Docker build (harmless natively,
     # required under amd64 emulation) so both images run identical physics code.
+    # -Dminuit2=ON is required (not the ROOT 6.24 default): GENIE's
+    # MECGenerator::GetXSecMaxTlctl null-derefs the Minuit2 minimizer it gets
+    # from ROOT::Math::Factory, so a ROOT without Minuit2 makes every
+    # Nieves-MEC (2p2h) event segfault.
     PYTHIA6_LIBDIR="$(find /opt/pythia6 -maxdepth 4 -name 'libPythia6.so' \
         -exec dirname {} \; | head -1)"
     PYTHIA6_DIR="$(dirname "${PYTHIA6_LIBDIR}")"
@@ -121,6 +125,7 @@ Stage: builder
         -DPYTHIA6_DIR="${PYTHIA6_DIR}" \
         -DPYTHIA6_LIBRARY="${PYTHIA6_LIBDIR}/libPythia6.so" \
         -Dmathmore=ON \
+        -Dminuit2=ON \
         -Dimt=OFF \
         -Dclad=OFF \
         -Ddavix=OFF \

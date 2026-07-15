@@ -14,8 +14,14 @@
 #
 # Emulation caveats (amd64 via Rosetta): ROOT is built with -Dimt=OFF and
 # -Dclad=OFF because the builtin TBB and the clad cling plugin fail to compile
-# under emulation; neither is needed by GENIE. gevgen's MEC (2p2h) path also
-# crashes under emulation, so use --event-generator-list CCQE (see STUBS.md).
+# under emulation; neither is needed by GENIE.
+#
+# -Dminuit2=ON is required (not the ROOT 6.24 default): GENIE's
+# MECGenerator::GetXSecMaxTlctl does
+# ROOT::Math::Factory::CreateMinimizer("Minuit2") and dereferences the result
+# without a null check, so a ROOT without Minuit2 makes every Nieves-MEC
+# (2p2h) event, e.g. tune G18_10a_02_11a, segfault in
+# MECGenerator::ProcessEventRecord.
 
 ARG GENIE_TAG=R-3_06_00
 ARG LHAPDF_VERSION=6.5.6
@@ -120,6 +126,7 @@ RUN PYTHIA6_LIBDIR="$(find /opt/pythia6 -maxdepth 4 -name 'libPythia6.so' \
       -DPYTHIA6_DIR="${PYTHIA6_DIR}" \
       -DPYTHIA6_LIBRARY="${PYTHIA6_LIBDIR}/libPythia6.so" \
       -Dmathmore=ON \
+      -Dminuit2=ON \
       -Dimt=OFF \
       -Dclad=OFF \
       -Ddavix=OFF \
