@@ -6,7 +6,7 @@ nf_timestamp() {
 }
 
 log() {
-  printf '[%s] %s\n' "$(nf_timestamp)" "$*"
+  printf '[%s] %s\n' "$(nf_timestamp)" "$*" >&2
 }
 
 fail() {
@@ -54,6 +54,62 @@ nf_default_paths() {
   ensure_dir "$NF_IMAGE_ROOT"
 }
 
+nf_repo_root() {
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  cd "$script_dir/../.." && pwd
+}
+
+nf_in_apptainer() {
+  [[ -n "${APPTAINER_CONTAINER:-}" || -n "${SINGULARITY_CONTAINER:-}" ]]
+}
+
+nf_nf_base_sif() {
+  local repo_root image_root
+  nf_load_env_file
+  repo_root="$(nf_repo_root)"
+  image_root="${NF_IMAGE_ROOT:-$repo_root/software/images}"
+  printf '%s\n' "$image_root/nf-base.sif"
+}
+
+nf_can_use_apptainer_cli() {
+  local sif
+  nf_in_apptainer && return 1
+  command -v apptainer >/dev/null 2>&1 || return 1
+  sif="$(nf_nf_base_sif)"
+  [[ -f "$sif" ]]
+}
+
+nf_cli_exec() {
+  local repo_root sif
+
+  if command -v neutrino-factory >/dev/null 2>&1; then
+    neutrino-factory "$@"
+    return
+  fi
+
+  [[ -z "${NF_CLI_FALLBACK_ACTIVE:-}" ]] || fail \
+    "neutrino-factory CLI not found while fallback is active; aborting to avoid recursion"
+
+  if nf_in_apptainer; then
+    fail "neutrino-factory CLI not found inside Apptainer container. Rebuild nf-base image or install the package in-container."
+  fi
+
+  command -v apptainer >/dev/null 2>&1 || fail \
+    "neutrino-factory CLI not found. Also cannot fallback because apptainer is not installed."
+
+  repo_root="$(nf_repo_root)"
+  sif="$(nf_nf_base_sif)"
+  [[ -f "$sif" ]] || fail \
+    "neutrino-factory CLI not found. Fallback image is missing: $sif. Build it first: bash setup/build_apptainer_images.sh --bootstrap"
+
+  log "neutrino-factory not found on PATH; running command via Apptainer image: $sif"
+  NF_CLI_FALLBACK_ACTIVE=1 apptainer exec "$sif" \
+    env NF_CLI_FALLBACK_ACTIVE=1 \
+      PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}" \
+      python3 -m neutrino_factory.cli "$@"
+}
+
 # --- Generator catalog access -------------------------------------------------
 # The neutrino-factory catalog (src/neutrino_factory/catalog.py) is the single
 # source of truth for buildable code versions and their compatible config
@@ -61,38 +117,45 @@ nf_default_paths() {
 # installed on build hosts (see ENVIRONMENT.md).
 
 nf_require_cli() {
-  command -v neutrino-factory >/dev/null 2>&1 || fail \
-    "neutrino-factory CLI not found. Install the package first: pip install -e ."
+  command -v neutrino-factory >/dev/null 2>&1 && return 0
+  nf_can_use_apptainer_cli && return 0
+
+  if nf_in_apptainer; then
+    fail "neutrino-factory CLI not found inside Apptainer container. Rebuild nf-base image or install the package in-container."
+  fi
+
+  if ! command -v apptainer >/dev/null 2>&1; then
+    fail "neutrino-factory CLI not found and apptainer is unavailable. Install package locally (pip install -e .) or install apptainer."
+  fi
+
+  fail "neutrino-factory CLI not found and fallback image is missing: $(nf_nf_base_sif). Build it first: bash setup/build_apptainer_images.sh --bootstrap"
 }
 
 # Print a human-readable table of a generator's buildable code/config versions.
 nf_list_versions() {
   local generator="$1"
   nf_require_cli
-  neutrino-factory list-generators --generator "$generator"
+  nf_cli_exec list-generators --generator "$generator"
 }
 
 # Echo the space-separated code versions catalogued for a generator.
 nf_code_versions() {
   local generator="$1"
   nf_require_cli
-  neutrino-factory list-generators --generator "$generator" --json \
+  nf_cli_exec list-generators --generator "$generator" --json \
     | python3 -c 'import json,sys; print(" ".join(r["code_version"] for r in json.load(sys.stdin)["generators"]))'
 }
 
 # Echo the filesystem-safe directory name for a code_version (catalog._tag_safe).
 nf_tag_safe() {
-  nf_require_cli
-  python3 -c 'import sys
-from neutrino_factory import catalog
-print(catalog._tag_safe(sys.argv[1]))' "$1"
+  printf '%s' "$1" | sed -E 's/[^A-Za-z0-9._-]/_/g'
 }
 
 # Echo the Docker image tag catalogued for a generator + code version, or empty.
 nf_catalog_image() {
   local generator="$1" code_version="$2"
   nf_require_cli
-  neutrino-factory list-generators --generator "$generator" --json \
+  nf_cli_exec list-generators --generator "$generator" --json \
     | python3 -c 'import json,sys
 cv=sys.argv[1]
 for r in json.load(sys.stdin)["generators"]:
