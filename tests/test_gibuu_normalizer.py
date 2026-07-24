@@ -42,6 +42,14 @@ def _write_sidecar(work_dir: Path) -> None:
         "nucleus": "C12",
         "energy_range_gev": [0.5, 5.0],
         "seed": 42,
+        "num_runs": 1,
+        "flux_config": {
+            "type": "power_law",
+            "particle": "numu",
+            "emin_gev": 0.5,
+            "emax_gev": 5.0,
+            "gamma": 0.0,
+        },
     }
     (work_dir / "translated_config.json").write_text(json.dumps(sidecar), encoding="utf-8")
 
@@ -128,6 +136,31 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
             self.assertEqual(events[0]["probe"], "numu")
             self.assertEqual(events[0]["target"], "C12")
             self.assertEqual(metadata["generator"], "gibuu")
+
+    def test_normalize_root_xsec_weight_matches_hand_derivation_for_flat_flux(self) -> None:
+        # Flat power-law flux (gamma=0) over [0.5, 5.0] GeV: the unit-normalized
+        # flux density is constant at 1/(emax-emin), so the GiBUU recipe
+        # xsec_weight = raw_weight / (num_runs * flux_hat) collapses to
+        # raw_weight * (emax - emin) / num_runs (num_runs = 1 in the sidecar).
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "EventOutput.Pert.00000001.root"
+            raw = [1.0, 0.8, 1.2]
+            _write_roottuple(
+                root_path,
+                lepIn_E=[1.0, 2.5, 4.0],
+                weight=raw,
+                evType=[1, 2, 34],
+            )
+            out_path = work_dir / "out.h5"
+
+            GiBUUNormalizer().normalize(root_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            width = 5.0 - 0.5
+            for event, w in zip(events, raw):
+                self.assertAlmostEqual(event["xsec_weight"], w * width, places=4)
 
     def test_normalize_root_event_ids_start_at_start_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

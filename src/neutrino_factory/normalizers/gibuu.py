@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
+
 from ..common_output import version_metadata, write_common_hdf5
+from ..flux import build_flux
+from ..translators.gibuu import GiBUUTranslator
 from .base import OutputNormalizer
 
 
@@ -93,13 +97,23 @@ class GiBUUNormalizer(OutputNormalizer):
                     f"Cannot read interaction class from branch 'evType': {exc}"
                 ) from exc
 
+        energies_gev = np.asarray(energies_gev, dtype=np.float64)
+        weights_arr = np.asarray(weights, dtype=np.float64)
+        flux = build_flux(translated["flux_config"])
+        xsec_weights = GiBUUTranslator().compute_xsec_weight(
+            energies_gev, weights_arr, translated, flux
+        )
+
         events = []
-        for i, (e_gev, w, ev_type) in enumerate(zip(energies_gev, weights, ev_types)):
+        for i, (e_gev, w, xw, ev_type) in enumerate(
+            zip(energies_gev, weights_arr, xsec_weights, ev_types)
+        ):
             events.append({
                 "event_id": start_event + i,
                 "seed": int(task["seed"]),
                 "energy_gev": float(e_gev),
                 "weight": float(w),
+                "xsec_weight": float(xw),
                 "interaction": _interaction_from_evtype(int(ev_type)),
                 "probe": probe,
                 "target": target,

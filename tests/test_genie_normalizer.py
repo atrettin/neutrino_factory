@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ import numpy as np
 
 from neutrino_factory.common_output import read_events
 from neutrino_factory.normalizers.genie import GenieNormalizer
+from neutrino_factory.translators.genie import GENIE_UNITS_CM2, XSEC_SCALE
 
 
 def _write_gst_root(path: Path, energies_gev, weights, qel, res, dis, coh, mec) -> None:
@@ -40,15 +42,50 @@ def _base_task() -> dict:
     }
 
 
-def _write_sidecar(work_dir: Path) -> None:
+def _write_sidecar(work_dir: Path, emin_gev: float = 0.5, emax_gev: float = 10.0) -> None:
     sidecar = {
         "probe": "numu",
+        "probe_pdg": 14,
         "target": "Ar40",
-        "energy_range_gev": [0.5, 10.0],
+        "target_pdg": 1000180400,
+        "energy_range_gev": [emin_gev, emax_gev],
         "events": 3,
         "seed": 42,
+        "flux_model": "power_law",
+        "flux_config": {
+            "type": "power_law",
+            "particle": "numu",
+            "emin_gev": emin_gev,
+            "emax_gev": emax_gev,
+            "gamma": 0.0,
+        },
+        "code_version": "R-3_06_00",
+        "config_version": "G18_10a_02_11a",
     }
     (work_dir / "translated_config.json").write_text(json.dumps(sidecar), encoding="utf-8")
+
+
+def _write_fake_xsecs_xml(software_root: Path, xsec_internal: float) -> None:
+    """Stage a minimal xsecs.xml with a single constant-cross-section spline.
+
+    Matches the real ``genie::XSecSplineList::SaveSplineList()`` format (see
+    ``GenieTranslator.compute_xsec_weight``): one ``<spline name="...">`` whose
+    name contains ``nu:<probe_pdg>;tgt:<target_pdg>;``, with two knots spanning
+    the whole flux range so ``np.interp`` returns ``xsec_internal`` everywhere.
+    """
+    xsec_dir = software_root / "genie" / "genie_xsec" / "R-3_06_00" / "G18_10a_02_11a"
+    xsec_dir.mkdir(parents=True, exist_ok=True)
+    xml = f"""<?xml version="1.0" encoding="ISO-8859-1"?>
+<genie_xsec_spline_list version="3.00" uselog="1">
+  <genie_tune name="G18_10a_02_11a">
+    <spline name="genie::FakeXSec/Default/nu:14;tgt:1000180400;N:2112;proc:Weak[CC],QES;" nknots="2">
+	<knot> <E>    0.01000 </E> <xsec> {xsec_internal:.10e} </xsec> </knot>
+	<knot> <E>   20.00000 </E> <xsec> {xsec_internal:.10e} </xsec> </knot>
+    </spline>
+  </genie_tune>
+</genie_xsec_spline_list>
+"""
+    (xsec_dir / "xsecs.xml").write_text(xml, encoding="ISO-8859-1")
 
 
 class GenieNormalizerJsonTests(unittest.TestCase):
@@ -108,6 +145,16 @@ class GenieNormalizerJsonTests(unittest.TestCase):
 
 
 class GenieNormalizerRootTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._software_root_dir = tempfile.TemporaryDirectory()
+        _write_fake_xsecs_xml(Path(self._software_root_dir.name), xsec_internal=1.0e-15)
+        self._env_patch = patch.dict(os.environ, {"NF_SOFTWARE_ROOT": self._software_root_dir.name})
+        self._env_patch.start()
+
+    def tearDown(self) -> None:
+        self._env_patch.stop()
+        self._software_root_dir.cleanup()
+
     def test_normalize_gst_root_reads_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
@@ -140,6 +187,9 @@ class GenieNormalizerRootTests(unittest.TestCase):
             self.assertEqual(events[0]["probe"], "numu")
             self.assertEqual(events[0]["target"], "Ar40")
             self.assertEqual(metadata["generator"], "genie")
+            for event in events:
+                self.assertGreater(event["xsec_weight"], 0.0)
+                self.assertTrue(np.isfinite(event["xsec_weight"]))
 
     def test_normalize_gst_root_event_ids_start_at_start_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -228,6 +278,43 @@ class GenieNormalizerRootTests(unittest.TestCase):
             _, events = read_events(out_path)
             interactions = [e["interaction"] for e in events]
             self.assertEqual(interactions, ["qel", "res", "dis", "coh", "mec", "other"])
+
+    def test_xsec_weight_matches_hand_derivation_for_flat_flux_and_constant_spline(self) -> None:
+        """A flat (gamma=0) flux over [emin, emax] normalizes to a uniform
+        density, so flux_hat(E) = 1/(emax-emin) everywhere. With the fake
+        spline staged in setUp() (a constant cross section across the whole
+        range), the flux-averaged total equals that constant directly, so
+        xsec_weight collapses to a single value for every event -- and,
+        crucially, that value already reflects the whole-nucleus -> per-nucleon
+        division by Ar40's mass number (A=40, from target_pdg=1000180400), the
+        subtlety documented in GenieTranslator.compute_xsec_weight."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            emin, emax = 0.5, 5.0
+            _write_sidecar(work_dir, emin_gev=emin, emax_gev=emax)
+            gst_path = work_dir / "events.gst.root"
+            _write_gst_root(
+                gst_path,
+                energies_gev=[1.0, 2.0, 3.0],
+                weights=[1.0, 1.0, 1.0],
+                qel=[True, True, True],
+                res=[False, False, False],
+                dis=[False, False, False],
+                coh=[False, False, False],
+                mec=[False, False, False],
+            )
+            out_path = work_dir / "out.h5"
+
+            GenieNormalizer().normalize(gst_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            n_events = 3
+            mass_number = 40
+            xsec_internal = 1.0e-15
+            sigma_per_nucleon = xsec_internal * (XSEC_SCALE / GENIE_UNITS_CM2) / mass_number
+            expected = sigma_per_nucleon * (emax - emin) / n_events
+            for event in events:
+                self.assertAlmostEqual(event["xsec_weight"], expected, places=6)
 
 
 if __name__ == "__main__":

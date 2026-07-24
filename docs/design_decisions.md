@@ -112,3 +112,35 @@ via `containers.apptainer_dispatch`.
 - Moving wrappers out of `nf-base.def` touches no Dockerfile; the
   `/opt/nf/generators/<cv>` staging is Apptainer-composition-only and has no
   Docker counterpart, so the "update both together" pairing is not triggered.
+
+## GiBUU cross-section weight (`xsec_weight`) normalization
+
+**Context.** The common-output `xsec_weight` convention (see
+`translators/base.py`): histogramming events by energy, weighting by
+`xsec_weight`, and dividing by the bin width yields the average cross section in
+that bin in **1e-38 cm² per target nucleon**. NuWro implemented this; GiBUU did
+not (weights defaulted to `1.0`, and `GiBUUTranslator` was non-instantiable).
+
+**Decision.** `GiBUUTranslator.compute_xsec_weight` uses
+`xsec_weight_i = raw_weight_i / (num_runs · φ̂(E_i))`, where `φ̂` is the
+unit-integral-normalized flux density (same `to_histogram(500)` binning written
+into GiBUU's user-flux file) and `num_runs = num_runs_SameEnergy` (=1).
+
+**Why this differs from NuWro** (rejection-sampled → per-event weight *is* the
+flux-averaged σ, needs `1/n_events`): GiBUU is **phase-space sampled and weighted
+by cross section**. Established from GiBUU's `neutrinoAnalysis.f90` header and the
+production KM3NeT `km3buu` wrapper (which reads the identical `RootTuple`/`weight`
+branch):
+- The raw perweight is **already in 1e-38 cm²** → no `XSEC_SCALE` (`1e38`) factor.
+- It is **already per nucleon** (km3buu multiplies by `A` to recover the
+  whole-nucleus σ) → no `1/A`.
+- Within one run, `Σ perweight = σ_flux-folded` (numEnsembles is already folded
+  in; only `num_runs` remains). Because a spectrum run is flux-folded, recovering
+  the differential `σ(E)` still requires dividing out `φ̂` — the earlier TODO note
+  "no 1/flux recipe" was imprecise: what differs from NuWro is the *constant*
+  (`num_runs`, no `1e38`), not the presence of the flux division.
+- Negative interference weights are passed through unchanged.
+
+Files: `translators/gibuu.py` (`NUM_RUNS_SAME_ENERGY`, `compute_xsec_weight`),
+`normalizers/gibuu.py` (`_normalize_root` wires it in via the sidecar
+`flux_config`). Monoenergetic runs skip the flux division (`raw / num_runs`).

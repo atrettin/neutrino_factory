@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
+
 from ..common_output import version_metadata, write_common_hdf5
+from ..flux import build_flux
+from ..translators.genie import GenieTranslator
 from .base import OutputNormalizer
 
 
@@ -71,9 +75,16 @@ class GenieNormalizer(OutputNormalizer):
             except Exception as exc:
                 raise RuntimeError(f"Cannot read interaction flags from 'qel/res/dis/coh/mec': {exc}") from exc
 
+        energies_gev = np.asarray(energies_gev, dtype=np.float64)
+        weights_arr = np.asarray(weights, dtype=np.float64)
+        flux = build_flux(translated["flux_config"])
+        xsec_weights = GenieTranslator().compute_xsec_weight(
+            energies_gev, weights_arr, translated, flux
+        )
+
         events = []
-        for i, (ev, w, qel, res, dis, coh, mec) in enumerate(
-            zip(energies_gev, weights, flag_qel, flag_res, flag_dis, flag_coh, flag_mec)
+        for i, (ev, w, xw, qel, res, dis, coh, mec) in enumerate(
+            zip(energies_gev, weights, xsec_weights, flag_qel, flag_res, flag_dis, flag_coh, flag_mec)
         ):
             if qel:
                 itype = "qel"
@@ -92,6 +103,7 @@ class GenieNormalizer(OutputNormalizer):
                 "seed": int(task["seed"]),
                 "energy_gev": float(ev),
                 "weight": float(w),
+                "xsec_weight": float(xw),
                 "interaction": itype,
                 "probe": probe,
                 "target": target,

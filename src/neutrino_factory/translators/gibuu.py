@@ -4,12 +4,21 @@ import math
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from .base import ConfigTranslator
-from ..flux import build_flux
+from ..flux import Flux, build_flux
 
 # Number of equal-width bins used to approximate a continuous spectrum as a
 # GiBUU user flux file (nuExp=99). GiBUU allocates the flux arrays dynamically.
 FLUX_NBINS = 500
+
+# num_runs_SameEnergy in the jobcard: the number of independent GiBUU runs at the
+# same flux/energy, each writing one EventOutput.Pert.*.root file. GiBUU
+# normalizes perweight so that the sum over one run reproduces the cross section,
+# so compute_xsec_weight must divide by this. Kept in one place so the jobcard
+# and the xsec-weight normalization can never drift.
+NUM_RUNS_SAME_ENERGY = 1
 
 # Jobcard path of the flux table the adapter writes into the work directory.
 # Deliberately CWD-relative: every pathway runs GiBUU with the work dir as its
@@ -120,6 +129,8 @@ class GiBUUTranslator(ConfigTranslator):
             "number_of_events": event_count,
             "seed": seed,
             "flux_model": flux_config["type"],
+            "flux_config": flux_config,
+            "num_runs": NUM_RUNS_SAME_ENERGY,
             "mode": physics.get("mode", "inclusive"),
             "code_version": task["code_version"],
             "config_version": task["config_version"],
@@ -127,6 +138,78 @@ class GiBUUTranslator(ConfigTranslator):
             "gibuu_jobcard": gibuu_jobcard,
             "gibuu_flux_table": gibuu_flux_table,
         }
+
+    def compute_xsec_weight(
+        self,
+        energies_gev: np.ndarray,
+        raw_weights: np.ndarray,
+        translated_config: dict[str, Any],
+        flux: Flux,
+    ) -> np.ndarray:
+        """Recover the energy-resolved cross section from GiBUU perturbative weights.
+
+        GiBUU is phase-space sampled and *weighted by cross section* (not
+        rejection-sampled like NuWro): every generated interaction is written out
+        carrying a perturbative weight (the ``weight`` branch of ``RootTuple``).
+        Two properties of that weight, established from GiBUU's own source
+        (``code/analysis/neutrinoAnalysis.f90`` header) and cross-checked against
+        the production KM3NeT ``km3buu`` wrapper (which reads the identical
+        branch):
+
+        * **Units** are already ``1e-38 cm^2`` - exactly the common convention -
+          so no ``XSEC_SCALE`` factor is applied (contrast the NuWro translator,
+          whose raw weight is in bare cm^2 and needs a ``1e38`` rescale).
+        * **Per nucleon**: the weight is already a per-target-nucleon quantity
+          (km3buu multiplies by the mass number ``A`` to recover the whole-nucleus
+          cross section, confirming the raw value is per nucleon), so no division
+          by ``A`` is applied.
+
+        GiBUU defines the weight so that, within a single run, the sum over all
+        events reproduces the flux-folded total cross section
+        ``sigma_avg = int sigma(E) * phi_hat(E) dE`` (numEnsembles is already
+        folded into the weight; the only run-multiplicity factor is
+        ``num_runs_SameEnergy``). Because a spectrum run's weights are therefore
+        already flux-folded, recovering the differential ``sigma(E)`` requires
+        dividing out the unit-normalized flux density at each event's energy -
+        structurally the same flux division NuWro uses, but with a different
+        constant:
+
+            xsec_weight_i = raw_weight_i / (num_runs * phi_hat(E_i))
+
+        so that ``sum_bin(xsec_weight) / bin_width -> sigma(E)`` in ``1e-38 cm^2``
+        per nucleon. The flux histogram uses the same ``FLUX_NBINS`` binning the
+        translator wrote into GiBUU's user-flux file, so the reconstruction
+        matches the distribution GiBUU actually sampled.
+
+        Negative weights (interference terms) are passed through unchanged - they
+        are physical and must be summed as-is.
+        """
+        num_runs = max(1, int(translated_config.get("num_runs", NUM_RUNS_SAME_ENERGY)))
+
+        # Monoenergetic run (GiBUU fixed-energy mode 6): there is no flux to
+        # divide out, and the differential "/ bin_width" convention is degenerate
+        # for a single energy. Sum over the run then reproduces sigma at that
+        # energy, so the per-event weight is simply raw / num_runs.
+        if flux.emax_gev <= flux.emin_gev:
+            return np.asarray(raw_weights, dtype=np.float64) / num_runs
+
+        edges, contents = flux.to_histogram(nbins=FLUX_NBINS)
+        widths = np.diff(edges)
+        clipped = np.clip(contents, 0.0, None)
+        integral = float(np.sum(clipped * widths))
+
+        xsec_weight = np.zeros_like(raw_weights, dtype=np.float64)
+        if integral <= 0.0:
+            return xsec_weight
+
+        bin_index = np.clip(
+            np.searchsorted(edges, energies_gev, side="right") - 1, 0, len(clipped) - 1
+        )
+        flux_density = clipped[bin_index]
+        nonzero = flux_density > 0.0
+        flux_hat = flux_density[nonzero] / integral
+        xsec_weight[nonzero] = raw_weights[nonzero] / (num_runs * flux_hat)
+        return xsec_weight
 
     @staticmethod
     def _flux_table(flux: Any) -> str:
@@ -187,7 +270,7 @@ class GiBUUTranslator(ConfigTranslator):
       eventtype       = 5          ! neutrino induced
       numEnsembles    = {num_ensembles}
       numTimeSteps    = 0
-      num_runs_SameEnergy = 1
+      num_runs_SameEnergy = {NUM_RUNS_SAME_ENERGY}
     path_to_input   = '@NF_GIBUU_INPUT@'
       localEnsemble   = .true.
 /
