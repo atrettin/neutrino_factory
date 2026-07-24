@@ -1,0 +1,67 @@
+# End-to-end smoke test — GiBUU.
+# Minimal real (non-stub) run to confirm the composed nf-base.sif can translate
+# a config into a jobcard, run GiBUU.x (reading the jobcard from stdin, writing
+# RootTuple output into the CWD), and normalize to the common HDF5.
+# Event count is deliberately HIGHER than the other generators: GiBUU does not
+# rejection-sample, it samples phase space uniformly and weights events by cross
+# section, so the output is dominated by a small fraction of high-weight events.
+# More events are needed for a representative dataset — and GiBUU is fast.
+
+run:
+  name: smoke_gibuu_c12
+  events: 1000
+  seed: 12345
+  executor: local
+  stub_mode: false
+
+flux:
+  type: power_law
+  particle: numu
+  emin_gev: 0.5
+  emax_gev: 5.0
+  gamma: -2.0
+
+target:
+  nucleus: C12
+  pdg: 1000060120
+
+physics:
+  mode: inclusive
+  current: cc
+
+generators:
+  gibuu:
+    versions:
+      - enabled: true
+        code_version: "release2025"
+        config_version: "default"
+  genie:
+    versions:
+      - enabled: false
+        code_version: "R-3_06_00"
+        config_version: "G18_10a_02_11a"
+  neut:
+    versions:
+      - enabled: false
+        code_version: "5.x"
+        config_version: "default"
+  nuwro:
+    versions:
+      - enabled: false
+        code_version: "nuwro_25.11"
+        config_version: "default"
+
+splitting:
+  strategy: events
+  chunks: 1
+
+storage:
+  software_root: ${NF_SOFTWARE_ROOT:-./software}
+  output_root: ${NF_OUTPUT_ROOT:-./output}
+  work_root: ${NF_WORK_ROOT:-./work}
+
+slurm:
+  partition: alma
+  time: "00:20:00"
+  cpus_per_task: 1
+  mem: "2G"
