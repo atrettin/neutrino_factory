@@ -324,7 +324,11 @@ else
   done
   {
     printf 'Bootstrap: docker\n'
-    printf 'From: python:3.13-slim\n'
+    # Pin to bookworm: the payloads are built on Ubuntu 22.04, and bookworm's
+    # GSL/libxml2/log4cpp SONAMEs (libgsl.so.27, libxml2.so.2, liblog4cpp.so.5)
+    # match that ABI. The floating python:3.13-slim tag moved to Debian trixie,
+    # which only ships libgsl.so.28 and cannot satisfy the GENIE binaries.
+    printf 'From: python:3.13-slim-bookworm\n'
     printf 'Stage: final\n\n'
   } >> "$tmp_nf_base_def"
   idx=0

@@ -23,18 +23,25 @@
     # copied into this composed image. When a new generator/version needs a
     # system lib not listed here, add it (a fixed union is simpler than trying to
     # derive it per payload).
+    # NOTE: nf-base is pinned to Debian bookworm (see build_apptainer_images.sh)
+    # so these SONAMEs match the Ubuntu-22.04 payload binaries — libgsl27 gives
+    # libgsl.so.27/libgslcblas.so.0, not trixie's libgsl.so.28. `libgsl27`
+    # provides both libgsl and libgslcblas.
     apt-get update && apt-get install -y --no-install-recommends \
         libgfortran5 \
         libgomp1 \
         libfreetype6 \
         g++ \
         libgsl27 \
+        libgslcblas0 \
         libxml2 \
         liblog4cpp5v5 \
         libssl3 \
+        libnsl2 \
         perl \
         && (apt-get install -y --no-install-recommends libpcre3 || apt-get install -y --no-install-recommends libpcre3t64) \
-        && rm -rf /var/lib/apt/lists/*
+        && rm -rf /var/lib/apt/lists/* \
+        || { echo "nf-base: baseline apt install failed (a package name may not resolve on this base image)" >&2; exit 1; }
 
     pip install --no-cache-dir \
         "PyYAML>=6.0" \
