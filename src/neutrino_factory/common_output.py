@@ -38,11 +38,13 @@ def version_metadata(generator_name: str, task: dict[str, Any], execution_mode: 
     requested event count for this task, distinct from the actual number
     written to ``run/event_count``).
     """
+    code_version = str(task.get("code_version", "unknown"))
+    config_version = str(task.get("config_version", "unknown"))
     return {
         "generator": generator_name,
-        "code_version": str(task.get("code_version", "unknown")),
-        "config_version": str(task.get("config_version", "unknown")),
-        "generator_version_id": str(task.get("generator_version_id", "unknown")),
+        "code_version": code_version,
+        "config_version": config_version,
+        "generator_version_id": f"{code_version}+{config_version}",
         "execution_mode": execution_mode,
         "run_name": task["run_name"],
         "chunk_id": int(task["chunk_id"]),

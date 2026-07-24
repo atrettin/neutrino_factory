@@ -35,6 +35,11 @@ Inspect the generated files under:
 - `work/slurm/`
 - `work/logs/`
 
+When inspecting the manifest JSON, expect schema version 3:
+- no top-level `task_count` (derive from `len(tasks)`),
+- no per-task image-routing fields,
+- per-task version identity carried by `code_version` + `config_version`.
+
 ## 4. Submit the first real test job
 
 ```bash

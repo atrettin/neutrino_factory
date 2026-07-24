@@ -206,7 +206,10 @@ class GeneratorAdapter(ABC):
                 "stub_mode": True,
                 "code_version": str(task.get("code_version", "unknown")),
                 "config_version": str(task.get("config_version", "unknown")),
-                "generator_version_id": str(task.get("generator_version_id", "unknown")),
+                "generator_version_id": (
+                    f"{task.get('code_version', 'unknown')}+"
+                    f"{task.get('config_version', 'unknown')}"
+                ),
             },
             "events": events,
         }

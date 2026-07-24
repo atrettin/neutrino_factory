@@ -3,9 +3,8 @@
 # Differences from the Dockerfile (divergence is deliberate, see
 # docs/design_decisions.md):
 #   * No --platform pinning: cluster builds run on native x86_64.
-#   * The runtime stage additionally installs the neutrino-factory Python
-#     runtime dependencies, because on the cluster the Slurm task runs the CLI
-#     *inside* this image (Apptainer cannot nest containers).
+#   * Runtime payload is staged under /opt/nf/generators/genie for composition
+#     into the unified nf-base runtime image.
 #
 # Build (on odslserv01/02, NOT the Slurm head node):
 #   apptainer build --build-arg JOBS=32 \
@@ -182,10 +181,10 @@ Stage: final
     ROOT_VERSION=6.24.08
 
 %files from builder
-    /opt/root /opt/root
-    /opt/genie /opt/genie
-    /opt/lhapdf6 /opt/lhapdf6
-    /opt/pythia6 /opt/pythia6
+    /opt/root /opt/nf/generators/genie/root
+    /opt/genie /opt/nf/generators/genie/genie
+    /opt/lhapdf6 /opt/nf/generators/genie/lhapdf6
+    /opt/pythia6 /opt/nf/generators/genie/pythia6
 
 %post
     export DEBIAN_FRONTEND=noninteractive
@@ -196,47 +195,47 @@ Stage: final
         libssl3 \
         libfreetype6 \
         libpcre3 \
-        python3 \
-        python3-pip \
         libgomp1 \
         perl \
         libgfortran5 \
         g++ \
         && rm -rf /var/lib/apt/lists/*
 
-    # neutrino-factory runtime deps: the Slurm task runs the CLI inside this
-    # image (Apptainer cannot nest). Mirrors pyproject.toml [project.dependencies].
-    pip3 install --no-cache-dir \
-        "PyYAML>=6.0" \
-        "h5py>=3.10" \
-        "numpy>=1.24" \
-        "uproot>=5.0" \
-        "awkward>=2.0" \
-        "matplotlib>=3.7"
-
     # Pythia6 lib path is version-specific; register it with ldconfig so
     # non-interactive runs can load libPythia6.so.
-    PYTHIA6_LIBDIR="$(find /opt/pythia6 -maxdepth 4 -name 'libPythia6.so' \
+    PYTHIA6_LIBDIR="$(find /opt/nf/generators/genie/pythia6 -maxdepth 4 -name 'libPythia6.so' \
         -exec dirname {} \; | head -1)"
     printf '%s\n' "${PYTHIA6_LIBDIR}" > /etc/ld.so.conf.d/pythia6.conf
-    printf '%s\n' /opt/genie/lib /opt/root/lib /opt/lhapdf6/lib \
+    printf '%s\n' /opt/nf/generators/genie/genie/lib /opt/nf/generators/genie/root/lib /opt/nf/generators/genie/lhapdf6/lib \
         > /etc/ld.so.conf.d/genie.conf
     ldconfig
 
+    mkdir -p /opt/nf/env
+    cat > /opt/nf/env/genie.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+prefix=/opt/nf/generators/genie
+py6lib="$(find "$prefix"/pythia6 -maxdepth 4 -name 'libPythia6.so' -exec dirname {} \; | head -1)"
+export GENIE="$prefix/genie"
+export ROOTSYS="$prefix/root"
+export PATH="$GENIE/bin:$ROOTSYS/bin:${PATH}"
+export LD_LIBRARY_PATH="$GENIE/lib:$ROOTSYS/lib:$prefix/lhapdf6/lib${py6lib:+:$py6lib}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+EOF
+    chmod +x /opt/nf/env/genie.sh
+
 %environment
-    export GENIE=/opt/genie
-    export ROOTSYS=/opt/root
-    export PATH=/opt/genie/bin:/opt/root/bin:$PATH
-    export LD_LIBRARY_PATH=/opt/genie/lib:/opt/root/lib:/opt/lhapdf6/lib
+    export GENIE=/opt/nf/generators/genie/genie
+    export ROOTSYS=/opt/nf/generators/genie/root
+    export PATH=/opt/nf/generators/genie/genie/bin:/opt/nf/generators/genie/root/bin:$PATH
+    export LD_LIBRARY_PATH=/opt/nf/generators/genie/genie/lib:/opt/nf/generators/genie/root/lib:/opt/nf/generators/genie/lhapdf6/lib
 
 %test
-    test -x /opt/genie/bin/gevgen
-    python3 -c "import yaml, h5py, numpy, uproot, awkward"
+    test -x /opt/nf/generators/genie/genie/bin/gevgen
 
 %labels
     org.neutrino-factory.image genie
     org.neutrino-factory.source setup/Dockerfile.genie
 
 %help
-    GENIE {{ GENIE_TAG }} with ROOT {{ ROOT_VERSION }}, LHAPDF6, Pythia6, and
-    the neutrino-factory Python runtime. gevgen and gntpc are on $PATH.
+    GENIE {{ GENIE_TAG }} payload image for unified runtime composition.
+    Runtime payload root: /opt/nf/generators/genie.

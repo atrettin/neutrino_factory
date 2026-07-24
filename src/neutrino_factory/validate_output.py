@@ -12,12 +12,14 @@ output for ad-hoc use:
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 from typing import Any
 
 import h5py
 import numpy as np
 
+from . import catalog
 from .common_output import VERSION_IDENTITY_KEYS
 from .slurm import build_task_manifest
 
@@ -287,7 +289,10 @@ def expected_outputs(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
 
     for task in manifest["tasks"]:
         generator = task["generator_name"]
-        token = str(task["generator_version_token"])
+        version_id = catalog.version_identifier(
+            str(task["code_version"]), str(task["config_version"])
+        )
+        token = re.sub(r"[^A-Za-z0-9._-]", "_", version_id)
         file_stem = f"{run_name}_{generator}_{token}_chunk{task['chunk_id']:03d}"
         chunk_path = output_root / "chunks" / generator / token / f"{file_stem}.h5"
         chunks.append(
@@ -295,7 +300,7 @@ def expected_outputs(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
                 "path": chunk_path,
                 "expected_events": int(task["event_count"]),
                 "generator": generator,
-                "version_id": task["generator_version_id"],
+                "version_id": version_id,
                 "chunk_id": int(task["chunk_id"]),
             }
         )
@@ -307,7 +312,7 @@ def expected_outputs(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
                 "path": output_root / "merged" / f"{run_name}_{generator}_{token}.h5",
                 "expected_events": 0,
                 "generator": generator,
-                "version_id": task["generator_version_id"],
+                "version_id": version_id,
             },
         )
         group["expected_events"] += int(task["event_count"])

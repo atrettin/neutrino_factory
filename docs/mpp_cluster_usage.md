@@ -12,13 +12,16 @@ inside Apptainer containers.
 - **Submit from mppui1.t2.rzg.mpg.de** (Slurm head node; `ssh mppui1` from an
   odslserv node). All storage is on shared `/ptmp`, so both hosts see the same
   repo, images, and outputs.
-- **Inverted container layering**: Apptainer cannot nest, so the sbatch array
-  task runs `apptainer exec <generator>.sif bash jobs/run_task.sh …` — the CLI
-  executes *inside* the generator image, where the generator binary is native
-  on `$PATH`. All other CLI use goes through `bin/nf`, which wraps the small
-  `nf-base.sif` orchestration image.
-- Run everything from a **plain host shell**. The cenv-based VSCode environment
-  is itself an Apptainer container, and `apptainer` does not work inside it.
+- **Unified runtime image**: the sbatch array task runs inside
+  `nf-base.sif` for every task. The unified image hosts the framework Python
+  runtime and generator wrappers in one place, so interactive usage also enters
+  this image once and runs CLI commands there.
+- Use `cenv` for interactive sessions on ODSL. Create a container environment
+  from `nf-base.sif`, enter it, install the project once with `pip install -e .`,
+  then run `neutrino-factory` directly in that session.
+- Run setup/build commands from a **plain host shell** on odslserv nodes.
+
+Reference: https://github.com/oschulz/container-env
 
 ## Filesystems
 
@@ -58,26 +61,23 @@ odslserv nodes share `/ptmp` with the new cluster.
 git clone <repo-url> /ptmp/mpp/$USER/neutrino_factory/repo
 cd /ptmp/mpp/$USER/neutrino_factory/repo
 
-# 2. Bootstrap the orchestration image (fast: python:3.13-slim + pip deps).
-#    The image root defaults to <repo>/software/images (on /ptmp, since the
-#    repo is) and is recorded in .env so bin/nf and later builds agree on it;
-#    set NF_IMAGE_ROOT beforehand to choose a different location.
-bash setup/build_apptainer_images.sh --bootstrap
+# 2. Build Apptainer images from a plain host shell (outside any container).
+#    This builds bootstrap + generator payload images and composes nf-base.sif.
+#    Rerunning is safe: existing SIFs are skipped without --force.
+bash setup/build_apptainer_images.sh
 
-# 3. Interactive setup: choose the apptainer pathway, accept the /ptmp defaults.
-#    Writes .env (storage roots, NF_CONTAINER_RUNTIME=apptainer, cache dir).
-bin/nf setup --pathway apptainer
-
-# 4. Build the generator images (ROOT/GENIE compile from source — hours each;
-#    GiBUU is fastest, it reuses a prebuilt ROOT base). Rerunning is safe:
-#    existing SIFs are skipped without --force.
-bash setup/build_apptainer_images.sh --only gibuu
-bash setup/build_apptainer_images.sh --only genie
-bash setup/build_apptainer_images.sh --only nuwro
-
-# 5. Stage GENIE cross-section splines and check the catalog
+# 3. Stage GENIE cross-section splines and check the catalog in nf-base.sif
 bash setup/download_genie_xsec.sh
-bin/nf list-generators --built
+apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" env PYTHONPATH="$PWD/src" \
+  python3 -m neutrino_factory.cli list-generators --built
+
+# 4. After all images are built, create and enter an interactive cenv session
+cenv --create nf-env "$NF_IMAGE_ROOT/nf-base.sif"
+cenv nf-env
+
+# 5. One-time setup inside the cenv session
+pip install -e .
+neutrino-factory setup --pathway apptainer --no-build
 ```
 
 If you later change `NF_IMAGE_ROOT` (via `.env` or the wizard), rerun
@@ -88,8 +88,8 @@ the new location quickly.
 
 ```bash
 # On mppui1 (ssh from odslserv01), in the repo:
-bin/nf validate-config --config configs/examples/power_law_numu_Ar.yaml
-bin/nf submit --config configs/examples/power_law_numu_Ar.yaml --executor slurm
+neutrino-factory validate-config --config configs/examples/power_law_numu_Ar.yaml
+neutrino-factory submit --config configs/examples/power_law_numu_Ar.yaml --executor slurm
 ```
 
 `sbatch` is not visible inside the container, so `submit` renders the job
@@ -99,26 +99,27 @@ array script and prints the exact command to run in the host shell:
 sbatch /ptmp/mpp/$USER/neutrino_factory/work/slurm/<run_name>.sbatch
 ```
 
-The rendered script sources the repo `.env`, maps each array task index to its
-generator's SIF, and runs the task inside it. Monitor and validate with:
+The rendered script sources the repo `.env` and runs each array task inside the
+unified `nf-base.sif` runtime image. Monitor and validate with:
 
 ```bash
 squeue --me
-bin/nf check-status --config configs/examples/power_law_numu_Ar.yaml
+neutrino-factory check-status --config configs/examples/power_law_numu_Ar.yaml
 ```
 
 Per-generator merged HDF5 files appear under `$NF_OUTPUT_ROOT/merged/`. Chunk
 merging currently happens in the local pipeline; after a Slurm run, merge
-chunks explicitly with `bin/nf merge` if needed.
+chunks explicitly with `neutrino-factory merge` if needed.
 
 ## Troubleshooting
 
 - `apptainer build` fails → are you on odslserv01/02? Builds fail on mppui1.
 - "binary not on $PATH and runtime is not docker" from a task → the task was
-  launched outside its generator image; use the rendered sbatch script (or
-  `apptainer exec <generator sif> bash jobs/run_task.sh …` manually).
-- `bin/nf` reports nf-base.sif missing → run
+  launched outside the unified runtime image; use the rendered sbatch script.
+- `nf-base.sif` missing → run
   `bash setup/build_apptainer_images.sh --bootstrap` on an odslserv node.
+- `neutrino-factory: command not found` in cenv → run one-time `pip install -e .`
+  from the repo root inside that cenv session.
 - GENIE MEC (2p2h) crashes were only ever observed under amd64 *emulation* on
   the dev laptop; on the cluster's native x86_64, re-test the default
   event-generator list before restricting to CCQE (see STUBS.md).

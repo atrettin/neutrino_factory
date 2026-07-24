@@ -92,7 +92,7 @@ nf_cli_exec() {
     "neutrino-factory CLI not found while fallback is active; aborting to avoid recursion"
 
   if nf_in_apptainer; then
-    fail "neutrino-factory CLI not found inside Apptainer container. Rebuild nf-base image or install the package in-container."
+    fail "neutrino-factory CLI not found inside Apptainer container. In an ODSL cenv session, run one-time: pip install -e ."
   fi
 
   command -v apptainer >/dev/null 2>&1 || fail \
@@ -121,11 +121,11 @@ nf_require_cli() {
   nf_can_use_apptainer_cli && return 0
 
   if nf_in_apptainer; then
-    fail "neutrino-factory CLI not found inside Apptainer container. Rebuild nf-base image or install the package in-container."
+    fail "neutrino-factory CLI not found inside Apptainer container. In an ODSL cenv session, run one-time: pip install -e ."
   fi
 
   if ! command -v apptainer >/dev/null 2>&1; then
-    fail "neutrino-factory CLI not found and apptainer is unavailable. Install package locally (pip install -e .) or install apptainer."
+    fail "neutrino-factory CLI not found and apptainer is unavailable. Install package locally (pip install -e .) or use an ODSL cenv session."
   fi
 
   fail "neutrino-factory CLI not found and fallback image is missing: $(nf_nf_base_sif). Build it first: bash setup/build_apptainer_images.sh --bootstrap"

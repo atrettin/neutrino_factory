@@ -1,24 +1,47 @@
-# Apptainer definition for nf-base: the orchestration image for running the
-# neutrino-factory CLI on the HPC cluster (setup wizard, validate-config, plan,
-# submit rendering, merge, check-status, plot-output).
+# Unified Apptainer definition for nf-base: Python runtime + generator payloads.
 #
-# The cluster's system Python (3.9) is too old and MPCDF provides no module
-# system, so all Python execution happens inside containers. This image holds
-# only a modern Python and the project's runtime dependencies — the project
-# code itself is used from the repo checkout via PYTHONPATH (see bin/nf), so
-# code changes never require an image rebuild.
-#
-# Dependencies mirror [project.dependencies] in pyproject.toml — update both
-# together.
-#
-# Build: apptainer build "$NF_IMAGE_ROOT/nf-base.sif" setup/apptainer/nf-base.def
-# Run:   apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" \
-#          env PYTHONPATH=<repo>/src python3 -m neutrino_factory.cli --help
+# This image is composed from modular generator payload SIFs using localimage
+# stages. Build orchestration is handled by setup/build_apptainer_images.sh,
+# which passes the concrete payload SIF paths as build arguments.
+
+Bootstrap: localimage
+From: __GENIE_SIF__
+Stage: genie_payload
+
+Bootstrap: localimage
+From: __GIBUU_SIF__
+Stage: gibuu_payload
+
+Bootstrap: localimage
+From: __NUWRO_SIF__
+Stage: nuwro_payload
 
 Bootstrap: docker
 From: python:3.13-slim
+Stage: final
+
+%files from genie_payload
+    /opt/nf/generators/genie /opt/nf/generators/genie
+
+%files from gibuu_payload
+    /opt/nf/generators/gibuu /opt/nf/generators/gibuu
+    /opt/root /opt/nf/generators/gibuu/root
+
+%files from nuwro_payload
+    /opt/nf/generators/nuwro /opt/nf/generators/nuwro
+    /usr/lib/x86_64-linux-gnu/libpcre.so.3 /usr/lib/x86_64-linux-gnu/libpcre.so.3
+    /usr/lib/x86_64-linux-gnu/libpcre.so.3.13.3 /usr/lib/x86_64-linux-gnu/libpcre.so.3.13.3
 
 %post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y --no-install-recommends \
+        libgfortran5 \
+        libgomp1 \
+        libfreetype6 \
+        g++ \
+        && (apt-get install -y --no-install-recommends libpcre3 || apt-get install -y --no-install-recommends libpcre3t64) \
+        && rm -rf /var/lib/apt/lists/*
+
     pip install --no-cache-dir \
         "PyYAML>=6.0" \
         "h5py>=3.10" \
@@ -27,6 +50,89 @@ From: python:3.13-slim
         "awkward>=2.0" \
         "matplotlib>=3.7"
 
+    mkdir -p /usr/local/bin
+
+    # GENIE wrappers (created only when GENIE payload exists).
+    if [ -x /opt/nf/generators/genie/genie/bin/gevgen ]; then
+    cat > /usr/local/bin/gevgen <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+prefix=/opt/nf/generators/genie
+py6lib="$(find "$prefix"/pythia6 -maxdepth 4 -name 'libPythia6.so' -exec dirname {} \; | head -1)"
+export GENIE="$prefix/genie"
+export ROOTSYS="$prefix/root"
+export PATH="$GENIE/bin:$ROOTSYS/bin:${PATH}"
+export LD_LIBRARY_PATH="$GENIE/lib:$ROOTSYS/lib:$prefix/lhapdf6/lib${py6lib:+:$py6lib}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$GENIE/bin/gevgen" "$@"
+EOF
+    chmod +x /usr/local/bin/gevgen
+
+    cat > /usr/local/bin/gntpc <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+prefix=/opt/nf/generators/genie
+py6lib="$(find "$prefix"/pythia6 -maxdepth 4 -name 'libPythia6.so' -exec dirname {} \; | head -1)"
+export GENIE="$prefix/genie"
+export ROOTSYS="$prefix/root"
+export PATH="$GENIE/bin:$ROOTSYS/bin:${PATH}"
+export LD_LIBRARY_PATH="$GENIE/lib:$ROOTSYS/lib:$prefix/lhapdf6/lib${py6lib:+:$py6lib}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$GENIE/bin/gntpc" "$@"
+EOF
+    chmod +x /usr/local/bin/gntpc
+    fi
+
+    # GiBUU wrapper (created only when GiBUU payload exists).
+    if [ -d /opt/nf/generators/gibuu/GiBUU ]; then
+    cat > /usr/local/bin/GiBUU.x <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+prefix=/opt/nf/generators/gibuu
+bin="$(find "$prefix/GiBUU" -type f -name 'GiBUU.x' | head -1)"
+[[ -n "$bin" ]] || { echo "GiBUU.x payload binary not found" >&2; exit 127; }
+export ROOTSYS="$prefix/root"
+export GIBUU_INPUT="$prefix/GiBUU/buuinput"
+export PATH="$(dirname "$bin"):$ROOTSYS/bin:${PATH}"
+export LD_LIBRARY_PATH="$prefix/usr_local/lib:$ROOTSYS/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$bin" "$@"
+EOF
+    chmod +x /usr/local/bin/GiBUU.x
+    fi
+
+    # NuWro wrapper (created only when NuWro payload exists).
+    if [ -x /opt/nf/generators/nuwro/nuwro/bin/nuwro ]; then
+    cat > /usr/local/bin/nuwro <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+prefix=/opt/nf/generators/nuwro
+caller_cwd="$(pwd)"
+
+# NuWro resolves data/ relative to its install tree, so run it from there.
+# Keep task-local relative -i/-o paths working by absolutizing them first.
+args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+    case "${args[$i]}" in
+        -i|-o)
+            if (( i + 1 < ${#args[@]} )); then
+                v="${args[$((i + 1))]}"
+                if [[ "$v" != /* ]]; then
+                    args[$((i + 1))]="$caller_cwd/$v"
+                fi
+                i=$((i + 1))
+            fi
+            ;;
+    esac
+done
+
+export ROOTSYS="$prefix/root"
+export ROOTEGPythia6_ROOT="$prefix/ROOTEGPythia6"
+export PATH="$prefix/nuwro/bin:$prefix/root/bin:${PATH}"
+export LD_LIBRARY_PATH="$prefix/nuwro/lib:$prefix/root/lib:$prefix/ROOTEGPythia6/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+cd "$prefix/nuwro"
+exec "$prefix/nuwro/bin/nuwro" "${args[@]}"
+EOF
+    chmod +x /usr/local/bin/nuwro
+    fi
+
 %test
     python3 -c "import yaml, h5py, numpy, uproot, awkward, matplotlib"
 
@@ -34,6 +140,6 @@ From: python:3.13-slim
     org.neutrino-factory.image nf-base
 
 %help
-    neutrino-factory orchestration image (Python 3.13 + runtime deps).
-    Run the CLI via the bin/nf wrapper in the repo, which binds the repo
-    source onto PYTHONPATH.
+    Unified neutrino-factory runtime image (Python + generator wrappers).
+    Enter once (e.g. via cenv) and run neutrino-factory / generator binaries
+    directly from the same interactive environment.

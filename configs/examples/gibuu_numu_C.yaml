@@ -1,6 +1,6 @@
 run:
   name: gibuu_numu_c12
-  events: 100000
+  events: 1000
   seed: 12345
   executor: local
   stub_mode: false

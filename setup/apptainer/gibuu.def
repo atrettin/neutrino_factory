@@ -3,9 +3,8 @@
 # Hand-translated from setup/Dockerfile.gibuu — UPDATE BOTH TOGETHER.
 # Differences from the Dockerfile (deliberate, see docs/design_decisions.md):
 #   * No --platform pinning: cluster builds run on native x86_64.
-#   * Additionally installs the neutrino-factory Python runtime dependencies,
-#     because on the cluster the Slurm task runs the CLI *inside* this image
-#     (Apptainer cannot nest containers).
+#   * Runtime payload is staged under /opt/nf/generators/gibuu for composition
+#     into the unified nf-base runtime image.
 #
 # Based on the prebuilt rootproject/root image (GiBUU only needs a working ROOT
 # to link RootTuple against). GiBUU is distributed as HEPForge release tarballs
@@ -36,19 +35,8 @@ From: rootproject/root:{{ ROOT_BASE_TAG }}
         wget \
         ca-certificates \
         libbz2-dev \
-        python3-pip \
         perl \
         && rm -rf /var/lib/apt/lists/*
-
-    # neutrino-factory runtime deps: the Slurm task runs the CLI inside this
-    # image (Apptainer cannot nest). Mirrors pyproject.toml [project.dependencies].
-    pip3 install --no-cache-dir \
-        "PyYAML>=6.0" \
-        "h5py>=3.10" \
-        "numpy>=1.24" \
-        "uproot>=5.0" \
-        "awkward>=2.0" \
-        "matplotlib>=3.7"
 
     # ── Download GiBUU release, input data, and RootTuple ─────────────────────
     # `wget --content-disposition` resolves the ?f=<file> download links to
@@ -76,20 +64,32 @@ From: rootproject/root:{{ ROOT_BASE_TAG }}
     make buildRootTuple_POS
     make -j"{{ JOBS }}" FORT=gfortran withROOT=1
 
+    mkdir -p /opt/nf/generators/gibuu /opt/nf/env
+    cp -a /opt/GiBUU /opt/nf/generators/gibuu/GiBUU
+    cp -a /usr/local /opt/nf/generators/gibuu/usr_local
+    cat > /opt/nf/env/gibuu.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+prefix=/opt/nf/generators/gibuu
+export GIBUU_INPUT="$prefix/GiBUU/buuinput"
+export PATH="$prefix/GiBUU/release2025/objects:${PATH}"
+export LD_LIBRARY_PATH="$prefix/usr_local/lib:${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+EOF
+    chmod +x /opt/nf/env/gibuu.sh
+
 %environment
     export GIBUU_RELEASE={{ GIBUU_RELEASE }}
-    export GIBUU_INPUT=/opt/GiBUU/buuinput
-    export PATH=/opt/GiBUU/release{{ GIBUU_RELEASE }}/objects:$PATH
-    export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
+    export GIBUU_INPUT=/opt/nf/generators/gibuu/GiBUU/buuinput
+    export PATH=/opt/nf/generators/gibuu/GiBUU/release{{ GIBUU_RELEASE }}/objects:$PATH
+    export LD_LIBRARY_PATH=/opt/nf/generators/gibuu/usr_local/lib:${LD_LIBRARY_PATH:-}
 
 %test
-    test -x /opt/GiBUU/release{{ GIBUU_RELEASE }}/objects/GiBUU.x
-    python3 -c "import yaml, h5py, numpy, uproot, awkward"
+    test -x /opt/nf/generators/gibuu/GiBUU/release{{ GIBUU_RELEASE }}/objects/GiBUU.x
 
 %labels
     org.neutrino-factory.image gibuu
     org.neutrino-factory.source setup/Dockerfile.gibuu
 
 %help
-    GiBUU release{{ GIBUU_RELEASE }} with RootTuple ROOT output and the
-    neutrino-factory Python runtime. GiBUU.x reads a jobcard from stdin.
+    GiBUU release{{ GIBUU_RELEASE }} payload image for unified runtime
+    composition. Runtime payload root: /opt/nf/generators/gibuu.

@@ -17,37 +17,30 @@ image location are machine facts, so they live in the environment
 repo-root `.env` written by `neutrino-factory setup`. Precedence: real env >
 `.env` > defaults.
 
-## Inverted container layering on the cluster
+## Unified Apptainer runtime image on the cluster
 
-**Decision.** On the cluster, Python never launches a container. The rendered
-sbatch array task does `apptainer exec <generator>.sif bash jobs/run_task.sh…`,
-so the CLI runs *inside* the generator image where the generator binary is
-native on `$PATH`, and the adapters' native-binary-first branch executes it
-directly. A small `nf-base.sif` (python:3.13-slim + runtime deps) hosts all
-other CLI use via `bin/nf`.
+**Decision.** On the cluster, Python still never launches containers from
+inside Python. However, Slurm now enters one unified runtime image
+(`nf-base.sif`) for every task, and that image provides both the framework
+Python runtime and generator entry wrappers.
 
 **Why.**
 - Apptainer-in-Apptainer does not work on this cluster (user-tested), so the
   local Docker pattern (Python wraps the generator in a container command)
-  cannot transfer.
+  still cannot transfer.
 - MPCDF removed the module system; the host Python is 3.9. Any modern Python
-  must itself come from a container — so the container must come first anyway.
+  must itself come from a container.
 - MPCDF auto-mounts `/u`, `/ptmp`, `/cvmfs` inside containers, so host paths
-  resolve unchanged inside and the adapters' native branch needs no path
-  remapping. (`/scratch` turned out not to be mounted inside containers, so
-  the project dropped its scratch-root concept entirely — everything lives on
-  `/ptmp`.)
+  resolve unchanged inside. (`/scratch` turned out not to be mounted inside
+  containers, so the project dropped its scratch-root concept entirely —
+  everything lives on `/ptmp`.)
 
 **Consequences.**
-- The native-binary-first ordering in every adapter's `build_run_command` is
-  load-bearing; reordering it would attempt container nesting on the cluster.
-  A guard (`ensure_container_wrappable`) fails clearly if the container branch
-  is reached under a non-docker runtime.
-- Generator images must also carry a Python (Ubuntu 22.04's 3.10) and the
-  project's runtime deps; the project code is *not* baked in — it comes from
-  the repo checkout via `PYTHONPATH`, so code changes need no image rebuild.
-  This is why the codebase must stay compatible with older Python (see
-  `requires-python`).
+- The native-binary-first ordering in every adapter's `build_run_command`
+  remains load-bearing on the cluster.
+- The unified `nf-base.sif` carries one Python runtime plus framework
+  dependencies; the project code is still provided from the repo checkout via
+  `PYTHONPATH`, so code changes need no image rebuild.
 - `sbatch` is invisible inside containers, so `submit` prints the `sbatch`
   command for the user to run in a host shell instead of failing.
 

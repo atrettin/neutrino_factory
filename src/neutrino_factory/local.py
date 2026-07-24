@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
+from . import catalog
 from .merge import merge_outputs
 from .slurm import build_task_manifest, write_manifest
 from .generators.registry import get_adapter
@@ -22,6 +24,14 @@ def _ensure_layout(config: dict[str, Any]) -> None:
     (Path(config["storage"]["work_root"]) / "logs").mkdir(parents=True, exist_ok=True)
 
 
+def _version_id(task: dict[str, Any]) -> str:
+    return catalog.version_identifier(str(task["code_version"]), str(task["config_version"]))
+
+
+def _version_token(task: dict[str, Any]) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]", "_", _version_id(task))
+
+
 def run_task(config: dict[str, Any], task: dict[str, Any], execution_mode: str = "local") -> str:
     _ensure_layout(config)
 
@@ -29,7 +39,7 @@ def run_task(config: dict[str, Any], task: dict[str, Any], execution_mode: str =
     work_root = Path(config["storage"]["work_root"])
     output_root = Path(config["storage"]["output_root"])
     generator_name = task["generator_name"]
-    version_token = str(task["generator_version_token"])
+    version_token = _version_token(task)
     file_stem = f"{task['run_name']}_{generator_name}_{version_token}_chunk{task['chunk_id']:03d}"
 
     # Each task gets its own work directory (keyed by the unique file_stem, which
@@ -89,7 +99,7 @@ def run_local(config: dict[str, Any], manifest_path: str | Path | None = None) -
     merged_outputs: list[str] = []
     for (generator_name, code_version, config_version), group in groups.items():
         task = group["task"]
-        version_token = str(task["generator_version_token"])
+        version_token = _version_token(task)
         merged_output = merged_dir / f"{config['run']['name']}_{generator_name}_{version_token}.h5"
         merge_outputs(
             group["outputs"],
@@ -100,7 +110,7 @@ def run_local(config: dict[str, Any], manifest_path: str | Path | None = None) -
                 "generator": generator_name,
                 "code_version": code_version,
                 "config_version": config_version,
-                "generator_version_id": task["generator_version_id"],
+                "generator_version_id": _version_id(task),
                 "task_count": len(group["outputs"]),
                 "config_path": config.get("config_path", ""),
             },
@@ -109,7 +119,7 @@ def run_local(config: dict[str, Any], manifest_path: str | Path | None = None) -
 
     return {
         "manifest_path": str(manifest_location),
-        "task_count": manifest["task_count"],
+        "task_count": len(manifest["tasks"]),
         "chunk_outputs": chunk_outputs,
         "merged_outputs": merged_outputs,
     }

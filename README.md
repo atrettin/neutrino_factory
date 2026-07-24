@@ -31,7 +31,7 @@ The workflow is **develop locally, deploy to the cluster**:
 
 ```text
 .
-├── bin/                      # bin/nf — cluster CLI wrapper (runs inside nf-base.sif)
+├── bin/                      # helper scripts
 ├── configs/                  # schema templates and example user configs
 ├── docs/                     # usage, cluster notes, extension guide
 ├── jobs/                     # Slurm wrappers
@@ -102,10 +102,10 @@ output.
 
 ## Quickstart B — HPC cluster (Apptainer, MPCDF/ODSL)
 
-Do **not** `pip install` on the cluster — the system Python (3.9) is too old
-and MPCDF has no module system. Everything Python runs inside the `nf-base`
-container via the `bin/nf` wrapper; the generator images additionally contain
-the generator binaries. Builds must run on an interactive node
+MPCDF's host Python (3.9) is too old for this project. Use a container-backed
+interactive environment instead: create a `cenv` from `nf-base.sif`, enter it,
+install once with `pip install -e .`, and then run `neutrino-factory` directly.
+Build steps must run on an interactive node
 (`odslserv01`/`02`), not the Slurm head node.
 
 ```bash
@@ -113,21 +113,30 @@ the generator binaries. Builds must run on an interactive node
 git clone <repo-url> /ptmp/mpp/$USER/neutrino_factory/repo
 cd /ptmp/mpp/$USER/neutrino_factory/repo
 
-# 2. Bootstrap the orchestration image (fast; records NF_IMAGE_ROOT in .env),
-#    then configure
-bash setup/build_apptainer_images.sh --bootstrap
-bin/nf setup --pathway apptainer     # accept the /ptmp defaults
-
-# 3. Build the generator images (hours each) and stage GENIE cross sections
+# 2. Build Apptainer images in a plain host shell (outside any container):
+#    bootstrap runtime, generator payloads, and composed nf-base.sif.
 bash setup/build_apptainer_images.sh
-bash setup/download_genie_xsec.sh
-bin/nf list-generators --built
 
-# 4. Render the Slurm job, then submit from a host shell on the head node
-bin/nf submit --config configs/examples/power_law_numu_Ar.yaml --executor slurm
+# 3. Stage GENIE cross sections and verify built images
+bash setup/download_genie_xsec.sh
+apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" env PYTHONPATH="$PWD/src" \
+  python3 -m neutrino_factory.cli list-generators --built
+
+# 4. After images exist, create and enter a cenv based on nf-base.sif
+cenv --create nf-env "$NF_IMAGE_ROOT/nf-base.sif"
+cenv nf-env
+
+# 5. One-time setup inside the cenv
+pip install -e .
+neutrino-factory setup --pathway apptainer --no-build
+
+# 6. Render the Slurm job, then submit from a host shell on the head node
+neutrino-factory submit --config configs/examples/power_law_numu_Ar.yaml --executor slurm
 # ...prints:  sbatch /ptmp/.../work/slurm/<run>.sbatch   -> run that on mppui1
-bin/nf check-status --config configs/examples/power_law_numu_Ar.yaml
+neutrino-factory check-status --config configs/examples/power_law_numu_Ar.yaml
 ```
+
+`cenv` usage reference: https://github.com/oschulz/container-env
 
 The full runbook, including the new-cluster Slurm requirements and filesystem
 guidance, is in `docs/mpp_cluster_usage.md`.
@@ -147,16 +156,12 @@ native binary on `$PATH` and otherwise wraps the generator in `docker run`.
 
 **Apptainer (cluster):** SIFs are built by `setup/build_apptainer_images.sh`
 from the hand-written definitions in `setup/apptainer/*.def` (each mirrors its
-`setup/Dockerfile.*` — update both together). The container layering is
-*inverted*: Apptainer cannot nest, so the Slurm array task enters the
-generator's SIF first and runs the CLI inside it, where the generator binary is
-native on `$PATH`. The generator images therefore also contain a Python
-runtime; the small `nf-base.sif` covers everything else (wizard, validation,
-merge, plots) via `bin/nf`.
+`setup/Dockerfile.*` — update both together). The Slurm array task runs inside
+the unified `nf-base.sif` image, which provides one Python runtime plus
+generator wrappers in a single interactive environment.
 
-Use `neutrino-factory list-generators --built` (or `bin/nf list-generators
---built` on the cluster) to see which catalogued images are present for the
-active runtime.
+Use `neutrino-factory list-generators --built` to see which catalogued images
+are present for the active runtime.
 
 ### GENIE code versions and cross-section splines
 

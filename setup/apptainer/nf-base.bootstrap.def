@@ -1,0 +1,43 @@
+# Bootstrap Apptainer definition for nf-base: Python runtime only.
+#
+# This image is intentionally small and fast to build. It provides only the
+# framework Python runtime/dependencies and is used for:
+#   1) cenv first-time setup + `pip install -e .`
+#   2) build-time catalog queries on hosts with an old system Python
+#
+# The composed unified runtime image is built from setup/apptainer/nf-base.def.
+
+Bootstrap: docker
+From: python:3.13-slim
+
+%post
+    pip install --no-cache-dir \
+        "PyYAML>=6.0" \
+        "h5py>=3.10" \
+        "numpy>=1.24" \
+        "uproot>=5.0" \
+        "awkward>=2.0" \
+        "matplotlib>=3.7"
+
+    # Empty payload roots used as composition fallbacks when some generator
+    # payload SIFs are not available yet.
+    mkdir -p \
+      /opt/nf/generators/genie \
+      /opt/nf/generators/gibuu \
+      /opt/nf/generators/nuwro
+        # Placeholder ROOT path so nf-base composition can always copy a gibuu
+        # stage root tree, even when the gibuu stage is the bootstrap fallback.
+        mkdir -p /opt/root/lib /opt/root/bin
+
+%test
+    python3 -c "import yaml, h5py, numpy, uproot, awkward, matplotlib"
+
+%labels
+    org.neutrino-factory.image nf-base-bootstrap
+
+%help
+    Bootstrap neutrino-factory runtime (Python 3.13 + runtime deps).
+    Typical first use on ODSL:
+      cenv --create nf-env <nf-base.sif>
+      cenv nf-env
+      pip install -e .

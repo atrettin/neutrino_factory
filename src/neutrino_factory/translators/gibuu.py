@@ -157,7 +157,8 @@ class GiBUUTranslator(ConfigTranslator):
         seed: int,
     ) -> str:
         # Fortran namelist jobcard. path_to_input points at the buuinput data
-        # shipped in the Docker image; EventFormat=4 selects RootTuple ROOT
+        # in the staged payload tree used by both the standalone GiBUU payload
+        # image and the composed nf-base runtime; EventFormat=4 selects RootTuple ROOT
         # output. numTimeSteps=0 skips FSI transport for a fast, valid event
         # file (sufficient for the ROOT-output smoke test).
         #
@@ -184,7 +185,7 @@ class GiBUUTranslator(ConfigTranslator):
       numEnsembles    = {num_ensembles}
       numTimeSteps    = 0
       num_runs_SameEnergy = 1
-      path_to_input   = '/opt/GiBUU/buuinput'
+    path_to_input   = '/opt/nf/generators/gibuu/GiBUU/buuinput'
       localEnsemble   = .true.
 /
 &initRandom

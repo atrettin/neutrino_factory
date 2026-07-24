@@ -47,7 +47,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     _print_json(
         {
             "manifest_path": manifest_path,
-            "task_count": manifest["task_count"],
+            "task_count": len(manifest["tasks"]),
             "executor": config["run"]["executor"],
             "run_name": config["run"]["name"],
         }

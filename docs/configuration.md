@@ -18,7 +18,7 @@ The common YAML config is the source of truth for both the local and Slurm execu
 `neutrino-factory setup` writes the storage roots and the container runtime
 choice (`NF_CONTAINER_RUNTIME=docker|apptainer|auto`) to a `.env` file at the
 repo root. Every CLI invocation, setup script, rendered sbatch script, and
-`bin/nf` loads this file automatically with **setdefault semantics**, giving
+task launcher loads this file automatically with **setdefault semantics**, giving
 the precedence order:
 
 1. real environment variables (always win),
@@ -28,6 +28,36 @@ the precedence order:
 The `storage` config values reference the same variables via `${VAR:-default}`
 expansion, so one `.env` drives the YAML config, the shell scripts, and the
 Slurm jobs consistently.
+
+## Slurm manifest schema (v3)
+
+`neutrino-factory submit --executor slurm` writes `work/manifests/<run>.json`
+with a compact schema (manifest version 3).
+
+Top-level keys:
+- `manifest_version`
+- `created_utc`
+- `run_name`
+- `config_path`
+- `executor`
+- `tasks`
+
+Task keys:
+- `task_index`
+- `generator_name`
+- `code_version`
+- `config_version`
+- `chunk_id`
+- `start_event`
+- `event_count`
+- `seed`
+- `run_name`
+- `flux`
+
+Derived values (not stored as explicit task fields):
+- generator version identifier: `<code_version>+<config_version>`
+- tokenized version directory name: non `[A-Za-z0-9._-]` replaced with `_`
+- total task count: `len(tasks)`
 
 ## Example
 

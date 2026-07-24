@@ -21,7 +21,7 @@ NEUT setup placeholder
 
 Automated NEUT source download is intentionally deferred in this first version.
 Use this location to place a site-approved source bundle or prebuilt installation,
-and then extend the runtime wrapper accordingly.
+and then extend the unified runtime generator wrapper accordingly.
 EOF
 
 write_metadata "$META_DIR" \

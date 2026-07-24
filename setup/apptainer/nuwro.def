@@ -2,9 +2,8 @@
 # Hand-translated from setup/Dockerfile.nuwro — UPDATE BOTH TOGETHER.
 # Differences from the Dockerfile (deliberate, see docs/design_decisions.md):
 #   * No --platform pinning: cluster builds run on native x86_64.
-#   * The runtime stage additionally installs the neutrino-factory Python
-#     runtime dependencies, because on the cluster the Slurm task runs the CLI
-#     *inside* this image (Apptainer cannot nest containers).
+#   * Runtime payload is staged under /opt/nf/generators/nuwro for composition
+#     into the unified nf-base runtime image.
 #
 # Build (on odslserv01/02, NOT the Slurm head node):
 #   apptainer build --build-arg JOBS=32 \
@@ -141,53 +140,51 @@ Stage: final
     ROOT_VERSION=6.30.10
 
 %files from builder
-    /opt/root /opt/root
-    /opt/ROOTEGPythia6 /opt/ROOTEGPythia6
-    /opt/nuwro /opt/nuwro
+    /opt/root /opt/nf/generators/nuwro/root
+    /opt/ROOTEGPythia6 /opt/nf/generators/nuwro/ROOTEGPythia6
+    /opt/nuwro /opt/nf/generators/nuwro/nuwro
 
 %post
     export DEBIAN_FRONTEND=noninteractive
     apt-get update && apt-get install -y --no-install-recommends \
-        python3 \
-        python3-pip \
         libgomp1 \
         libgfortran5 \
         libfreetype6 \
         g++ \
         && rm -rf /var/lib/apt/lists/*
 
-    # neutrino-factory runtime deps: the Slurm task runs the CLI inside this
-    # image (Apptainer cannot nest). Mirrors pyproject.toml [project.dependencies].
-    pip3 install --no-cache-dir \
-        "PyYAML>=6.0" \
-        "h5py>=3.10" \
-        "numpy>=1.24" \
-        "uproot>=5.0" \
-        "awkward>=2.0" \
-        "matplotlib>=3.7"
-
     # The ROOTEGPythia6 PCM bakes in its build-time path (/opt/rooted-build,
     # persistent — unlike /tmp, which Apptainer shadows with a host bind at
     # runtime); symlink so Cling finds it.
-    mkdir -p /opt/rooted-build
-    ln -s /opt/ROOTEGPythia6/lib/libTPythia6_rdict.pcm \
-        /opt/rooted-build/libTPythia6_rdict.pcm
+    mkdir -p /opt/nf/generators/nuwro/rooted-build
+    ln -s /opt/nf/generators/nuwro/ROOTEGPythia6/lib/libTPythia6_rdict.pcm \
+        /opt/nf/generators/nuwro/rooted-build/libTPythia6_rdict.pcm
+
+    mkdir -p /opt/nf/env
+    cat > /opt/nf/env/nuwro.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+prefix=/opt/nf/generators/nuwro
+export ROOTSYS="$prefix/root"
+export ROOTEGPythia6_ROOT="$prefix/ROOTEGPythia6"
+export PATH="$prefix/nuwro/bin:$prefix/root/bin:${PATH}"
+export LD_LIBRARY_PATH="$prefix/nuwro/lib:$prefix/root/lib:$prefix/ROOTEGPythia6/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+EOF
+    chmod +x /opt/nf/env/nuwro.sh
 
 %environment
-    export ROOTSYS=/opt/root
-    export ROOTEGPythia6_ROOT=/opt/ROOTEGPythia6
-    export PATH=/opt/nuwro/bin:/opt/root/bin:$PATH
-    export LD_LIBRARY_PATH=/opt/nuwro/lib:/opt/root/lib:/opt/ROOTEGPythia6/lib
+    export ROOTSYS=/opt/nf/generators/nuwro/root
+    export ROOTEGPythia6_ROOT=/opt/nf/generators/nuwro/ROOTEGPythia6
+    export PATH=/opt/nf/generators/nuwro/nuwro/bin:/opt/nf/generators/nuwro/root/bin:$PATH
+    export LD_LIBRARY_PATH=/opt/nf/generators/nuwro/nuwro/lib:/opt/nf/generators/nuwro/root/lib:/opt/nf/generators/nuwro/ROOTEGPythia6/lib
 
 %test
-    test -x /opt/nuwro/bin/nuwro
-    python3 -c "import yaml, h5py, numpy, uproot, awkward"
+    test -x /opt/nf/generators/nuwro/nuwro/bin/nuwro
 
 %labels
     org.neutrino-factory.image nuwro
     org.neutrino-factory.source setup/Dockerfile.nuwro
 
 %help
-    NuWro {{ NUWRO_TAG }} with ROOT {{ ROOT_VERSION }}, ROOTEGPythia6, and the
-    neutrino-factory Python runtime. Run nuwro from /opt/nuwro so it can find
-    its data/ directory.
+    NuWro {{ NUWRO_TAG }} payload image for unified runtime composition.
+    Runtime payload root: /opt/nf/generators/nuwro.

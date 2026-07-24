@@ -42,21 +42,14 @@ def build_task_manifest(config: dict[str, Any]) -> dict[str, Any]:
     task_index = 0
     for generator_offset, generator_instance in enumerate(generator_instances):
         generator_name = generator_instance["name"]
-        generator_version_id = generator_instance["version_id"]
-        generator_version_token = _safe_token(generator_version_id)
         for chunk_id, (start_event, stop_event) in enumerate(ranges):
             task = {
                 "task_index": task_index,
                 "generator_name": generator_name,
-                "generator_config": dict(generator_instance["config"]),
                 "code_version": generator_instance["code_version"],
                 "config_version": generator_instance["config_version"],
-                "image": generator_instance["image"],
-                "generator_version_id": generator_version_id,
-                "generator_version_token": generator_version_token,
                 "chunk_id": chunk_id,
                 "start_event": start_event,
-                "stop_event": stop_event,
                 "event_count": stop_event - start_event,
                 "seed": int(run["seed"]) + generator_offset * 1000 + chunk_id,
                 "run_name": run["name"],
@@ -68,12 +61,11 @@ def build_task_manifest(config: dict[str, Any]) -> dict[str, Any]:
             task_index += 1
 
     return {
-        "manifest_version": 2,
+        "manifest_version": 3,
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "run_name": run["name"],
         "config_path": config.get("config_path"),
         "executor": run.get("executor", "local"),
-        "task_count": len(tasks),
         "tasks": tasks,
     }
 
@@ -95,7 +87,7 @@ def write_manifest(config: dict[str, Any], manifest_path: str | Path | None = No
 
 def render_sbatch_script(config: dict[str, Any], manifest_path: str | Path) -> str:
     manifest = build_task_manifest(config)
-    array_max = max(0, int(manifest["task_count"]) - 1)
+    array_max = max(0, len(manifest["tasks"]) - 1)
     slurm = config["slurm"]
     # Slurm executes a spool *copy* of the sbatch file, so BASH_SOURCE cannot
     # locate the repo. Embed the absolute repo root at render time instead
@@ -103,23 +95,13 @@ def render_sbatch_script(config: dict[str, Any], manifest_path: str | Path) -> s
     repo_root = Path(__file__).resolve().parents[2]
 
     if containers.runtime() == "apptainer":
-        # Inverted container layering: the array task enters the generator's
-        # SIF first and runs the CLI inside it, where the generator binary is
-        # native on $PATH (Apptainer cannot nest). One SIF path per task index;
-        # an empty entry (no catalogued image) runs on the host, e.g. stubs.
-        sif_entries = "\n".join(
-            f'  "{containers.sif_path(task["image"]) if task["image"] else ""}"'
-            for task in manifest["tasks"]
-        )
-        task_launcher = f"""TASK_SIFS=(
-{sif_entries}
-)
-SIF="${{TASK_SIFS[$SLURM_ARRAY_TASK_ID]}}"
-if [[ -n "$SIF" ]]; then
-  apptainer exec "$SIF" bash "{repo_root}/jobs/run_task.sh" "{config.get('config_path', '')}" "{manifest_path}" "${{SLURM_ARRAY_TASK_ID}}"
-else
-  bash "{repo_root}/jobs/run_task.sh" "{config.get('config_path', '')}" "{manifest_path}" "${{SLURM_ARRAY_TASK_ID}}"
-fi"""
+        # Unified Apptainer runtime: every task runs inside nf-base.sif.
+        task_launcher = f"""NF_BASE_SIF="${{NF_IMAGE_ROOT:-{repo_root}/software/images}}/nf-base.sif"
+if [[ ! -f "$NF_BASE_SIF" ]]; then
+    echo "ERROR: unified Apptainer runtime image not found: $NF_BASE_SIF" >&2
+    exit 1
+fi
+apptainer exec "$NF_BASE_SIF" bash "{repo_root}/jobs/run_task.sh" "{config.get('config_path', '')}" "{manifest_path}" "${{SLURM_ARRAY_TASK_ID}}"""
         python_export = ""
     else:
         task_launcher = (
