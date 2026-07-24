@@ -127,7 +127,7 @@ def run_local(config: dict[str, Any], manifest_path: str | Path | None = None) -
 
 def run_task_from_manifest(
     config: dict[str, Any],
-    manifest_path: str | Path,
+    manifest_path: str | Path | dict[str, Any],
     task_index: int,
     execution_mode: str | None = None,
 ) -> str:
