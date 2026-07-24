@@ -29,9 +29,9 @@ class GenieAdapter(GeneratorAdapter):
             "repo": "https://github.com/GENIE-MC/Generator",
             "git_ref": "R-3_06_00",
         },
-        "R-3_04_02": {
+        "R-3_04_00": {
             "repo": "https://github.com/GENIE-MC/Generator",
-            "git_ref": "R-3_04_02",
+            "git_ref": "R-3_04_00",
         },
     }
 
