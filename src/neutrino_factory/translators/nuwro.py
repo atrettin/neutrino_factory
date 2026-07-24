@@ -3,12 +3,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from .base import ConfigTranslator
-from ..flux import build_flux
+from ..flux import Flux, build_flux
 
 # Number of equal-width bins used to approximate a continuous spectrum as a
 # NuWro `beam_energy` histogram. NuWro's parser caps at 5000 bins.
 FLUX_NBINS = 500
+
+# Cross section unit scale: raw NuWro weights are a plain cross section value
+# in cm^2 (see compute_xsec_weight); this rescales to the common "1e-38 cm^2"
+# convention so numbers stay O(1) near 1 GeV instead of O(1e-38).
+XSEC_SCALE = 1e38
 
 # PDG codes for NuWro's beam_particle parameter.
 PARTICLE_PDG = {
@@ -70,12 +77,72 @@ class NuWroTranslator(ConfigTranslator):
             "number_of_events": int(task["event_count"]),
             "seed": seed,
             "flux_model": flux_config["type"],
+            "flux_config": flux_config,
             "mode": config["physics"].get("mode", "inclusive"),
             "code_version": task["code_version"],
             "config_version": task["config_version"],
             "generator_version_id": task.get("generator_version_id"),
             "nuwro_params": nuwro_params,
         }
+
+    def compute_xsec_weight(
+        self,
+        energies_gev: np.ndarray,
+        raw_weights: np.ndarray,
+        translated_config: dict[str, Any],
+        flux: Flux,
+    ) -> np.ndarray:
+        """Recover the physical, energy-resolved cross section from NuWro output.
+
+        NuWro rejection-samples: every accepted event's raw ``weight`` (the
+        ``e/weight`` ROOT branch) is the same constant value for the whole
+        run - the flux-averaged total cross section, in cm^2. This is set in
+        NuWro's production event loop (``NuWro::real_events``, ``src/nuwro.cc``):
+        ``e->weight = _procesy.total();``, where ``chooser::total()``
+        (``src/chooser.h``) sums the flux-averaged mean cross section over all
+        active dynamics channels. The energy dependence of the physical
+        process lives entirely in how many events land in each energy bin
+        (events are sampled with density proportional to flux(E) * sigma(E)),
+        not in the per-event weight value.
+
+        This raw weight is already a per-target-nucleon quantity, not a
+        whole-nucleus total: each event's target nucleon is drawn by
+        ``nucleus::get_nucleon()`` (``src/nucleus.cc``) as a single
+        representative nucleon of the whole nucleus, chosen proton vs.
+        neutron with probability equal to its isotopic fraction
+        (``frac_proton()``/``frac_neutron()``) - i.e. uniformly over all A
+        nucleons - and no compensating factor of A is applied anywhere in
+        ``qelevent1.cc``/``makeevent()`` afterwards. So the ensemble average
+        of the raw weight already is the isospin-weighted per-nucleon cross
+        section (confirmed empirically: NuWro's own console total, rescaled
+        by ``XSEC_SCALE``, comes out to ~1 near 1 GeV - exactly the expected
+        per-nucleon magnitude). Dividing by the target nucleon count again
+        would double-count this normalization, so this method does not do so.
+
+        Recovering dsigma/dE(E) means dividing each event's raw weight by the
+        (normalized-to-unit-integral) flux density at its own energy and by
+        the number of events - i.e. the raw weight's inverse flux, matching
+        the standard "weight = inverse of the flux" recipe for
+        rejection-sampled generators.
+        """
+        edges, contents = flux.to_histogram(nbins=FLUX_NBINS)
+        widths = np.diff(edges)
+        clipped = np.clip(contents, 0.0, None)
+        integral = float(np.sum(clipped * widths))
+
+        xsec_weight = np.zeros_like(raw_weights, dtype=np.float64)
+        if integral <= 0.0:
+            return xsec_weight
+
+        bin_index = np.clip(
+            np.searchsorted(edges, energies_gev, side="right") - 1, 0, len(clipped) - 1
+        )
+        flux_density = clipped[bin_index]
+        n_events = len(energies_gev)
+        nonzero = flux_density > 0.0
+        flux_hat = flux_density[nonzero] / integral
+        xsec_weight[nonzero] = raw_weights[nonzero] * XSEC_SCALE / (n_events * flux_hat)
+        return xsec_weight
 
     @staticmethod
     def _beam_energy(flux: Any) -> str:

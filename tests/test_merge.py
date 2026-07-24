@@ -28,6 +28,7 @@ def _write_chunk(path: Path, generator: str, code_version: str, config_version: 
             "seed": 1,
             "energy_gev": 1.0 + i,
             "weight": 1.0,
+            "xsec_weight": 1.0,
             "interaction": "qel",
             "probe": "numu",
             "target": "Ar40",

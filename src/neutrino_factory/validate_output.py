@@ -42,6 +42,7 @@ REQUIRED_COLUMNS = (
     "seed",
     "energy_gev",
     "weight",
+    "xsec_weight",
     "interaction",
     "probe",
     "target",

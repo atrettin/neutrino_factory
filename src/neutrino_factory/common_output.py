@@ -9,7 +9,7 @@ import numpy as np
 
 
 STRING_DTYPE = h5py.string_dtype(encoding="utf-8")
-EVENT_NUMERIC_FIELDS = ("event_id", "seed", "energy_gev", "weight")
+EVENT_NUMERIC_FIELDS = ("event_id", "seed", "energy_gev", "weight", "xsec_weight")
 EVENT_STRING_FIELDS = ("interaction", "probe", "target", "generator")
 EVENT_FIELDS = (*EVENT_NUMERIC_FIELDS, *EVENT_STRING_FIELDS)
 
@@ -75,6 +75,7 @@ def _read_event_columns(handle: h5py.File) -> dict[str, np.ndarray]:
         "seed": np.asarray(event_group["seed"][()], dtype=np.int64),
         "energy_gev": np.asarray(event_group["energy_gev"][()], dtype=np.float64),
         "weight": np.asarray(event_group["weight"][()], dtype=np.float64),
+        "xsec_weight": np.asarray(event_group["xsec_weight"][()], dtype=np.float64),
     }
     for key in EVENT_STRING_FIELDS:
         columns[key] = _decode_text_array(np.asarray(event_group[key][()]))
@@ -89,6 +90,7 @@ def _rows_from_event_columns(columns: dict[str, np.ndarray]) -> list[dict[str, A
             "seed": int(columns["seed"][index]),
             "energy_gev": float(columns["energy_gev"][index]),
             "weight": float(columns["weight"][index]),
+            "xsec_weight": float(columns["xsec_weight"][index]),
             "interaction": str(columns["interaction"][index]),
             "probe": str(columns["probe"][index]),
             "target": str(columns["target"][index]),
@@ -105,6 +107,7 @@ def _concat_event_columns(chunks: list[dict[str, np.ndarray]]) -> dict[str, np.n
             "seed": np.array([], dtype=np.int64),
             "energy_gev": np.array([], dtype=np.float64),
             "weight": np.array([], dtype=np.float64),
+            "xsec_weight": np.array([], dtype=np.float64),
             "interaction": np.array([], dtype="U"),
             "probe": np.array([], dtype="U"),
             "target": np.array([], dtype="U"),
@@ -126,6 +129,7 @@ def write_common_hdf5(output_path: str | Path, metadata: dict[str, Any], events:
     seeds = np.array([int(event["seed"]) for event in events], dtype=np.int64) if events else np.array([], dtype=np.int64)
     energies = np.array([float(event["energy_gev"]) for event in events], dtype=np.float64) if events else np.array([], dtype=np.float64)
     weights = np.array([float(event.get("weight", 1.0)) for event in events], dtype=np.float64) if events else np.array([], dtype=np.float64)
+    xsec_weights = np.array([float(event.get("xsec_weight", 1.0)) for event in events], dtype=np.float64) if events else np.array([], dtype=np.float64)
     interactions = np.array([str(event.get("interaction", "unknown")) for event in events], dtype=STRING_DTYPE)
     probes = np.array([str(event.get("probe", "unknown")) for event in events], dtype=STRING_DTYPE)
     targets = np.array([str(event.get("target", "unknown")) for event in events], dtype=STRING_DTYPE)
@@ -144,6 +148,7 @@ def write_common_hdf5(output_path: str | Path, metadata: dict[str, Any], events:
         event_group.create_dataset("seed", data=seeds)
         event_group.create_dataset("energy_gev", data=energies)
         event_group.create_dataset("weight", data=weights)
+        event_group.create_dataset("xsec_weight", data=xsec_weights)
         event_group.create_dataset("interaction", data=interactions, dtype=STRING_DTYPE)
         event_group.create_dataset("probe", data=probes, dtype=STRING_DTYPE)
         event_group.create_dataset("target", data=targets, dtype=STRING_DTYPE)

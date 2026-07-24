@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
+
 from ..common_output import version_metadata, write_common_hdf5
+from ..flux import build_flux
+from ..translators.nuwro import NuWroTranslator
 from .base import OutputNormalizer
 
 
@@ -78,9 +82,16 @@ class NuWroNormalizer(OutputNormalizer):
                     f"Cannot read interaction flags from 'e/flag/flag.*': {exc}"
                 ) from exc
 
+        energies_gev = np.asarray(energies_mev, dtype=np.float64) / 1000.0
+        weights_arr = np.asarray(weights, dtype=np.float64)
+        flux = build_flux(translated["flux_config"])
+        xsec_weights = NuWroTranslator().compute_xsec_weight(
+            energies_gev, weights_arr, translated, flux
+        )
+
         events = []
-        for i, (e_mev, w, qel, res, dis, coh, mec) in enumerate(
-            zip(energies_mev, weights, flag_qel, flag_res, flag_dis, flag_coh, flag_mec)
+        for i, (e_gev, w, xw, qel, res, dis, coh, mec) in enumerate(
+            zip(energies_gev, weights, xsec_weights, flag_qel, flag_res, flag_dis, flag_coh, flag_mec)
         ):
             if qel:
                 itype = "qel"
@@ -97,8 +108,9 @@ class NuWroNormalizer(OutputNormalizer):
             events.append({
                 "event_id": start_event + i,
                 "seed": int(task["seed"]),
-                "energy_gev": float(e_mev) / 1000.0,
+                "energy_gev": float(e_gev),
                 "weight": float(w),
+                "xsec_weight": float(xw),
                 "interaction": itype,
                 "probe": probe,
                 "target": target,

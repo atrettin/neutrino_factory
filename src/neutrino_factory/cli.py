@@ -11,7 +11,7 @@ from .common_output import MergeError
 from .config import ConfigError, load_config, load_env_file
 from .local import run_local, run_task_from_manifest
 from .merge import merge_outputs
-from .plots import make_plots
+from .plots import DEFAULT_BINS, make_plots
 from .slurm import write_manifest, write_sbatch_script
 from .validate_output import (
     expected_outputs,
@@ -235,7 +235,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
 
 
 def cmd_plot_output(args: argparse.Namespace) -> int:
-    written = make_plots(args.input, args.output_dir, args.prefix)
+    written = make_plots(args.input, args.output_dir, args.prefix, bins=args.bins)
     _print_json({"input": args.input, "plots": written})
     return 0
 
@@ -595,11 +595,14 @@ def build_parser() -> argparse.ArgumentParser:
         "plot-output",
         help="Plot a normalized HDF5 output file",
         description=(
-            "Render three diagnostic plots from a single common-output HDF5 file: "
+            "Render five diagnostic plots from a single common-output HDF5 file: "
             "a stacked horizontal bar of event counts by interaction type (with the "
-            "expected event count indicated), the simulated flux vs. energy, and a "
-            "histogram of the simulated event energies. Writes three separate PNG "
-            "files (<prefix>_interactions.png, <prefix>_flux.png, <prefix>_energy.png)."
+            "expected event count indicated), the simulated flux vs. energy, a "
+            "histogram of the simulated event energies (raw and weighted), and the "
+            "cross section vs. energy broken down by interaction type. Writes five "
+            "separate PNG files (<prefix>_interactions.png, <prefix>_flux.png, "
+            "<prefix>_energy.png, <prefix>_energy_weighted.png, "
+            "<prefix>_xsec_by_type.png)."
         ),
         epilog=(
             "Example:\n"
@@ -613,6 +616,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plot_parser.add_argument(
         "--prefix", help="Filename prefix for the PNGs (default: the input file stem)"
+    )
+    plot_parser.add_argument(
+        "--bins",
+        type=int,
+        default=DEFAULT_BINS,
+        help=(
+            "Number of log-spaced energy bins for the energy and cross-section "
+            f"histograms (default: {DEFAULT_BINS}; use fewer for small event counts)"
+        ),
     )
     plot_parser.set_defaults(func=cmd_plot_output)
 
