@@ -15,14 +15,24 @@
 
 %post
     export DEBIAN_FRONTEND=noninteractive
-    # Fixed, generator-agnostic runtime baseline: the union of shared-object
-    # dependencies across payloads (payloads bundle their own component trees
-    # under /opt/nf/generators, but not the base C/Fortran runtimes).
+    # Fixed, generator-agnostic runtime baseline: the union of *system* shared
+    # libraries the payloads link against. Payloads bundle their own component
+    # trees under /opt/nf/generators (ROOT, GENIE, etc.), but the base C/Fortran
+    # and common scientific runtimes come from system packages here — the
+    # payloads' own apt-installed libs live in their image's /usr/lib and are NOT
+    # copied into this composed image. When a new generator/version needs a
+    # system lib not listed here, add it (a fixed union is simpler than trying to
+    # derive it per payload).
     apt-get update && apt-get install -y --no-install-recommends \
         libgfortran5 \
         libgomp1 \
         libfreetype6 \
         g++ \
+        libgsl27 \
+        libxml2 \
+        liblog4cpp5v5 \
+        libssl3 \
+        perl \
         && (apt-get install -y --no-install-recommends libpcre3 || apt-get install -y --no-install-recommends libpcre3t64) \
         && rm -rf /var/lib/apt/lists/*
 

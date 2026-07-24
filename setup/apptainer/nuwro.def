@@ -211,7 +211,7 @@ EOF
 %environment
     export ROOTSYS=/opt/nf/generators/nuwro/{{ NUWRO_TAG }}/root
     export ROOTEGPythia6_ROOT=/opt/nf/generators/nuwro/{{ NUWRO_TAG }}/ROOTEGPythia6
-    export PATH=/opt/nf/generators/nuwro/{{ NUWRO_TAG }}/nuwro/bin:/opt/nf/generators/nuwro/{{ NUWRO_TAG }}/root/bin:$PATH
+    export PATH=/opt/nf/generators/nuwro/{{ NUWRO_TAG }}/bin:/opt/nf/generators/nuwro/{{ NUWRO_TAG }}/nuwro/bin:/opt/nf/generators/nuwro/{{ NUWRO_TAG }}/root/bin:$PATH
     export LD_LIBRARY_PATH=/opt/nf/generators/nuwro/{{ NUWRO_TAG }}/nuwro/lib:/opt/nf/generators/nuwro/{{ NUWRO_TAG }}/root/lib:/opt/nf/generators/nuwro/{{ NUWRO_TAG }}/ROOTEGPythia6/lib
 
 %test

@@ -237,9 +237,13 @@ EOF
 EOF
 
 %environment
+    # bin/ (the self-contained wrappers) comes first so a standalone
+    # `apptainer exec genie.sif gevgen` routes through the same wrapper the
+    # composed nf-base uses — one source of truth for PATH/LD_LIBRARY_PATH
+    # (incl. the version-specific pythia6 lib dir the wrapper discovers).
     export GENIE=/opt/nf/generators/genie/{{ GENIE_TAG }}/genie
     export ROOTSYS=/opt/nf/generators/genie/{{ GENIE_TAG }}/root
-    export PATH=/opt/nf/generators/genie/{{ GENIE_TAG }}/genie/bin:/opt/nf/generators/genie/{{ GENIE_TAG }}/root/bin:$PATH
+    export PATH=/opt/nf/generators/genie/{{ GENIE_TAG }}/bin:/opt/nf/generators/genie/{{ GENIE_TAG }}/genie/bin:/opt/nf/generators/genie/{{ GENIE_TAG }}/root/bin:$PATH
     export LD_LIBRARY_PATH=/opt/nf/generators/genie/{{ GENIE_TAG }}/genie/lib:/opt/nf/generators/genie/{{ GENIE_TAG }}/root/lib:/opt/nf/generators/genie/{{ GENIE_TAG }}/lhapdf6/lib
 
 %test

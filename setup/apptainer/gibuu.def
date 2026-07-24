@@ -101,7 +101,7 @@ EOF
     export GIBUU_RELEASE={{ GIBUU_RELEASE }}
     export ROOTSYS=/opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}/root
     export GIBUU_INPUT=/opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}/GiBUU/buuinput
-    export PATH=/opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}/GiBUU/release{{ GIBUU_RELEASE }}/objects:/opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}/root/bin:$PATH
+    export PATH=/opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}/bin:/opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}/GiBUU/release{{ GIBUU_RELEASE }}/objects:/opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}/root/bin:$PATH
     export LD_LIBRARY_PATH=/opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}/usr_local/lib:/opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}/root/lib:${LD_LIBRARY_PATH:-}
 
 %test
