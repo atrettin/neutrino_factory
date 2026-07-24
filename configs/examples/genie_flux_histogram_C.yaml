@@ -21,7 +21,6 @@ target:
 physics:
   mode: inclusive
   current: cc
-  event_generator_list: CCQE
 
 generators:
   genie:

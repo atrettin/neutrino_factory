@@ -120,6 +120,8 @@ chunks explicitly with `neutrino-factory merge` if needed.
   `bash setup/build_apptainer_images.sh --bootstrap` on an odslserv node.
 - `neutrino-factory: command not found` in cenv → run one-time `pip install -e .`
   from the repo root inside that cenv session.
-- GENIE MEC (2p2h) crashes were only ever observed under amd64 *emulation* on
-  the dev laptop; on the cluster's native x86_64, re-test the default
-  event-generator list before restricting to CCQE (see STUBS.md).
+- GENIE MEC (2p2h) segfault on the first MEC event → the SIF was built from a
+  def that lacked `-Dminuit2=ON` in the ROOT build (root cause diagnosed
+  2026-07-15: GENIE null-derefs the Minuit2 minimizer it requests from
+  ROOT::Math::Factory). Rebuild `genie_R-3_06_00.sif` from the current
+  `setup/apptainer/genie.def` (see STUBS.md).

@@ -4,8 +4,7 @@
 #                     -f setup/Dockerfile.genie setup/
 # Run:   docker run --platform linux/amd64 --rm -v $PWD:/work -w /work \
 #          genie:<GENIE_TAG> gevgen -n 100 -p 14 -t 1000060120 -e 0.5,5.0 \
-#            --tune G18_10a_02_11a --event-generator-list CCQE \
-#            --seed 12345 -o test_events.root
+#            --tune G18_10a_02_11a --seed 12345 -o test_events.root
 #
 # ROOT 6.24.08 is used intentionally: it includes native TPythia6/libEGPythia6
 # and has TXMLEngine::GetAttr() returning "" for missing attributes. ROOT 6.26+

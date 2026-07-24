@@ -54,8 +54,9 @@ Docker-tarball transfer, no registry.
 **Why.** Automated Dockerfile→def translation (spython) is unreliable for
 multi-stage Dockerfiles and would add a dependency for a one-shot command;
 native cluster builds avoid multi-GB image transfers and produce genuinely
-native x86_64 binaries (also isolating the GENIE MEC crash, which was only
-seen under amd64 emulation). The cost is deliberate duplication: **Dockerfile
+native x86_64 binaries (native builds also helped rule emulation out as the
+cause of the GENIE MEC crash, later traced to ROOT being built without
+Minuit2). The cost is deliberate duplication: **Dockerfile
 and def must be updated together** (each def's header names its source).
 
 **Divergences allowed between the pairs**: defs drop `--platform` pinning, add

@@ -19,9 +19,6 @@ target:
 physics:
   mode: inclusive
   current: cc
-  # Restrict to CCQE: the default (MEC-inclusive) list segfaults under amd64
-  # emulation in this image (see STUBS.md).
-  event_generator_list: CCQE
 
 generators:
   genie:

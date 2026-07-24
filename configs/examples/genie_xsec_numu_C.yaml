@@ -19,8 +19,6 @@ target:
 physics:
   mode: inclusive
   current: cc
-  # Avoid the known MEC (2p2h) crash under amd64 emulation (see STUBS.md).
-  event_generator_list: CCQE
 
 generators:
   genie:
