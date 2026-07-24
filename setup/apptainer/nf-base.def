@@ -38,6 +38,7 @@
         liblog4cpp5v5 \
         libssl3 \
         libnsl2 \
+        libtbb12 \
         perl \
         && (apt-get install -y --no-install-recommends libpcre3 || apt-get install -y --no-install-recommends libpcre3t64) \
         && rm -rf /var/lib/apt/lists/* \
