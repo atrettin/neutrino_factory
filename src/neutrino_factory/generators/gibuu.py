@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 from .base import GeneratorAdapter
-from .. import containers
+from .. import catalog, containers
 from ..normalizers.gibuu import GiBUUNormalizer
 from ..translators.gibuu import GiBUUTranslator
 
@@ -38,6 +38,22 @@ class GiBUUAdapter(GeneratorAdapter):
     def translate_config(self, task: dict) -> dict:
         return GiBUUTranslator().translate(self.config, task)
 
+    # Placeholder the translator writes for the jobcard's path_to_input; resolved
+    # here because the buuinput location is runtime- and version-dependent.
+    _BUUINPUT_PLACEHOLDER = "@NF_GIBUU_INPUT@"
+
+    @staticmethod
+    def _buuinput_dir(code_version: str | None) -> str:
+        """Absolute buuinput path GiBUU reads, per the active container runtime.
+
+        Apptainer runs inside the version-namespaced payload tree; Docker uses
+        the flat image layout (setup/Dockerfile.gibuu: GIBUU_INPUT=/opt/GiBUU/buuinput).
+        """
+        if containers.runtime() == "apptainer":
+            cv = catalog._tag_safe(str(code_version or ""))
+            return f"/opt/nf/generators/gibuu/{cv}/GiBUU/buuinput"
+        return "/opt/GiBUU/buuinput"
+
     @staticmethod
     def _write_jobcard(work_dir: Path, jobcard: str) -> Path:
         jobcard_path = work_dir / "job.job"
@@ -56,7 +72,10 @@ class GiBUUAdapter(GeneratorAdapter):
     def build_run_command(self, translated_config: dict, work_dir: Path) -> list[str]:
         code_version = translated_config.get("code_version")
         work_dir.mkdir(parents=True, exist_ok=True)
-        self._write_jobcard(work_dir, translated_config["gibuu_jobcard"])
+        jobcard = translated_config["gibuu_jobcard"].replace(
+            self._BUUINPUT_PLACEHOLDER, self._buuinput_dir(code_version)
+        )
+        self._write_jobcard(work_dir, jobcard)
         flux_table = translated_config.get("gibuu_flux_table")
         if flux_table:
             self._write_flux_file(work_dir, flux_table)

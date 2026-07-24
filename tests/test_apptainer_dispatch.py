@@ -85,6 +85,38 @@ class ApptainerDispatchAdapterTests(unittest.TestCase):
             command, ["bash", "-c", "nf-run gibuu release2025 GiBUU.x < job.job"]
         )
 
+    def test_gibuu_jobcard_buuinput_path_is_runtime_and_version_aware(self) -> None:
+        jobcard = "&input\n    path_to_input   = '@NF_GIBUU_INPUT@'\n/\n"
+        translated = {"code_version": "release2025", "gibuu_jobcard": jobcard}
+
+        # Apptainer: version-namespaced payload tree.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = GiBUUAdapter({})
+            with patch.dict(os.environ, {"NF_CONTAINER_RUNTIME": "apptainer"}, clear=False):
+                with patch(
+                    "neutrino_factory.generators.gibuu.shutil.which",
+                    return_value="/usr/local/bin/GiBUU.x",
+                ):
+                    adapter.build_run_command(dict(translated), Path(tmpdir))
+            written = (Path(tmpdir) / "job.job").read_text()
+        self.assertIn(
+            "path_to_input   = '/opt/nf/generators/gibuu/release2025/GiBUU/buuinput'",
+            written,
+        )
+        self.assertNotIn("@NF_GIBUU_INPUT@", written)
+
+        # Docker: flat image layout.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = GiBUUAdapter({})
+            with patch.dict(os.environ, {"NF_CONTAINER_RUNTIME": "docker"}, clear=False):
+                with patch(
+                    "neutrino_factory.generators.gibuu.shutil.which",
+                    return_value="/usr/local/bin/GiBUU.x",
+                ):
+                    adapter.build_run_command(dict(translated), Path(tmpdir))
+            written = (Path(tmpdir) / "job.job").read_text()
+        self.assertIn("path_to_input   = '/opt/GiBUU/buuinput'", written)
+
     def test_docker_runtime_keeps_bare_binaries(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             gibuu = GiBUUAdapter({})
