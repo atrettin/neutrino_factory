@@ -86,9 +86,10 @@ class SetupWizardTests(unittest.TestCase):
             self.assertTrue((root / "work").is_dir())
 
     def test_inside_apptainer_container_defaults_to_apptainer_pathway(self) -> None:
-        # bin/nf runs the wizard inside nf-base.sif, where no container binary
-        # is on $PATH; APPTAINER_CONTAINER marks that case and must select the
-        # apptainer pathway without offering to run builds.
+        # A cenv session against nf-base.sif runs the wizard inside the
+        # container, where no container binary is on $PATH; APPTAINER_CONTAINER
+        # marks that case and must select the apptainer pathway without
+        # offering to run builds.
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             (root / "pyproject.toml").write_text("", encoding="utf-8")

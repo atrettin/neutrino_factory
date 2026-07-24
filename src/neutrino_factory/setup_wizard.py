@@ -142,8 +142,9 @@ def run_setup(args: argparse.Namespace) -> int:
     existing = _parse_env_file(env_path)
 
     # 1. Detect container runtimes. When the wizard itself runs inside an
-    # Apptainer container (bin/nf on the cluster), the apptainer binary is not
-    # on $PATH inside — but that *is* the apptainer pathway.
+    # Apptainer container (a cenv session against nf-base.sif on the cluster),
+    # the apptainer binary is not on $PATH inside — but that *is* the
+    # apptainer pathway.
     inside_apptainer = bool(
         os.environ.get("APPTAINER_CONTAINER") or os.environ.get("SINGULARITY_CONTAINER")
     )
@@ -152,7 +153,7 @@ def run_setup(args: argparse.Namespace) -> int:
     print("Detected container runtimes:")
     print(f"  docker:    {'yes' if have_docker else 'no'}")
     if inside_apptainer:
-        print("  apptainer: running inside an Apptainer container (bin/nf)")
+        print("  apptainer: running inside an Apptainer container (cenv)")
     else:
         print(f"  apptainer: {'yes' if have_apptainer else 'no'}")
 
@@ -233,7 +234,7 @@ def run_setup(args: argparse.Namespace) -> int:
             if inside_apptainer:
                 # Apptainer cannot nest, so builds must run in a host shell.
                 print(
-                    "\nThis wizard is running inside a container (bin/nf), so it "
+                    "\nThis wizard is running inside a container (cenv), so it "
                     "cannot launch apptainer builds itself. Run in a host shell "
                     "on odslserv01/02:\n"
                     "  bash setup/build_apptainer_images.sh\n"
@@ -271,8 +272,10 @@ def run_setup(args: argparse.Namespace) -> int:
     else:
         print("  1. On odslserv01/02 (host shell): bash setup/build_apptainer_images.sh")
         print("  2. Stage GENIE splines (host shell): bash setup/download_genie_xsec.sh")
-        print("  3. Check the catalog:   bin/nf list-generators --built")
-        print("  4. Render + submit:     bin/nf submit --config <cfg> --executor slurm")
+        print("  3. Enter a cenv session:  cenv --create nf-env \"$NF_IMAGE_ROOT/nf-base.sif\" "
+              "&& cenv nf-env")
+        print("  4. Check the catalog:   neutrino-factory list-generators --built")
+        print("  5. Render + submit:     neutrino-factory submit --config <cfg> --executor slurm")
         print("     then run the printed `sbatch ...` command in a host shell on mppui1.")
     if platform.system() == "Darwin" and pathway == "apptainer":
         print("\nNOTE: Apptainer cannot run on macOS — this configuration is only "
