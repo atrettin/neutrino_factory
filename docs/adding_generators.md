@@ -48,9 +48,18 @@ existing payloads' contract:
    GiBUU does). The catalog surfaces it so the build script passes
    `--build-arg NAME=value` without hard-coding.
 
-Add code versions by adding entries to the adapter's `CODE_VERSIONS`; build the
-payload (`setup/build_apptainer_images.sh --only <name>`) and recompose. Two
-versions of one generator with both payload SIFs present are composed side by
-side; a task selects one via `nf-run <generator> <code_version> <binary>`
-(emitted automatically by the adapter under the apptainer runtime), while bare
-binary names resolve to the default (highest) version.
+Add a code version by adding an entry to the adapter's `CODE_VERSIONS` **first**
+— the build script is catalog-driven and refuses to build a version it doesn't
+know (it fails loudly rather than silently composing nothing). Then build it:
+
+```bash
+setup/build_apptainer_images.sh --only <name> --code-version <new_version>
+```
+
+This builds the new payload SIF and **recomposes `nf-base.sif` unconditionally**
+(no `--force` needed — composition always reflects the current payload set).
+Existing payload SIFs are not rebuilt unless you pass `--force`. Two versions of
+one generator with both payload SIFs present are composed side by side; a task
+selects one via `nf-run <generator> <code_version> <binary>` (emitted
+automatically by the adapter under the apptainer runtime), while bare binary
+names resolve to the default (highest, sorted-last) version.

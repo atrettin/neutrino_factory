@@ -259,9 +259,11 @@ if [[ "$COMPOSE_ONLY" -ne 1 ]]; then
       || fail "--code-version requires --only with exactly one generator"
   fi
 
+  matched_rows=0
   while IFS=$'\t' read -r gen cv image ba_name ba_value; do
     [[ -n "$gen" ]] || continue
     [[ -z "$CODE_VERSION" || "$cv" == "$CODE_VERSION" ]] || continue
+    matched_rows=$((matched_rows + 1))
     def="$SCRIPT_DIR/apptainer/${gen}.def"
     [[ -f "$def" ]] || { log "No definition for '$gen' ($def) — skipping"; SKIPPED+=("$gen"); continue; }
 
@@ -280,6 +282,16 @@ if [[ "$COMPOSE_ONLY" -ne 1 ]]; then
       SKIPPED+=("$gen:$cv ($sif failed smoke test)")
     fi
   done < <(catalog_rows "$ONLY")
+
+  # A selection that matches no catalog row is almost always a typo or an
+  # unregistered version — fail loudly instead of silently composing nothing.
+  if [[ "$matched_rows" -eq 0 ]]; then
+    if [[ -n "$CODE_VERSION" ]]; then
+      fail "No catalog entry for ${ONLY:-generator} code_version '$CODE_VERSION'. Register it in the adapter's CODE_VERSIONS (e.g. GenieAdapter.CODE_VERSIONS in src/neutrino_factory/generators/genie.py), then re-run. Known versions: $(nf_cli list-generators ${ONLY:+--generator "$ONLY"} --json | apptainer exec "$NF_BASE_BOOTSTRAP_SIF" python3 -c 'import json,sys; print(", ".join(r["generator"]+":"+r["code_version"] for r in json.load(sys.stdin)["generators"]))')"
+    else
+      fail "No buildable generators matched${ONLY:+ --only $ONLY}. Check the name against: neutrino-factory list-generators."
+    fi
+  fi
 else
   log "Compose-only mode: skipping generator payload builds."
 fi
@@ -344,7 +356,11 @@ else
   done
   cat "$SCRIPT_DIR/apptainer/nf-base.def" >> "$tmp_nf_base_def"
 
-  build_def "$NF_BASE_SIF" "$tmp_nf_base_def"
+  # Always recompose (do not honour the skip-if-exists in build_def): composition
+  # is cheap and must reflect the current payload set, so adding/removing a
+  # generator version takes effect without requiring --force.
+  log "Composing $NF_BASE_SIF from ${#PAYLOADS[@]} payload(s)"
+  nice -n 15 apptainer build --force "$NF_BASE_SIF" "$tmp_nf_base_def"
   rm -f "$tmp_nf_base_def"
 
   apptainer exec "$NF_BASE_SIF" python3 -c "import yaml, h5py, numpy" \
