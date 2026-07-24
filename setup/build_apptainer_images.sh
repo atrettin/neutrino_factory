@@ -345,7 +345,7 @@ else
 
   apptainer exec "$NF_BASE_SIF" python3 -c "import yaml, h5py, numpy" \
     || fail "nf-base.sif (composed) failed its smoke test"
-  apptainer exec "$NF_BASE_SIF" command -v nf-run >/dev/null \
+  apptainer exec "$NF_BASE_SIF" bash -lc 'command -v nf-run' >/dev/null \
     || fail "nf-base.sif (composed) is missing the nf-run dispatcher"
 
   # Generic, descriptor-driven verification (no per-generator knowledge): every
@@ -374,7 +374,7 @@ else
     if [[ -z "${DEFAULT_SEEN[$gen]:-}" ]]; then
       default_bin="$(json_field "$NF_BASE_SIF" "$desc" 'd.get("default_binary","")')"
       if [[ -n "$default_bin" ]]; then
-        apptainer exec "$NF_BASE_SIF" command -v "$default_bin" >/dev/null \
+        apptainer exec "$NF_BASE_SIF" bash -lc "command -v '$default_bin'" >/dev/null \
           || fail "nf-base.sif (composed) missing default symlink for $gen ($default_bin)"
       fi
       DEFAULT_SEEN[$gen]=1
