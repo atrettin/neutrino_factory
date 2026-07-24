@@ -180,11 +180,16 @@ Stage: final
     GENIE_TAG=R-3_06_00
     ROOT_VERSION=6.24.08
 
+# Version-namespaced, self-contained payload root. Everything GENIE needs at
+# runtime lives under this one tree, so nf-base composition is a single generic
+# copy of /opt/nf/generators/genie/<code_version> (see nf-base.def). This
+# staging and the bin/ wrappers below are Apptainer-composition-only and have no
+# Docker counterpart — the Dockerfile installs to /opt/<component> directly.
 %files from builder
-    /opt/root /opt/nf/generators/genie/root
-    /opt/genie /opt/nf/generators/genie/genie
-    /opt/lhapdf6 /opt/nf/generators/genie/lhapdf6
-    /opt/pythia6 /opt/nf/generators/genie/pythia6
+    /opt/root /opt/nf/generators/genie/{{ GENIE_TAG }}/root
+    /opt/genie /opt/nf/generators/genie/{{ GENIE_TAG }}/genie
+    /opt/lhapdf6 /opt/nf/generators/genie/{{ GENIE_TAG }}/lhapdf6
+    /opt/pythia6 /opt/nf/generators/genie/{{ GENIE_TAG }}/pythia6
 
 %post
     export DEBIAN_FRONTEND=noninteractive
@@ -201,36 +206,45 @@ Stage: final
         g++ \
         && rm -rf /var/lib/apt/lists/*
 
-    # Pythia6 lib path is version-specific; register it with ldconfig so
-    # non-interactive runs can load libPythia6.so.
-    PYTHIA6_LIBDIR="$(find /opt/nf/generators/genie/pythia6 -maxdepth 4 -name 'libPythia6.so' \
-        -exec dirname {} \; | head -1)"
-    printf '%s\n' "${PYTHIA6_LIBDIR}" > /etc/ld.so.conf.d/pythia6.conf
-    printf '%s\n' /opt/nf/generators/genie/genie/lib /opt/nf/generators/genie/root/lib /opt/nf/generators/genie/lhapdf6/lib \
-        > /etc/ld.so.conf.d/genie.conf
-    ldconfig
+    CV="{{ GENIE_TAG }}"
+    PREFIX="/opt/nf/generators/genie/$CV"
+    mkdir -p "$PREFIX/bin"
 
-    mkdir -p /opt/nf/env
-    cat > /opt/nf/env/genie.sh <<'EOF'
+    # Single source of truth for GENIE's runtime env + launch logic (was the
+    # per-generator wrapper in nf-base.def). The wrapper locates its own payload
+    # root at run time, so its text is version-independent, and dispatches on its
+    # own basename so one body serves both gevgen and gntpc.
+    for gbin in gevgen gntpc; do
+    cat > "$PREFIX/bin/$gbin" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-prefix=/opt/nf/generators/genie
+prefix="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+self="$(basename "$0")"
 py6lib="$(find "$prefix"/pythia6 -maxdepth 4 -name 'libPythia6.so' -exec dirname {} \; | head -1)"
 export GENIE="$prefix/genie"
 export ROOTSYS="$prefix/root"
 export PATH="$GENIE/bin:$ROOTSYS/bin:${PATH}"
 export LD_LIBRARY_PATH="$GENIE/lib:$ROOTSYS/lib:$prefix/lhapdf6/lib${py6lib:+:$py6lib}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$GENIE/bin/$self" "$@"
 EOF
-    chmod +x /opt/nf/env/genie.sh
+    chmod +x "$PREFIX/bin/$gbin"
+    done
+
+    # Descriptor consumed by the generic composition/verification in
+    # build_apptainer_images.sh (no per-generator knowledge in the script).
+    cat > "$PREFIX/nf-payload.json" <<EOF
+{"schema_version":1,"generator":"genie","code_version":"$CV","binaries":["gevgen","gntpc"],"default_binary":"gevgen","smoke_paths":["genie/data","genie/config"]}
+EOF
 
 %environment
-    export GENIE=/opt/nf/generators/genie/genie
-    export ROOTSYS=/opt/nf/generators/genie/root
-    export PATH=/opt/nf/generators/genie/genie/bin:/opt/nf/generators/genie/root/bin:$PATH
-    export LD_LIBRARY_PATH=/opt/nf/generators/genie/genie/lib:/opt/nf/generators/genie/root/lib:/opt/nf/generators/genie/lhapdf6/lib
+    export GENIE=/opt/nf/generators/genie/{{ GENIE_TAG }}/genie
+    export ROOTSYS=/opt/nf/generators/genie/{{ GENIE_TAG }}/root
+    export PATH=/opt/nf/generators/genie/{{ GENIE_TAG }}/genie/bin:/opt/nf/generators/genie/{{ GENIE_TAG }}/root/bin:$PATH
+    export LD_LIBRARY_PATH=/opt/nf/generators/genie/{{ GENIE_TAG }}/genie/lib:/opt/nf/generators/genie/{{ GENIE_TAG }}/root/lib:/opt/nf/generators/genie/{{ GENIE_TAG }}/lhapdf6/lib
 
 %test
-    test -x /opt/nf/generators/genie/genie/bin/gevgen
+    test -x /opt/nf/generators/genie/{{ GENIE_TAG }}/bin/gevgen
+    test -x /opt/nf/generators/genie/{{ GENIE_TAG }}/genie/bin/gevgen
 
 %labels
     org.neutrino-factory.image genie
@@ -238,4 +252,4 @@ EOF
 
 %help
     GENIE {{ GENIE_TAG }} payload image for unified runtime composition.
-    Runtime payload root: /opt/nf/generators/genie.
+    Runtime payload root: /opt/nf/generators/genie/{{ GENIE_TAG }}.

@@ -21,6 +21,12 @@ class GeneratorAdapter(ABC):
     # tunes from staged cross-section files on disk.
     CODE_VERSIONS: dict[str, dict[str, Any]] = {}
 
+    # Name of the Apptainer/Docker build argument that selects this generator's
+    # code version (e.g. GENIE's ``GENIE_TAG``). Surfaced through the catalog so
+    # ``build_apptainer_images.sh`` no longer hard-codes a per-generator mapping.
+    # ``None`` for generators that are not buildable.
+    build_arg_name: str | None = None
+
     def __init__(self, config: dict[str, Any]):
         self.config = config
 
@@ -75,6 +81,20 @@ class GeneratorAdapter(ABC):
         if code_version not in cls.CODE_VERSIONS:
             return None
         return f"{cls.name}:{code_version}"
+
+    @classmethod
+    def build_arg(cls, code_version: str) -> dict[str, str] | None:
+        """The image build argument selecting ``code_version``.
+
+        Returns ``{"name": ..., "value": ...}`` (consumed by
+        ``build_apptainer_images.sh`` as ``--build-arg NAME=value``) or ``None``
+        when the generator declares no ``build_arg_name``. Generators whose build
+        arg is a transform of the code version (e.g. GiBUU strips the ``release``
+        prefix) override this method.
+        """
+        if not cls.build_arg_name:
+            return None
+        return {"name": cls.build_arg_name, "value": code_version}
 
     @classmethod
     def is_buildable(cls, code_version: str) -> bool:

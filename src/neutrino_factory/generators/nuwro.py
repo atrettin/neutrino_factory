@@ -13,6 +13,7 @@ from ..translators.nuwro import NuWroTranslator
 class NuWroAdapter(GeneratorAdapter):
     name = "nuwro"
     executable = "nuwro"
+    build_arg_name = "NUWRO_TAG"
 
     CODE_VERSIONS = {
         "nuwro_25.11": {
@@ -51,7 +52,7 @@ class NuWroAdapter(GeneratorAdapter):
         # Native binary first: on the cluster the Slurm task already runs inside
         # the generator's Apptainer image (which cannot nest). Do not reorder.
         if shutil.which(self.binary_name()):
-            return nuwro_args
+            return containers.apptainer_dispatch(self.name, code_version, nuwro_args)
 
         if self.container_available(code_version):
             self.ensure_container_wrappable()

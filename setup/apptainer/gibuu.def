@@ -64,27 +64,49 @@ From: rootproject/root:{{ ROOT_BASE_TAG }}
     make buildRootTuple_POS
     make -j"{{ JOBS }}" FORT=gfortran withROOT=1
 
-    mkdir -p /opt/nf/generators/gibuu /opt/nf/env
-    cp -a /opt/GiBUU /opt/nf/generators/gibuu/GiBUU
-    cp -a /usr/local /opt/nf/generators/gibuu/usr_local
-    cat > /opt/nf/env/gibuu.sh <<'EOF'
+    # Version-namespaced, self-contained payload root. Fold ROOT (from the
+    # rootproject base image at /opt/root) INTO the payload so nf-base
+    # composition is a single generic copy of
+    # /opt/nf/generators/gibuu/<code_version> with no per-generator extra copies.
+    # This staging + the bin/ wrapper are Apptainer-composition-only (no Docker
+    # counterpart).
+    CV="release{{ GIBUU_RELEASE }}"
+    PREFIX="/opt/nf/generators/gibuu/$CV"
+    mkdir -p "$PREFIX/bin"
+    cp -a /opt/GiBUU "$PREFIX/GiBUU"
+    cp -a /usr/local "$PREFIX/usr_local"
+    cp -a /opt/root "$PREFIX/root"
+
+    # Single source of truth for GiBUU's runtime env + launch logic (was the
+    # per-generator wrapper in nf-base.def). Self-locating, so version-agnostic.
+    cat > "$PREFIX/bin/GiBUU.x" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-prefix=/opt/nf/generators/gibuu
+prefix="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+bin="$(find "$prefix/GiBUU" -type f -name 'GiBUU.x' | head -1)"
+[[ -n "$bin" ]] || { echo "GiBUU.x payload binary not found" >&2; exit 127; }
+export ROOTSYS="$prefix/root"
 export GIBUU_INPUT="$prefix/GiBUU/buuinput"
-export PATH="$prefix/GiBUU/release2025/objects:${PATH}"
-export LD_LIBRARY_PATH="$prefix/usr_local/lib:${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PATH="$(dirname "$bin"):$ROOTSYS/bin:${PATH}"
+export LD_LIBRARY_PATH="$prefix/usr_local/lib:$ROOTSYS/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$bin" "$@"
 EOF
-    chmod +x /opt/nf/env/gibuu.sh
+    chmod +x "$PREFIX/bin/GiBUU.x"
+
+    cat > "$PREFIX/nf-payload.json" <<EOF
+{"schema_version":1,"generator":"gibuu","code_version":"$CV","binaries":["GiBUU.x"],"default_binary":"GiBUU.x","smoke_paths":["GiBUU/buuinput"]}
+EOF
 
 %environment
     export GIBUU_RELEASE={{ GIBUU_RELEASE }}
-    export GIBUU_INPUT=/opt/nf/generators/gibuu/GiBUU/buuinput
-    export PATH=/opt/nf/generators/gibuu/GiBUU/release{{ GIBUU_RELEASE }}/objects:$PATH
-    export LD_LIBRARY_PATH=/opt/nf/generators/gibuu/usr_local/lib:${LD_LIBRARY_PATH:-}
+    export ROOTSYS=/opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}/root
+    export GIBUU_INPUT=/opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}/GiBUU/buuinput
+    export PATH=/opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}/GiBUU/release{{ GIBUU_RELEASE }}/objects:/opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}/root/bin:$PATH
+    export LD_LIBRARY_PATH=/opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}/usr_local/lib:/opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}/root/lib:${LD_LIBRARY_PATH:-}
 
 %test
-    test -x /opt/nf/generators/gibuu/GiBUU/release{{ GIBUU_RELEASE }}/objects/GiBUU.x
+    test -x /opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}/bin/GiBUU.x
+    test -x /opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}/GiBUU/release{{ GIBUU_RELEASE }}/objects/GiBUU.x
 
 %labels
     org.neutrino-factory.image gibuu
@@ -92,4 +114,5 @@ EOF
 
 %help
     GiBUU release{{ GIBUU_RELEASE }} payload image for unified runtime
-    composition. Runtime payload root: /opt/nf/generators/gibuu.
+    composition. Runtime payload root:
+    /opt/nf/generators/gibuu/release{{ GIBUU_RELEASE }}.

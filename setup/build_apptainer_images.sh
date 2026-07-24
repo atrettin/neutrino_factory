@@ -201,68 +201,85 @@ fi
 
 # ── Generator images ──────────────────────────────────────────────────────────
 # Catalog queries run inside nf-base (the host Python is too old for the CLI).
+# The catalog is the single source of truth: buildable generators, their code
+# versions, image tags, and per-generator build args all come from
+# `list-generators --json` — this script hard-codes NO generator names.
 nf_cli() {
   apptainer exec "$NF_BASE_BOOTSTRAP_SIF" \
     env PYTHONPATH="$REPO_ROOT/src" python3 -m neutrino_factory.cli "$@"
 }
 
+# Emit one TSV row per buildable (generator, code_version):
+#   gen \t code_version \t image \t build_arg_name \t build_arg_value
+# Optional $1 restricts to a comma-separated generator list.
+catalog_rows() {
+  local only="${1:-}"
+  nf_cli list-generators --json \
+    | apptainer exec "$NF_BASE_BOOTSTRAP_SIF" python3 -c '
+import json, sys
+only = [g for g in sys.argv[1].split(",") if g] if len(sys.argv) > 1 else []
+for r in json.load(sys.stdin)["generators"]:
+    if not r.get("buildable"):
+        continue
+    if only and r["generator"] not in only:
+        continue
+    ba = r.get("build_arg") or {}
+    print("\t".join([r["generator"], r["code_version"], r["image"],
+                     ba.get("name", ""), ba.get("value", "")]))
+' "$only"
+}
+
+# Read a field from a payload SIF's descriptor. json_field <sif> <path> <expr(d)>.
+json_field() {
+  apptainer exec "$1" cat "$2" 2>/dev/null \
+    | apptainer exec "$NF_BASE_BOOTSTRAP_SIF" python3 -c \
+        "import json,sys; d=json.load(sys.stdin); print($3)" 2>/dev/null
+}
+
+tag_safe() { printf '%s' "$1" | sed 's/[^A-Za-z0-9._-]/_/g'; }
+
+# Verify a freshly built payload SIF against its own descriptor: every declared
+# binary wrapper must be present and executable.
+verify_payload_sif() {
+  local sif="$1" gen="$2" cv="$3" cv_safe desc bins b
+  cv_safe="$(tag_safe "$cv")"
+  desc="/opt/nf/generators/$gen/$cv_safe/nf-payload.json"
+  bins="$(json_field "$sif" "$desc" '" ".join(d["binaries"])')" || return 1
+  [[ -n "$bins" ]] || return 1
+  for b in $bins; do
+    apptainer exec "$sif" test -x "/opt/nf/generators/$gen/$cv_safe/bin/$b" || return 1
+  done
+  return 0
+}
+
 declare -a BUILT=() SKIPPED=()
 if [[ "$COMPOSE_ONLY" -ne 1 ]]; then
-  GENERATORS=(genie gibuu nuwro)
-  if [[ -n "$ONLY" ]]; then
-    IFS=',' read -r -a GENERATORS <<< "$ONLY"
-  fi
-  if [[ -n "$CODE_VERSION" && "${#GENERATORS[@]}" -ne 1 ]]; then
-    fail "--code-version requires --only with exactly one generator"
+  if [[ -n "$CODE_VERSION" ]]; then
+    [[ -n "$ONLY" && "$ONLY" != *,* ]] \
+      || fail "--code-version requires --only with exactly one generator"
   fi
 
-  declare -A IMAGE_BY_GEN=()
-  for gen in "${GENERATORS[@]}"; do
+  while IFS=$'\t' read -r gen cv image ba_name ba_value; do
+    [[ -n "$gen" ]] || continue
+    [[ -z "$CODE_VERSION" || "$cv" == "$CODE_VERSION" ]] || continue
     def="$SCRIPT_DIR/apptainer/${gen}.def"
     [[ -f "$def" ]] || { log "No definition for '$gen' ($def) — skipping"; SKIPPED+=("$gen"); continue; }
 
-    # Resolve the code version and image tag from the catalog.
-    row="$(nf_cli list-generators --generator "$gen" --json)"
-    cv="$CODE_VERSION"
-    if [[ -z "$cv" ]]; then
-      cv="$(echo "$row" | apptainer exec "$NF_BASE_BOOTSTRAP_SIF" python3 -c \
-        'import json,sys; print(json.load(sys.stdin)["generators"][0]["code_version"])')"
-    fi
-    image="$(echo "$row" | apptainer exec "$NF_BASE_BOOTSTRAP_SIF" python3 -c \
-      'import json,sys
-cv=sys.argv[1]
-rows=[r for r in json.load(sys.stdin)["generators"] if r["code_version"]==cv]
-print(rows[0]["image"] if rows else "")' "$cv")"
-    [[ -n "$image" ]] || fail "Unknown $gen code_version '$cv' (not in the catalog)"
-    IMAGE_BY_GEN["$gen"]="$image"
-
-    # Per-generator build-arg naming (must match the %arguments in the .def).
-    case "$gen" in
-      genie) args=(--build-arg "GENIE_TAG=$cv") ;;
-      nuwro) args=(--build-arg "NUWRO_TAG=$cv") ;;
-      gibuu) args=(--build-arg "GIBUU_RELEASE=${cv#release}") ;;
-      *) args=() ;;
-    esac
+    args=()
+    [[ -n "$ba_name" ]] && args+=(--build-arg "$ba_name=$ba_value")
     args+=(--build-arg "JOBS=$JOBS")
 
     sif="$(sif_path_for "$image")"
     build_def "$sif" "$def" "${args[@]}"
 
-    # Smoke test: generator payload binary is present.
-    case "$gen" in
-      genie) check_cmd="command -v gevgen" ;;
-      gibuu) check_cmd="command -v GiBUU.x" ;;
-      nuwro) check_cmd="command -v nuwro" ;;
-      *) check_cmd="true" ;;
-    esac
-    if apptainer exec "$sif" bash -c "$check_cmd" >/dev/null 2>&1; then
+    if verify_payload_sif "$sif" "$gen" "$cv"; then
       log "$sif OK"
       BUILT+=("$gen:$cv -> $sif")
     else
       log "WARNING: $sif failed its smoke test"
-      SKIPPED+=("$gen ($sif failed smoke test)")
+      SKIPPED+=("$gen:$cv ($sif failed smoke test)")
     fi
-  done
+  done < <(catalog_rows "$ONLY")
 else
   log "Compose-only mode: skipping generator payload builds."
 fi
@@ -275,95 +292,101 @@ if [[ "${#SKIPPED[@]}" -gt 0 ]]; then
   for entry in "${SKIPPED[@]}"; do log "  $entry"; done
 fi
 
-# Compose unified nf-base runtime from generator payload images.
-declare -a INCLUDED_GENS=() MISSING_GENS=()
-
-resolve_payload_sif() {
-  local generator="$1"
-  local row cv image sif
-
-  row="$(nf_cli list-generators --generator "$generator" --json)"
-  cv="$(echo "$row" | apptainer exec "$NF_BASE_BOOTSTRAP_SIF" python3 -c \
-    'import json,sys; rows=json.load(sys.stdin)["generators"]; print(rows[0]["code_version"] if rows else "")')"
-  [[ -n "$cv" ]] || return 1
-
-  image="$(echo "$row" | apptainer exec "$NF_BASE_BOOTSTRAP_SIF" python3 -c \
-    'import json,sys
-rows=json.load(sys.stdin)["generators"]
-cv=sys.argv[1]
-hit=[r for r in rows if r["code_version"]==cv]
-print(hit[0]["image"] if hit else "")' "$cv")"
-  [[ -n "$image" ]] || return 1
-
+# ── Compose unified nf-base runtime from all built payload SIFs ────────────────
+# Auto-discovery: every catalogued (generator, code_version) whose payload SIF
+# exists is composed in — this is how multiple versions of one generator end up
+# side by side. Adding a version = build its payload SIF, recompose.
+declare -a PAYLOADS=()  # entries: "sif|gen|cv"
+while IFS=$'\t' read -r gen cv image ba_name ba_value; do
+  [[ -n "$gen" ]] || continue
   sif="$(sif_path_for "$image")"
-  [[ -f "$sif" ]] || return 1
-  printf '%s\n' "$sif"
-}
+  [[ -f "$sif" ]] || continue
+  PAYLOADS+=("$sif|$gen|$cv")
+done < <(catalog_rows)
 
-if GENIE_SIF="$(resolve_payload_sif genie)"; then
-  INCLUDED_GENS+=("genie")
-else
-  GENIE_SIF="$NF_BASE_BOOTSTRAP_SIF"
-  MISSING_GENS+=("genie")
-fi
-
-if GIBUU_SIF="$(resolve_payload_sif gibuu)"; then
-  INCLUDED_GENS+=("gibuu")
-else
-  GIBUU_SIF="$NF_BASE_BOOTSTRAP_SIF"
-  MISSING_GENS+=("gibuu")
-fi
-
-if NUWRO_SIF="$(resolve_payload_sif nuwro)"; then
-  INCLUDED_GENS+=("nuwro")
-else
-  NUWRO_SIF="$NF_BASE_BOOTSTRAP_SIF"
-  MISSING_GENS+=("nuwro")
-fi
-
-if [[ "${#INCLUDED_GENS[@]}" -eq 0 ]]; then
+if [[ "${#PAYLOADS[@]}" -eq 0 ]]; then
   log "WARNING: No generator payload SIFs available; keeping nf-base as bootstrap runtime only."
   cp -f "$NF_BASE_BOOTSTRAP_SIF" "$NF_BASE_SIF"
 else
+  # Generate the variable-length head (Apptainer defs have no loop): one
+  # localimage stage per payload, then the python:3.13-slim final stage, then one
+  # generic %files copy per payload; append the static tail (nf-base.def).
   tmp_nf_base_def="$(mktemp)"
-  sed \
-    -e "s|__GENIE_SIF__|$GENIE_SIF|g" \
-    -e "s|__GIBUU_SIF__|$GIBUU_SIF|g" \
-    -e "s|__NUWRO_SIF__|$NUWRO_SIF|g" \
-    "$SCRIPT_DIR/apptainer/nf-base.def" > "$tmp_nf_base_def"
+  idx=0
+  for entry in "${PAYLOADS[@]}"; do
+    IFS='|' read -r sif gen cv <<< "$entry"
+    {
+      printf 'Bootstrap: localimage\n'
+      printf 'From: %s\n' "$sif"
+      printf 'Stage: payload_%s\n\n' "$idx"
+    } >> "$tmp_nf_base_def"
+    idx=$((idx + 1))
+  done
+  {
+    printf 'Bootstrap: docker\n'
+    printf 'From: python:3.13-slim\n'
+    printf 'Stage: final\n\n'
+  } >> "$tmp_nf_base_def"
+  idx=0
+  for entry in "${PAYLOADS[@]}"; do
+    IFS='|' read -r sif gen cv <<< "$entry"
+    cv_safe="$(tag_safe "$cv")"
+    {
+      printf '%%files from payload_%s\n' "$idx"
+      printf '    /opt/nf/generators/%s/%s /opt/nf/generators/%s/%s\n\n' \
+        "$gen" "$cv_safe" "$gen" "$cv_safe"
+    } >> "$tmp_nf_base_def"
+    idx=$((idx + 1))
+  done
+  cat "$SCRIPT_DIR/apptainer/nf-base.def" >> "$tmp_nf_base_def"
+
   build_def "$NF_BASE_SIF" "$tmp_nf_base_def"
   rm -f "$tmp_nf_base_def"
+
   apptainer exec "$NF_BASE_SIF" python3 -c "import yaml, h5py, numpy" \
     || fail "nf-base.sif (composed) failed its smoke test"
+  apptainer exec "$NF_BASE_SIF" command -v nf-run >/dev/null \
+    || fail "nf-base.sif (composed) is missing the nf-run dispatcher"
 
-  # Verify wrapper presence for included payloads only.
-  for gen in "${INCLUDED_GENS[@]}"; do
-    case "$gen" in
-      genie) apptainer exec "$NF_BASE_SIF" bash -lc "command -v gevgen && command -v gntpc" >/dev/null ;;
-      gibuu) apptainer exec "$NF_BASE_SIF" bash -lc "command -v GiBUU.x" >/dev/null ;;
-      nuwro) apptainer exec "$NF_BASE_SIF" bash -lc "command -v nuwro" >/dev/null ;;
-    esac || fail "nf-base.sif (composed) missing expected wrapper for $gen"
+  # Generic, descriptor-driven verification (no per-generator knowledge): every
+  # payload's declared binaries and smoke_paths must exist in the composed image,
+  # and each generator's default binary must be on $PATH (default symlink).
+  declare -A DEFAULT_SEEN=()
+  for entry in "${PAYLOADS[@]}"; do
+    IFS='|' read -r sif gen cv <<< "$entry"
+    cv_safe="$(tag_safe "$cv")"
+    root="/opt/nf/generators/$gen/$cv_safe"
+    desc="$root/nf-payload.json"
+
+    bins="$(json_field "$NF_BASE_SIF" "$desc" '" ".join(d["binaries"])')"
+    [[ -n "$bins" ]] || fail "nf-base.sif (composed) missing descriptor for $gen:$cv"
+    for b in $bins; do
+      apptainer exec "$NF_BASE_SIF" test -x "$root/bin/$b" \
+        || fail "nf-base.sif (composed) missing wrapper $root/bin/$b"
+    done
+
+    paths="$(json_field "$NF_BASE_SIF" "$desc" '" ".join(d.get("smoke_paths", []))')"
+    for p in $paths; do
+      apptainer exec "$NF_BASE_SIF" test -e "$root/$p" \
+        || fail "nf-base.sif (composed) missing smoke path $root/$p"
+    done
+
+    if [[ -z "${DEFAULT_SEEN[$gen]:-}" ]]; then
+      default_bin="$(json_field "$NF_BASE_SIF" "$desc" 'd.get("default_binary","")')"
+      if [[ -n "$default_bin" ]]; then
+        apptainer exec "$NF_BASE_SIF" command -v "$default_bin" >/dev/null \
+          || fail "nf-base.sif (composed) missing default symlink for $gen ($default_bin)"
+      fi
+      DEFAULT_SEEN[$gen]=1
+    fi
   done
 
-  # NuWro-specific runtime sanity: the wrapper must run NuWro from its install
-  # directory so relative data/ lookups resolve, and the key SF table must be
-  # present in the composed image.
-  if [[ " ${INCLUDED_GENS[*]} " == *" nuwro "* ]]; then
-    apptainer exec "$NF_BASE_SIF" bash -lc "\
-      test -r /opt/nf/generators/nuwro/nuwro/data/sf/pke_12C_new.dat && \
-      grep -q 'cd \"\$prefix/nuwro\"' /usr/local/bin/nuwro && \
-      grep -q 'caller_cwd=\"\$(pwd)\"' /usr/local/bin/nuwro\
-    " >/dev/null || fail "nf-base.sif (composed) NuWro wrapper/data self-check failed"
-  fi
-
   log "nf-base.sif (composed) OK"
-fi
-
-if [[ "${#INCLUDED_GENS[@]}" -gt 0 ]]; then
-  log "Composed with generator payloads: ${INCLUDED_GENS[*]}"
-fi
-if [[ "${#MISSING_GENS[@]}" -gt 0 ]]; then
-  log "Composed without generator payloads: ${MISSING_GENS[*]}"
+  log "Composed payloads:"
+  for entry in "${PAYLOADS[@]}"; do
+    IFS='|' read -r sif gen cv <<< "$entry"
+    log "  $gen:$cv"
+  done
 fi
 
 log "Check the catalog in your cenv session with: neutrino-factory list-generators --built"

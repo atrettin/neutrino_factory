@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -82,6 +83,40 @@ def image_available(image: str | None) -> bool:
     if active == "apptainer":
         return sif_path(image).is_file()
     return False
+
+
+def apptainer_dispatch(
+    generator: str, code_version: str | None, args: list[str]
+) -> list[str]:
+    """Rewrite a native command to the version-explicit ``nf-run`` form.
+
+    On the cluster every task runs inside the composed ``nf-base.sif``, which may
+    hold several versions of a generator side by side. ``nf-run <gen> <cv> <bin>
+    [args]`` resolves the right ``/opt/nf/generators/<gen>/<cv>`` payload wrapper
+    (nf-run applies the same tag-safe transform to ``<cv>`` that the payload
+    staging uses). Only rewrites under the apptainer runtime; the Docker/local
+    branches keep running the bare binary. A missing ``code_version`` falls back
+    to the bare form (served by nf-base's default-version symlink).
+    """
+    if runtime() == "apptainer" and args and code_version:
+        return ["nf-run", generator, str(code_version), *args]
+    return args
+
+
+def apptainer_dispatch_prefix(
+    generator: str, code_version: str | None, binary: str
+) -> str:
+    """``nf-run`` command prefix as a shell string, for stdin-redirect commands.
+
+    Some generators are launched through ``bash -c "<binary> < input"`` (GiBUU),
+    where the binary is embedded in a shell string rather than ``argv[0]``. This
+    returns the properly-quoted ``nf-run <gen> <cv> <binary>`` prefix under the
+    apptainer runtime, or just ``binary`` otherwise, to splice before the ``<``
+    redirect.
+    """
+    if runtime() == "apptainer" and code_version:
+        return shlex.join(["nf-run", generator, str(code_version), binary])
+    return binary
 
 
 def docker_wrap(

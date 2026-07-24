@@ -20,6 +20,7 @@ LOGGER = logging.getLogger(__name__)
 class GenieAdapter(GeneratorAdapter):
     name = "genie"
     executable = "gevgen"
+    build_arg_name = "GENIE_TAG"
 
     # GENIE tunes are not statically enumerated: availability is discovered from
     # the cross-section splines staged on disk (see ``available_config_versions``).
@@ -197,7 +198,7 @@ class GenieAdapter(GeneratorAdapter):
         # the generator's Apptainer image (which cannot nest), so gevgen must be
         # executed directly whenever it is on $PATH. Do not reorder these branches.
         if shutil.which(self.binary_name()):
-            return gevgen_args
+            return containers.apptainer_dispatch(self.name, code_version, gevgen_args)
 
         if self.container_available(code_version):
             self.ensure_container_wrappable()
@@ -234,7 +235,11 @@ class GenieAdapter(GeneratorAdapter):
     def _run_gntpc(self, work_dir: Path, code_version: str | None) -> None:
         args = ["gntpc", "-i", "events.ghep.root", "-f", "gst", "-o", "events.gst.root"]
         if shutil.which("gntpc"):
-            subprocess.run(args, check=True, cwd=work_dir)
+            subprocess.run(
+                containers.apptainer_dispatch(self.name, code_version, args),
+                check=True,
+                cwd=work_dir,
+            )
             return
         if self.container_available(code_version):
             self.ensure_container_wrappable()

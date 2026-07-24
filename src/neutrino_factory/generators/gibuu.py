@@ -13,6 +13,7 @@ from ..translators.gibuu import GiBUUTranslator
 class GiBUUAdapter(GeneratorAdapter):
     name = "gibuu"
     executable = "GiBUU.x"
+    build_arg_name = "GIBUU_RELEASE"
 
     CODE_VERSIONS = {
         # GiBUU is distributed as HEPForge release tarballs; ``git_ref`` holds the
@@ -25,6 +26,14 @@ class GiBUUAdapter(GeneratorAdapter):
             "config_versions": ["default"],
         },
     }
+
+    @classmethod
+    def build_arg(cls, code_version: str) -> dict[str, str] | None:
+        # GiBUU release tarballs are keyed by the bare year; the code_version
+        # carries the ``release`` prefix (``release2025``) but the build arg does
+        # not (``GIBUU_RELEASE=2025``).
+        assert cls.build_arg_name is not None
+        return {"name": cls.build_arg_name, "value": code_version.removeprefix("release")}
 
     def translate_config(self, task: dict) -> dict:
         return GiBUUTranslator().translate(self.config, task)
@@ -59,7 +68,10 @@ class GiBUUAdapter(GeneratorAdapter):
         # Native binary first: on the cluster the Slurm task already runs inside
         # the generator's Apptainer image (which cannot nest). Do not reorder.
         if shutil.which(self.binary_name()):
-            return ["bash", "-c", f"{self.binary_name()} < job.job"]
+            launcher = containers.apptainer_dispatch_prefix(
+                self.name, code_version, self.binary_name()
+            )
+            return ["bash", "-c", f"{launcher} < job.job"]
 
         if self.container_available(code_version):
             self.ensure_container_wrappable()

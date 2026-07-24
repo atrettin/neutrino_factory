@@ -139,10 +139,15 @@ Stage: final
     NUWRO_TAG=nuwro_25.11
     ROOT_VERSION=6.30.10
 
+# Version-namespaced, self-contained payload root. Everything NuWro needs at
+# runtime lives under this one tree, so nf-base composition is a single generic
+# copy of /opt/nf/generators/nuwro/<code_version> (libpcre still comes from
+# nf-base's fixed runtime baseline). This staging + the bin/ wrapper are
+# Apptainer-composition-only (no Docker counterpart).
 %files from builder
-    /opt/root /opt/nf/generators/nuwro/root
-    /opt/ROOTEGPythia6 /opt/nf/generators/nuwro/ROOTEGPythia6
-    /opt/nuwro /opt/nf/generators/nuwro/nuwro
+    /opt/root /opt/nf/generators/nuwro/{{ NUWRO_TAG }}/root
+    /opt/ROOTEGPythia6 /opt/nf/generators/nuwro/{{ NUWRO_TAG }}/ROOTEGPythia6
+    /opt/nuwro /opt/nf/generators/nuwro/{{ NUWRO_TAG }}/nuwro
 
 %post
     export DEBIAN_FRONTEND=noninteractive
@@ -153,33 +158,65 @@ Stage: final
         g++ \
         && rm -rf /var/lib/apt/lists/*
 
+    CV="{{ NUWRO_TAG }}"
+    PREFIX="/opt/nf/generators/nuwro/$CV"
+    mkdir -p "$PREFIX/bin"
+
     # The ROOTEGPythia6 PCM bakes in its build-time path (/opt/rooted-build,
     # persistent — unlike /tmp, which Apptainer shadows with a host bind at
-    # runtime); symlink so Cling finds it.
-    mkdir -p /opt/nf/generators/nuwro/rooted-build
-    ln -s /opt/nf/generators/nuwro/ROOTEGPythia6/lib/libTPythia6_rdict.pcm \
-        /opt/nf/generators/nuwro/rooted-build/libTPythia6_rdict.pcm
+    # runtime); symlink so Cling finds it. Kept inside the namespaced payload so
+    # the generic nf-base copy carries it.
+    mkdir -p "$PREFIX/rooted-build"
+    ln -s "$PREFIX/ROOTEGPythia6/lib/libTPythia6_rdict.pcm" \
+        "$PREFIX/rooted-build/libTPythia6_rdict.pcm"
 
-    mkdir -p /opt/nf/env
-    cat > /opt/nf/env/nuwro.sh <<'EOF'
+    # Single source of truth for NuWro's runtime env + launch logic (was the
+    # per-generator wrapper in nf-base.def). Self-locating, so version-agnostic.
+    # NuWro resolves data/ relative to its install tree, so it cd's there; it
+    # absolutizes relative -i/-o args first so task-local paths keep working.
+    cat > "$PREFIX/bin/nuwro" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-prefix=/opt/nf/generators/nuwro
+prefix="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+caller_cwd="$(pwd)"
+
+args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+    case "${args[$i]}" in
+        -i|-o)
+            if (( i + 1 < ${#args[@]} )); then
+                v="${args[$((i + 1))]}"
+                if [[ "$v" != /* ]]; then
+                    args[$((i + 1))]="$caller_cwd/$v"
+                fi
+                i=$((i + 1))
+            fi
+            ;;
+    esac
+done
+
 export ROOTSYS="$prefix/root"
 export ROOTEGPythia6_ROOT="$prefix/ROOTEGPythia6"
 export PATH="$prefix/nuwro/bin:$prefix/root/bin:${PATH}"
 export LD_LIBRARY_PATH="$prefix/nuwro/lib:$prefix/root/lib:$prefix/ROOTEGPythia6/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+cd "$prefix/nuwro"
+exec "$prefix/nuwro/bin/nuwro" "${args[@]}"
 EOF
-    chmod +x /opt/nf/env/nuwro.sh
+    chmod +x "$PREFIX/bin/nuwro"
+
+    cat > "$PREFIX/nf-payload.json" <<EOF
+{"schema_version":1,"generator":"nuwro","code_version":"$CV","binaries":["nuwro"],"default_binary":"nuwro","smoke_paths":["nuwro/data/sf/pke_12C_new.dat"]}
+EOF
 
 %environment
-    export ROOTSYS=/opt/nf/generators/nuwro/root
-    export ROOTEGPythia6_ROOT=/opt/nf/generators/nuwro/ROOTEGPythia6
-    export PATH=/opt/nf/generators/nuwro/nuwro/bin:/opt/nf/generators/nuwro/root/bin:$PATH
-    export LD_LIBRARY_PATH=/opt/nf/generators/nuwro/nuwro/lib:/opt/nf/generators/nuwro/root/lib:/opt/nf/generators/nuwro/ROOTEGPythia6/lib
+    export ROOTSYS=/opt/nf/generators/nuwro/{{ NUWRO_TAG }}/root
+    export ROOTEGPythia6_ROOT=/opt/nf/generators/nuwro/{{ NUWRO_TAG }}/ROOTEGPythia6
+    export PATH=/opt/nf/generators/nuwro/{{ NUWRO_TAG }}/nuwro/bin:/opt/nf/generators/nuwro/{{ NUWRO_TAG }}/root/bin:$PATH
+    export LD_LIBRARY_PATH=/opt/nf/generators/nuwro/{{ NUWRO_TAG }}/nuwro/lib:/opt/nf/generators/nuwro/{{ NUWRO_TAG }}/root/lib:/opt/nf/generators/nuwro/{{ NUWRO_TAG }}/ROOTEGPythia6/lib
 
 %test
-    test -x /opt/nf/generators/nuwro/nuwro/bin/nuwro
+    test -x /opt/nf/generators/nuwro/{{ NUWRO_TAG }}/bin/nuwro
+    test -x /opt/nf/generators/nuwro/{{ NUWRO_TAG }}/nuwro/bin/nuwro
 
 %labels
     org.neutrino-factory.image nuwro
@@ -187,4 +224,4 @@ EOF
 
 %help
     NuWro {{ NUWRO_TAG }} payload image for unified runtime composition.
-    Runtime payload root: /opt/nf/generators/nuwro.
+    Runtime payload root: /opt/nf/generators/nuwro/{{ NUWRO_TAG }}.

@@ -73,6 +73,15 @@ def is_buildable(generator: str, code_version: str) -> bool:
     return _adapter(generator).is_buildable(code_version)
 
 
+def build_arg(generator: str, code_version: str) -> dict[str, str] | None:
+    """Image build argument selecting ``code_version`` (name/value), or ``None``.
+
+    Lets ``build_apptainer_images.sh`` pass ``--build-arg NAME=value`` without a
+    hard-coded per-generator mapping.
+    """
+    return _adapter(generator).build_arg(code_version)
+
+
 def ensure_known(generator: str, code_version: str) -> None:
     _adapter(generator).ensure_code_version(code_version)
 

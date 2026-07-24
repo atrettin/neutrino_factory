@@ -1,39 +1,23 @@
-# Unified Apptainer definition for nf-base: Python runtime + generator payloads.
+# Static tail of the composed nf-base definition: Python runtime + a generic,
+# generator-agnostic dispatcher. It contains NO generator names.
 #
-# This image is composed from modular generator payload SIFs using localimage
-# stages. Build orchestration is handled by setup/build_apptainer_images.sh,
-# which passes the concrete payload SIF paths as build arguments.
-
-Bootstrap: localimage
-From: __GENIE_SIF__
-Stage: genie_payload
-
-Bootstrap: localimage
-From: __GIBUU_SIF__
-Stage: gibuu_payload
-
-Bootstrap: localimage
-From: __NUWRO_SIF__
-Stage: nuwro_payload
-
-Bootstrap: docker
-From: python:3.13-slim
-Stage: final
-
-%files from genie_payload
-    /opt/nf/generators/genie /opt/nf/generators/genie
-
-%files from gibuu_payload
-    /opt/nf/generators/gibuu /opt/nf/generators/gibuu
-    /opt/root /opt/nf/generators/gibuu/root
-
-%files from nuwro_payload
-    /opt/nf/generators/nuwro /opt/nf/generators/nuwro
-    /usr/lib/x86_64-linux-gnu/libpcre.so.3 /usr/lib/x86_64-linux-gnu/libpcre.so.3
-    /usr/lib/x86_64-linux-gnu/libpcre.so.3.13.3 /usr/lib/x86_64-linux-gnu/libpcre.so.3.13.3
+# build_apptainer_images.sh generates the variable-length head — one
+#   Bootstrap: localimage / From: <payload sif> / Stage: payload_<n>
+# per discovered payload SIF, then the final python:3.13-slim stage, then one
+#   %files from payload_<n>
+#     /opt/nf/generators/<gen>/<code_version> /opt/nf/generators/<gen>/<code_version>
+# block per payload — and concatenates this file after it. Adding a generator or
+# a new version therefore needs NO edit here: build the payload SIF and recompose.
+#
+# All per-generator PATH/LD_LIBRARY_PATH/run logic now lives in each payload's
+# shipped bin/<binary> wrappers (setup/apptainer/<gen>.def); this image only
+# installs the `nf-run` dispatcher and descriptor-driven default-version symlinks.
 
 %post
     export DEBIAN_FRONTEND=noninteractive
+    # Fixed, generator-agnostic runtime baseline: the union of shared-object
+    # dependencies across payloads (payloads bundle their own component trees
+    # under /opt/nf/generators, but not the base C/Fortran runtimes).
     apt-get update && apt-get install -y --no-install-recommends \
         libgfortran5 \
         libgomp1 \
@@ -52,94 +36,63 @@ Stage: final
 
     mkdir -p /usr/local/bin
 
-    # GENIE wrappers (created only when GENIE payload exists).
-    if [ -x /opt/nf/generators/genie/genie/bin/gevgen ]; then
-    cat > /usr/local/bin/gevgen <<'EOF'
+    # Generic version-aware dispatcher. Resolves the payload for
+    # `<generator> <code_version>` and execs the wrapper that payload ships.
+    # Applies the same filesystem-safe transform to <code_version> that payload
+    # staging uses, so the arg and the on-disk directory never diverge.
+    cat > /usr/local/bin/nf-run <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-prefix=/opt/nf/generators/genie
-py6lib="$(find "$prefix"/pythia6 -maxdepth 4 -name 'libPythia6.so' -exec dirname {} \; | head -1)"
-export GENIE="$prefix/genie"
-export ROOTSYS="$prefix/root"
-export PATH="$GENIE/bin:$ROOTSYS/bin:${PATH}"
-export LD_LIBRARY_PATH="$GENIE/lib:$ROOTSYS/lib:$prefix/lhapdf6/lib${py6lib:+:$py6lib}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-exec "$GENIE/bin/gevgen" "$@"
+if (( $# < 3 )); then
+    echo "usage: nf-run <generator> <code_version> <binary> [args...]" >&2
+    exit 2
+fi
+gen="$1"; cv="$2"; bin="$3"; shift 3
+cv_safe="$(printf '%s' "$cv" | sed 's/[^A-Za-z0-9._-]/_/g')"
+wrapper="/opt/nf/generators/$gen/$cv_safe/bin/$bin"
+if [[ ! -x "$wrapper" ]]; then
+    echo "nf-run: no payload wrapper at $wrapper" >&2
+    echo "nf-run: composed payloads:" >&2
+    ls -1d /opt/nf/generators/*/*/ 2>/dev/null >&2 || true
+    exit 127
+fi
+exec "$wrapper" "$@"
 EOF
-    chmod +x /usr/local/bin/gevgen
+    chmod +x /usr/local/bin/nf-run
 
-    cat > /usr/local/bin/gntpc <<'EOF'
+    # Descriptor-driven default-version convenience symlinks. For each generator,
+    # the highest (sorted-last) composed code_version provides the bare binary
+    # names on $PATH. This keeps interactive use (`gevgen`) working and keeps the
+    # adapters' native-binary-first probe (shutil.which) unchanged; any specific
+    # version is always reachable via `nf-run <gen> <cv> <bin>`.
+    for gen_dir in /opt/nf/generators/*/; do
+        [ -d "$gen_dir" ] || continue
+        gen="$(basename "$gen_dir")"
+        default_cv=""
+        for cv_name in $(ls -1 "$gen_dir" 2>/dev/null | sort); do
+            [ -f "$gen_dir$cv_name/nf-payload.json" ] && default_cv="$cv_name"
+        done
+        [ -n "$default_cv" ] || continue
+        for wrapper in "$gen_dir$default_cv/bin/"*; do
+            [ -x "$wrapper" ] || continue
+            bname="$(basename "$wrapper")"
+            cat > "/usr/local/bin/$bname" <<EOF
 #!/usr/bin/env bash
-set -euo pipefail
-prefix=/opt/nf/generators/genie
-py6lib="$(find "$prefix"/pythia6 -maxdepth 4 -name 'libPythia6.so' -exec dirname {} \; | head -1)"
-export GENIE="$prefix/genie"
-export ROOTSYS="$prefix/root"
-export PATH="$GENIE/bin:$ROOTSYS/bin:${PATH}"
-export LD_LIBRARY_PATH="$GENIE/lib:$ROOTSYS/lib:$prefix/lhapdf6/lib${py6lib:+:$py6lib}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-exec "$GENIE/bin/gntpc" "$@"
+exec nf-run "$gen" "$default_cv" "$bname" "\$@"
 EOF
-    chmod +x /usr/local/bin/gntpc
-    fi
-
-    # GiBUU wrapper (created only when GiBUU payload exists).
-    if [ -d /opt/nf/generators/gibuu/GiBUU ]; then
-    cat > /usr/local/bin/GiBUU.x <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-prefix=/opt/nf/generators/gibuu
-bin="$(find "$prefix/GiBUU" -type f -name 'GiBUU.x' | head -1)"
-[[ -n "$bin" ]] || { echo "GiBUU.x payload binary not found" >&2; exit 127; }
-export ROOTSYS="$prefix/root"
-export GIBUU_INPUT="$prefix/GiBUU/buuinput"
-export PATH="$(dirname "$bin"):$ROOTSYS/bin:${PATH}"
-export LD_LIBRARY_PATH="$prefix/usr_local/lib:$ROOTSYS/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-exec "$bin" "$@"
-EOF
-    chmod +x /usr/local/bin/GiBUU.x
-    fi
-
-    # NuWro wrapper (created only when NuWro payload exists).
-    if [ -x /opt/nf/generators/nuwro/nuwro/bin/nuwro ]; then
-    cat > /usr/local/bin/nuwro <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-prefix=/opt/nf/generators/nuwro
-caller_cwd="$(pwd)"
-
-# NuWro resolves data/ relative to its install tree, so run it from there.
-# Keep task-local relative -i/-o paths working by absolutizing them first.
-args=("$@")
-for ((i=0; i<${#args[@]}; i++)); do
-    case "${args[$i]}" in
-        -i|-o)
-            if (( i + 1 < ${#args[@]} )); then
-                v="${args[$((i + 1))]}"
-                if [[ "$v" != /* ]]; then
-                    args[$((i + 1))]="$caller_cwd/$v"
-                fi
-                i=$((i + 1))
-            fi
-            ;;
-    esac
-done
-
-export ROOTSYS="$prefix/root"
-export ROOTEGPythia6_ROOT="$prefix/ROOTEGPythia6"
-export PATH="$prefix/nuwro/bin:$prefix/root/bin:${PATH}"
-export LD_LIBRARY_PATH="$prefix/nuwro/lib:$prefix/root/lib:$prefix/ROOTEGPythia6/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-cd "$prefix/nuwro"
-exec "$prefix/nuwro/bin/nuwro" "${args[@]}"
-EOF
-    chmod +x /usr/local/bin/nuwro
-    fi
+            chmod +x "/usr/local/bin/$bname"
+        done
+    done
 
 %test
     python3 -c "import yaml, h5py, numpy, uproot, awkward, matplotlib"
+    command -v nf-run
 
 %labels
     org.neutrino-factory.image nf-base
 
 %help
-    Unified neutrino-factory runtime image (Python + generator wrappers).
-    Enter once (e.g. via cenv) and run neutrino-factory / generator binaries
-    directly from the same interactive environment.
+    Unified neutrino-factory runtime image (Python + generator payloads).
+    Enter once (e.g. via cenv) and run neutrino-factory or generator binaries
+    directly. Bare binary names (gevgen, nuwro, GiBUU.x) run the default version;
+    a specific version is reached with: nf-run <generator> <code_version> <bin>.

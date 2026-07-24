@@ -77,6 +77,24 @@ class CatalogTests(unittest.TestCase):
         self.assertFalse(catalog.is_buildable("neut", "5.x"))
         self.assertTrue(catalog.is_buildable("genie", "R-3_06_00"))
 
+    def test_build_arg_names_and_values(self) -> None:
+        self.assertEqual(
+            catalog.build_arg("genie", "R-3_06_00"),
+            {"name": "GENIE_TAG", "value": "R-3_06_00"},
+        )
+        self.assertEqual(
+            catalog.build_arg("nuwro", "nuwro_25.11"),
+            {"name": "NUWRO_TAG", "value": "nuwro_25.11"},
+        )
+        # GiBUU strips the ``release`` prefix for its build arg.
+        self.assertEqual(
+            catalog.build_arg("gibuu", "release2025"),
+            {"name": "GIBUU_RELEASE", "value": "2025"},
+        )
+
+    def test_build_arg_none_for_unbuildable(self) -> None:
+        self.assertIsNone(catalog.build_arg("neut", "5.x"))
+
     def test_genie_xsecs_xml_exact_and_normalized(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -150,6 +168,7 @@ class ListGeneratorsCliTests(unittest.TestCase):
         self.assertIn("R-3_06_00", [row["code_version"] for row in rows])
         genie_row = next(r for r in rows if r["code_version"] == "R-3_06_00")
         self.assertEqual(genie_row["config_versions"], ["G18_10a_02_11a"])
+        self.assertEqual(genie_row["build_arg"], {"name": "GENIE_TAG", "value": "R-3_06_00"})
 
     def test_built_filter_hides_unbuilt(self) -> None:
         output = self._run(["list-generators", "--built"])

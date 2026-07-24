@@ -60,6 +60,49 @@ class ImageAvailableTests(unittest.TestCase):
         self.assertFalse(containers.image_available(""))
 
 
+class ApptainerDispatchTests(unittest.TestCase):
+    def test_rewrites_to_nf_run_under_apptainer(self) -> None:
+        with patch.dict(os.environ, {"NF_CONTAINER_RUNTIME": "apptainer"}):
+            self.assertEqual(
+                containers.apptainer_dispatch("genie", "R-3_06_00", ["gevgen", "-n", "1"]),
+                ["nf-run", "genie", "R-3_06_00", "gevgen", "-n", "1"],
+            )
+
+    def test_unchanged_under_docker_and_none(self) -> None:
+        for rt in ("docker", "none"):
+            with patch.dict(os.environ, {"NF_CONTAINER_RUNTIME": rt}):
+                self.assertEqual(
+                    containers.apptainer_dispatch("genie", "R-3_06_00", ["gevgen", "-n", "1"]),
+                    ["gevgen", "-n", "1"],
+                )
+
+    def test_empty_args_and_missing_version_fall_back(self) -> None:
+        with patch.dict(os.environ, {"NF_CONTAINER_RUNTIME": "apptainer"}):
+            self.assertEqual(containers.apptainer_dispatch("genie", "R-3_06_00", []), [])
+            self.assertEqual(
+                containers.apptainer_dispatch("genie", None, ["gevgen"]), ["gevgen"]
+            )
+            self.assertEqual(
+                containers.apptainer_dispatch("genie", "", ["gevgen"]), ["gevgen"]
+            )
+
+    def test_prefix_shell_variant(self) -> None:
+        with patch.dict(os.environ, {"NF_CONTAINER_RUNTIME": "apptainer"}):
+            self.assertEqual(
+                containers.apptainer_dispatch_prefix("gibuu", "release2025", "GiBUU.x"),
+                "nf-run gibuu release2025 GiBUU.x",
+            )
+        with patch.dict(os.environ, {"NF_CONTAINER_RUNTIME": "docker"}):
+            self.assertEqual(
+                containers.apptainer_dispatch_prefix("gibuu", "release2025", "GiBUU.x"),
+                "GiBUU.x",
+            )
+        with patch.dict(os.environ, {"NF_CONTAINER_RUNTIME": "apptainer"}):
+            self.assertEqual(
+                containers.apptainer_dispatch_prefix("gibuu", None, "GiBUU.x"), "GiBUU.x"
+            )
+
+
 class DockerWrapTests(unittest.TestCase):
     def test_wrap_shape_with_ro_bind_and_workdir(self) -> None:
         command = containers.docker_wrap(

@@ -261,6 +261,7 @@ def _collect_catalog_rows(generator_filter: str | None, built_only: bool) -> lis
                     "config_versions": catalog.available_config_versions(generator, code_version),
                     "image": image,
                     "buildable": catalog.is_buildable(generator, code_version),
+                    "build_arg": catalog.build_arg(generator, code_version),
                     "built": built,
                 }
             )

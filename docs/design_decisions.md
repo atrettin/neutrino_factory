@@ -63,3 +63,52 @@ and def must be updated together** (each def's header names its source).
 the Python runtime deps, and (NuWro) relocate the ROOTEGPythia6 build dir out
 of `/tmp`, because Apptainer bind-mounts the host `/tmp` over the image's at
 runtime and would shadow the baked-in dictionary path.
+
+## Discovery-based, version-namespaced Apptainer composition
+
+**Decision.** `nf-base.sif` is composed by *auto-discovering* every built
+per-generator payload SIF from the catalog, not from a fixed generator list.
+Each payload stages a **self-contained, version-namespaced** tree under
+`/opt/nf/generators/<gen>/<code_version>/` and ships its own `bin/<binary>`
+wrapper plus an `nf-payload.json` descriptor. `build_apptainer_images.sh`
+generates the composed def (one `localimage` stage + one generic `%files` copy
+per payload) and `nf-base.def` is a generator-agnostic tail that installs a
+single `nf-run <gen> <code_version> <binary>` dispatcher and descriptor-driven
+default-version symlinks. Under the apptainer runtime each adapter's
+`build_run_command` rewrites the native command to the explicit `nf-run` form
+via `containers.apptainer_dispatch`.
+
+**Why.**
+- Extensibility was the requirement: adding a generator or a new version of an
+  existing one must not touch `nf-base.def` or the build script's generator
+  logic. Discovery + generated stages achieve that; the only inputs are a
+  `<gen>.def` and a `CODE_VERSIONS` entry (with `build_arg_name`).
+- **Multiple versions of one generator must coexist** in the same image.
+  Version-namespaced payload paths + explicit `nf-run` version dispatch make
+  that possible; distinct image tags (`<name>:<code_version>`) already yield
+  distinct SIF filenames.
+- Per-generator env/launch knowledge was duplicated in up to five places, with
+  the *richest* form (NuWro's `-i/-o` absolutize + `cd`, GiBUU's binary `find`)
+  living wrongly inside `nf-base.def`. Moving it into each payload's shipped
+  wrapper makes the payload the single source of truth.
+
+**Consequences / trade-offs.**
+- The adapters' native-binary-first probe (`shutil.which`) is preserved by
+  keeping bare default-version symlinks; the executed command still names the
+  version explicitly. Detection logic is unchanged — **do not reorder those
+  branches.**
+- Payloads bundle their own ROOT, so `nf-base.sif` grows roughly linearly with
+  the number of composed versions (accepted: recompose is fast, disk on
+  `/ptmp`). GiBUU's ROOT (from the `rootproject/root` base) is folded into its
+  payload; NuWro keeps relying on `libpcre3` from `nf-base.def`'s fixed runtime
+  baseline rather than bundling it, to avoid perturbing the ROOT-linked
+  generators that also need it.
+- Wrappers are **self-locating** (`readlink -f "$0"`), so their text is
+  version-independent and `{{ }}` templating is confined to `%files`/
+  `%environment`/`%test` (never inside a quoted `%post` heredoc).
+- Code versions must be filesystem-safe: `nf-run` and payload staging apply the
+  same `[^A-Za-z0-9._-]→_` transform, so the dispatch arg and the on-disk
+  directory never diverge.
+- Moving wrappers out of `nf-base.def` touches no Dockerfile; the
+  `/opt/nf/generators/<cv>` staging is Apptainer-composition-only and has no
+  Docker counterpart, so the "update both together" pairing is not triggered.
