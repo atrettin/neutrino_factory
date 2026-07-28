@@ -141,6 +141,29 @@ branch):
   (`num_runs`, no `1e38`), not the presence of the flux division.
 - Negative interference weights are passed through unchanged.
 
+**`numEnsembles` vs `num_runs_SameEnergy`.** Both scale statistics; only the
+first is normalized out for you, which is why `num_runs` is the divisor above
+and why we scale chunk size with `numEnsembles`. Read from the release2025
+source: `initNeutrino.f90:1292` sets `perweight = totalWeight/float(numtry)`,
+where `numtry` counts nucleon test-particles over *all* ensembles
+(`realParticles` is indexed `(ensemble, particle)`) — so doubling `numEnsembles`
+halves each weight and leaves the sum invariant. `num_runs_sameEnergy` never
+enters `perweight`; GiBUU divides by it in its own analysis
+(`neutrinoAnalysis.f90:3515`) and hands both counts to the consumer as ROOT
+branches (`EventOutput.f90:1132`). Confirmed by running one jobcard three ways:
+doubling ensembles gave 2.04x the events at 0.86x the weight sum, doubling runs
+gave 2.02x the events at 2.17x the weight sum (spread is GiBUU's heavy tails).
+
+Because `numEnsembles` is auto-normalized, a GiBUU chunk estimates sigma
+regardless of its size — the property that makes `num_runs`, not the event count,
+the right `xsec_norm_count` for merging.
+
+**One file per run.** `num_runs_SameEnergy = N` writes
+`EventOutput.Pert.00000001.root` .. `...0000000N.root`. The normalizer globs
+every part and fails loudly if it finds fewer than `num_runs`; reading only the
+first while still dividing by N would silently report sigma/N (measured: 4.07
+instead of 8.13 on a real 2-run job).
+
 Files: `translators/gibuu.py` (`NUM_RUNS_SAME_ENERGY`, `compute_xsec_weight`),
 `normalizers/gibuu.py` (`_normalize_root` wires it in via the sidecar
 `flux_config`). Monoenergetic runs skip the flux division (`raw / num_runs`).

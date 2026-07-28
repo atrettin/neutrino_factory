@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .base import GeneratorAdapter
 from .. import catalog, containers
-from ..normalizers.gibuu import GiBUUNormalizer
+from ..normalizers.gibuu import GiBUUNormalizer, pert_output_parts
 from ..translators.gibuu import GiBUUTranslator
 
 
@@ -112,10 +112,12 @@ class GiBUUAdapter(GeneratorAdapter):
         task: dict,
         execution_mode: str,
     ) -> str:
-        # GiBUU writes its RootTuple output into the run CWD under a fixed name,
-        # not to raw_output_path; hand the real ROOT file to the normalizer.
-        root_path = Path(raw_output_path).parent / "EventOutput.Pert.00000001.root"
-        actual_path = root_path if root_path.exists() else Path(raw_output_path)
+        # GiBUU writes its RootTuple output into the run CWD, not to
+        # raw_output_path, and produces one file per run (num_runs_SameEnergy).
+        # Hand the normalizer the first part; it reads every part in that
+        # directory (see normalizers.gibuu.pert_output_parts).
+        parts = pert_output_parts(Path(raw_output_path).parent)
+        actual_path = parts[0] if parts else Path(raw_output_path)
         return GiBUUNormalizer().normalize(
             actual_path, normalized_output_path, task, execution_mode
         )

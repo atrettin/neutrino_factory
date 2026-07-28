@@ -55,13 +55,13 @@ def _base_task() -> dict:
     }
 
 
-def _write_sidecar(work_dir: Path) -> None:
+def _write_sidecar(work_dir: Path, num_runs: int = 1) -> None:
     sidecar = {
         "beam_particle": "numu",
         "nucleus": "C12",
         "energy_range_gev": [0.5, 5.0],
         "seed": 42,
-        "num_runs": 1,
+        "num_runs": num_runs,
         "flux_config": {
             "type": "power_law",
             "particle": "numu",
@@ -259,3 +259,99 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GiBUUMultiRunOutputTests(unittest.TestCase):
+    """GiBUU writes one file per run; every part must be read.
+
+    With ``num_runs_SameEnergy = N`` GiBUU emits
+    ``EventOutput.Pert.00000001.root`` .. ``...0000000N.root``. The per-event
+    weights are divided by ``num_runs`` in ``compute_xsec_weight``, so reading
+    only the first part would report sigma/N and drop the other runs' events.
+    """
+
+    @staticmethod
+    def _part(work_dir: Path, index: int) -> Path:
+        return work_dir / f"EventOutput.Pert.{index:08d}.root"
+
+    def test_all_parts_are_read_and_concatenated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, num_runs=2)
+            _write_roottuple(self._part(work_dir, 1), [1.0, 2.0], [0.1, 0.1], [1, 1])
+            _write_roottuple(self._part(work_dir, 2), [3.0, 4.0, 5.0], [0.1] * 3, [1] * 3)
+            out_path = work_dir / "out.h5"
+
+            GiBUUNormalizer().normalize(
+                self._part(work_dir, 1), out_path, _base_task(), "local"
+            )
+
+            _, events = read_events(out_path)
+            self.assertEqual(len(events), 5)
+            self.assertEqual(
+                sorted(event["energy_gev"] for event in events), [1.0, 2.0, 3.0, 4.0, 5.0]
+            )
+            # event_id stays contiguous across the part boundary.
+            self.assertEqual([event["event_id"] for event in events], [0, 1, 2, 3, 4])
+
+    def test_two_runs_report_the_same_cross_section_as_one(self) -> None:
+        # Two runs produce twice the events at the same per-event weight, and
+        # compute_xsec_weight divides by num_runs — so sigma must come out equal.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            one = Path(tmpdir) / "one"
+            two = Path(tmpdir) / "two"
+            one.mkdir()
+            two.mkdir()
+
+            energies = [1.0, 2.0, 3.0, 4.0]
+            _write_sidecar(one, num_runs=1)
+            _write_roottuple(self._part(one, 1), energies, [0.25] * 4, [1] * 4)
+            GiBUUNormalizer().normalize(
+                self._part(one, 1), one / "out.h5", _base_task(), "local"
+            )
+
+            _write_sidecar(two, num_runs=2)
+            for index in (1, 2):
+                _write_roottuple(self._part(two, index), energies, [0.25] * 4, [1] * 4)
+            GiBUUNormalizer().normalize(
+                self._part(two, 1), two / "out.h5", _base_task(), "local"
+            )
+
+            _, one_events = read_events(one / "out.h5")
+            _, two_events = read_events(two / "out.h5")
+            self.assertEqual(len(two_events), 2 * len(one_events))
+            self.assertAlmostEqual(
+                sum(event["xsec_weight"] for event in one_events),
+                sum(event["xsec_weight"] for event in two_events),
+            )
+
+    def test_missing_run_file_raises(self) -> None:
+        # num_runs says 2 but only one part is present: reading it would still
+        # divide by 2 and understate sigma by half, so fail instead.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, num_runs=2)
+            _write_roottuple(self._part(work_dir, 1), [1.0], [0.1], [1])
+
+            with self.assertRaises(RuntimeError) as ctx:
+                GiBUUNormalizer().normalize(
+                    self._part(work_dir, 1), work_dir / "out.h5", _base_task(), "local"
+                )
+            self.assertIn("num_runs=2", str(ctx.exception))
+
+    def test_adapter_finds_parts_without_assuming_the_first_name(self) -> None:
+        from neutrino_factory.normalizers.gibuu import pert_output_parts
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            for index in (2, 1, 3):
+                self._part(work_dir, index).write_text("", encoding="utf-8")
+            parts = pert_output_parts(work_dir)
+            self.assertEqual(
+                [p.name for p in parts],
+                [
+                    "EventOutput.Pert.00000001.root",
+                    "EventOutput.Pert.00000002.root",
+                    "EventOutput.Pert.00000003.root",
+                ],
+            )
