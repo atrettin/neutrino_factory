@@ -268,12 +268,13 @@ inside NEUT; the source is unavailable to confirm.
 chunk seeds give different, independent event sets, which holds. What is lost is
 bit-exact re-running of a given chunk. Configs remain reproducible in
 distribution, not in individual events.
+
 ## Derived kinematic variables in the common output
 
 **Context.** The common format originally carried a single kinematic quantity,
 `energy_gev` (the incoming neutrino energy), which is not enough for the standard
 neutrino cross-section measurements the harmonized output exists to support.
-GENIE, GiBUU and NuWro all write the incoming-neutrino and outgoing-lepton
+All four generators expose the incoming-neutrino and outgoing-lepton
 four-vectors; the normalizers simply were not reading them.
 
 **Decision.** Eight lab-frame columns are derived in one shared module,
@@ -308,6 +309,26 @@ GENIE's own branches for a reference scatter.
   "lepton" is the scattered neutrino. Detector observability is a downstream
   question, not the generator-harmonization layer's to decide.
 
+**NEUT needs the four-vectors carried across explicitly.** The other three
+generators write them into their native output, so the normalizer just reads more
+branches. NEUT's NeutVect output cannot be read from Python at all (see the
+`nf_flatten.C` section above), and the flattener wrote only `mode`, `pdgnu`,
+`enu_gev` and `totcrs` -- the four-vectors were dropped before Python ever saw
+them. `nf_flatten.C` therefore gained `nu_p{x,y,z}_gev`, `lep_{e,px,py,pz}_gev`
+and `pdglep`, converted to GeV in the macro so the flat tree is single-unit.
+
+**Do not read NEUT's outgoing lepton at `PartInfo(2)`.** The usual layout is
+[0] beam neutrino, [1] struck nucleon, [2] outgoing lepton, and 49 of 50 events
+in a real numu-CC C12 run follow it. The exception is **2p2h (Mode 2), which has
+two initial-state nucleons at [1] and [2], putting the lepton at [3]** -- a fixed
+index would have read a neutron as the outgoing lepton and silently corrupted
+Q^2/x/y for the entire MEC channel. The flattener instead scans from index 1 for
+the first particle with |PDG| in 11..16 (the charged lepton for CC, the scattered
+neutrino for NC; leptons do not rescatter, so there is no FSI copy to confuse
+it), and reports `pdglep = 0` when it finds none, which blanks the kinematics for
+that event. Verified by dumping every NeutVect entry of a real run and comparing
+against the flattened tree: 50/50 events agree.
+
 **Placeholders.** Undefined values use a clearly unphysical marker, but *two* of
 them: `MISSING = -1.0` for the non-negative-definite columns, and
 `MISSING_SIGNED = -999.0` for `lepton_p_parallel_gev` and `lepton_costheta`,
@@ -334,13 +355,13 @@ Files: `kinematics.py`, `common_output.py`, `normalizers/{genie,gibuu,nuwro}.py`
 `validate_output.py`, `tests/kinematics_reference.py` (the reference scatter all
 three normalizer test modules assert against).
 
-**Verified on real generator output (2026-07-27).** 20k-event GENIE and NuWro
-runs plus an 83k-event GiBUU run, all `numu` CC on C12 with a γ=-2 power-law flux
-over 0.5–5 GeV, pass the structural invariants event-by-event (Q² ≥ 0, exact
+**Verified on real generator output (2026-07-28).** 20k-event GENIE, NuWro and
+NEUT runs plus an 83k-event GiBUU run, all `numu` CC on C12 with a γ=-2 power-law
+flux over 0.5–5 GeV, pass the structural invariants event-by-event (Q² ≥ 0, exact
 energy-transfer closure, |cos θ| ≤ 1, p_∥² + p_T² = |p|², coherent events blanked
 and only those) and agree on the cross-section-weighted distributions. Bjorken-x
 for quasi-elastic peaks at 0.75–0.85 with a weighted median of 0.824 (GENIE),
-0.815 (NuWro) and 0.809 (GiBUU) — a broad peak *below* 1, not the sharp x=1 of
+0.815 (NuWro), 0.825 (NEUT) and 0.809 (GiBUU) — a broad peak *below* 1, not the sharp x=1 of
 free-nucleon QE, because Fermi motion and binding smear it and the fixed `M_N`
 does not absorb that. The GiBUU number needs care: its QE weight is extremely
 concentrated (Kish n_eff = 35 out of 14579 events; the top 1% of events carry 86%

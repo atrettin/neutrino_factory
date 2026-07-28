@@ -43,10 +43,23 @@ void nf_flatten(const char* in_path, const char* out_path) {
   Int_t pdgnu = 0;
   Double_t enu_gev = 0.0;
   Double_t totcrs = 0.0;
+  // Four-vectors for the derived kinematics (Q^2, x, y, lepton angle), written
+  // in GeV so the flat tree is single-unit and the normalizer converts nothing.
+  Double_t nu_px_gev = 0.0, nu_py_gev = 0.0, nu_pz_gev = 0.0;
+  Double_t lep_e_gev = 0.0, lep_px_gev = 0.0, lep_py_gev = 0.0, lep_pz_gev = 0.0;
+  Int_t pdglep = 0;  // 0 marks "no outgoing lepton found" -> normalizer blanks
   out_tree->Branch("mode", &mode, "mode/I");
   out_tree->Branch("pdgnu", &pdgnu, "pdgnu/I");
   out_tree->Branch("enu_gev", &enu_gev, "enu_gev/D");
   out_tree->Branch("totcrs", &totcrs, "totcrs/D");
+  out_tree->Branch("nu_px_gev", &nu_px_gev, "nu_px_gev/D");
+  out_tree->Branch("nu_py_gev", &nu_py_gev, "nu_py_gev/D");
+  out_tree->Branch("nu_pz_gev", &nu_pz_gev, "nu_pz_gev/D");
+  out_tree->Branch("pdglep", &pdglep, "pdglep/I");
+  out_tree->Branch("lep_e_gev", &lep_e_gev, "lep_e_gev/D");
+  out_tree->Branch("lep_px_gev", &lep_px_gev, "lep_px_gev/D");
+  out_tree->Branch("lep_py_gev", &lep_py_gev, "lep_py_gev/D");
+  out_tree->Branch("lep_pz_gev", &lep_pz_gev, "lep_pz_gev/D");
 
   const Long64_t n_entries = in_tree->GetEntries();
   for (Long64_t i = 0; i < n_entries; ++i) {
@@ -61,6 +74,33 @@ void nf_flatten(const char* in_path, const char* out_path) {
     }
     pdgnu = probe->fPID;
     enu_gev = probe->fP.E() / 1000.0;
+    nu_px_gev = probe->fP.Px() / 1000.0;
+    nu_py_gev = probe->fP.Py() / 1000.0;
+    nu_pz_gev = probe->fP.Pz() / 1000.0;
+
+    // Find the outgoing lepton by PDG, NOT at a fixed index. The usual layout is
+    // [0] = beam neutrino, [1] = struck nucleon, [2] = outgoing lepton, but 2p2h
+    // (Mode 2) has *two* initial-state nucleons at [1] and [2], putting the
+    // lepton at [3]; reading PartInfo(2) there yields a neutron and silently
+    // corrupts the kinematics for the whole MEC channel. The first lepton at
+    // index >= 1 is the primary outgoing lepton -- the charged lepton for CC,
+    // the scattered neutrino for NC. Leptons do not rescatter, so there is no
+    // FSI copy to confuse this.
+    pdglep = 0;
+    lep_e_gev = lep_px_gev = lep_py_gev = lep_pz_gev = 0.0;
+    for (int j = 1; j < nv->Npart(); ++j) {
+      NeutPart* part = nv->PartInfo(j);
+      if (!part) continue;
+      const int abs_pid = abs(part->fPID);
+      if (abs_pid >= 11 && abs_pid <= 16) {
+        pdglep = part->fPID;
+        lep_e_gev = part->fP.E() / 1000.0;
+        lep_px_gev = part->fP.Px() / 1000.0;
+        lep_py_gev = part->fP.Py() / 1000.0;
+        lep_pz_gev = part->fP.Pz() / 1000.0;
+        break;
+      }
+    }
     out_tree->Fill();
   }
 

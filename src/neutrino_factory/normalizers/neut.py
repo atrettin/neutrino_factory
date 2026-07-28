@@ -7,6 +7,7 @@ import numpy as np
 
 from ..common_output import version_metadata, write_common_hdf5
 from ..flux import build_flux
+from ..kinematics import KINEMATIC_FIELDS, derive_kinematics
 from ..translators.neut import NeutTranslator
 from .base import OutputNormalizer
 
@@ -106,6 +107,24 @@ class NeutNormalizer(OutputNormalizer):
                 raise RuntimeError(
                     f"Cannot read interaction mode from branch 'mode': {exc}"
                 ) from exc
+            try:
+                # nf_flatten.C writes both four-vectors already in GeV. pdglep is
+                # 0 when it found no outgoing lepton, which blanks the kinematics.
+                nu_p4 = np.column_stack([
+                    energies_gev,
+                    *(tree[b].array(library="np") for b in ("nu_px_gev", "nu_py_gev", "nu_pz_gev")),
+                ])
+                lepton_p4 = np.column_stack([
+                    tree[b].array(library="np")
+                    for b in ("lep_e_gev", "lep_px_gev", "lep_py_gev", "lep_pz_gev")
+                ])
+                lepton_pdg = tree["pdglep"].array(library="np")
+            except Exception as exc:
+                raise RuntimeError(
+                    "Cannot read lepton four-vectors from 'nu_p*_gev' / 'lep_*_gev'. "
+                    "The flattened file predates these branches; regenerate it with "
+                    f"the current setup/neut/nf_flatten.C: {exc}"
+                ) from exc
             flux_averaged_xsec = self._flux_averaged_xsec(f, root_path)
 
         energies_gev = np.asarray(energies_gev, dtype=np.float64)
@@ -122,21 +141,30 @@ class NeutNormalizer(OutputNormalizer):
             energies_gev, weights, translated_with_xsec, flux
         )
 
+        interactions = [
+            INTERACTION_BY_MODE.get(abs(int(neut_mode)), "other") for neut_mode in modes
+        ]
+        kinematics = derive_kinematics(
+            nu_p4, lepton_p4, interactions, valid=np.asarray(lepton_pdg) != 0
+        )
+
         events = []
-        for i, (e_gev, w, xw, neut_mode) in enumerate(
-            zip(energies_gev, weights, xsec_weights, modes)
+        for i, (e_gev, w, xw, itype) in enumerate(
+            zip(energies_gev, weights, xsec_weights, interactions)
         ):
-            events.append({
+            event = {
                 "event_id": start_event + i,
                 "seed": int(task["seed"]),
                 "energy_gev": float(e_gev),
                 "weight": float(w),
                 "xsec_weight": float(xw),
-                "interaction": INTERACTION_BY_MODE.get(abs(int(neut_mode)), "other"),
+                "interaction": itype,
                 "probe": probe,
                 "target": target,
                 "generator": self.name,
-            })
+            }
+            event.update({field: float(kinematics[field][i]) for field in KINEMATIC_FIELDS})
+            events.append(event)
 
         return write_common_hdf5(out_path, metadata, events)
 

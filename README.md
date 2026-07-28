@@ -109,7 +109,7 @@ and an `events` group holding one 1-D dataset per column.
 | column | unit | meaning |
 | --- | --- | --- |
 | `event_id`, `seed` | – | bookkeeping |
-| `generator`, `probe`, `target` | – | `genie`/`gibuu`/`nuwro`, flavour, nucleus |
+| `generator`, `probe`, `target` | – | `genie`/`gibuu`/`neut`/`nuwro`, flavour, nucleus |
 | `interaction` | – | `qel`, `res`, `dis`, `coh`, `mec`, `other` |
 | `energy_gev` | GeV | incoming neutrino energy |
 | `weight` | generator-native | raw generator weight, passed through verbatim |
