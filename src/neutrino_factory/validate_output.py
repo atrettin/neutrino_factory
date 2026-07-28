@@ -20,7 +20,7 @@ import h5py
 import numpy as np
 
 from . import catalog
-from .common_output import VERSION_IDENTITY_KEYS
+from .common_output import EVENT_FIELDS, VERSION_IDENTITY_KEYS
 from .slurm import build_task_manifest
 
 # Metadata attrs whose absence makes a file invalid: the version identity (what a
@@ -36,18 +36,12 @@ REQUIRED_METADATA_KEYS = (
 # Metadata attrs we expect but only warn about when missing.
 OPTIONAL_METADATA_KEYS = ("execution_mode", "run_name", "chunk_id", "seed")
 
-# Datasets every ``events`` group must carry (see common_output.write_common_hdf5).
-REQUIRED_COLUMNS = (
-    "event_id",
-    "seed",
-    "energy_gev",
-    "weight",
-    "xsec_weight",
-    "interaction",
-    "probe",
-    "target",
-    "generator",
-)
+# Datasets every ``events`` group must carry. ``write_common_hdf5`` always emits
+# the full set (missing values fall back to their defaults/placeholders), so this
+# tracks the schema directly. Files written before a column was introduced fail
+# validation and need regenerating, though ``read_events``/``merge_hdf5_files``
+# still handle them by synthesizing the absent columns from their defaults.
+REQUIRED_COLUMNS = EVENT_FIELDS
 
 DEFAULT_TOLERANCE = 0.05
 

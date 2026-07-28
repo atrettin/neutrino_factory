@@ -9,17 +9,36 @@ from unittest.mock import patch
 
 import numpy as np
 
+from tests.kinematics_reference import reference_kinematics, reference_lepton_p4
 from neutrino_factory.common_output import read_events
+from neutrino_factory.kinematics import KINEMATIC_FIELDS, MISSING
 from neutrino_factory.normalizers.genie import GenieNormalizer
 from neutrino_factory.translators.genie import GENIE_UNITS_CM2, XSEC_SCALE
 
 
-def _write_gst_root(path: Path, energies_gev, weights, qel, res, dis, coh, mec) -> None:
+def _write_gst_root(path: Path, energies_gev, weights, qel, res, dis, coh, mec, lepton_p4=None) -> None:
+    """Write a synthetic ``gst`` tree.
+
+    Unless ``lepton_p4`` is given, each event gets the reference scatter defined
+    by :func:`kinematics_reference.reference_lepton_p4`: a beam neutrino along +z
+    with |p| = E, and an outgoing lepton at E_l = E/2 with (px, pz) = (0.3E, 0.4E).
+    """
     import uproot
+
+    energies = np.array(energies_gev, dtype=np.float64)
+    lepton = np.asarray(reference_lepton_p4(energies) if lepton_p4 is None else lepton_p4,
+                        dtype=np.float64)
 
     with uproot.recreate(path) as f:
         f["gst"] = {
-            "Ev": np.array(energies_gev, dtype=np.float64),
+            "Ev": energies,
+            "pxv": np.zeros_like(energies),
+            "pyv": np.zeros_like(energies),
+            "pzv": energies,
+            "El": lepton[:, 0],
+            "pxl": lepton[:, 1],
+            "pyl": lepton[:, 2],
+            "pzl": lepton[:, 3],
             "wght": np.array(weights, dtype=np.float64),
             "qel": np.array(qel, dtype=np.bool_),
             "res": np.array(res, dtype=np.bool_),
@@ -278,6 +297,100 @@ class GenieNormalizerRootTests(unittest.TestCase):
             _, events = read_events(out_path)
             interactions = [e["interaction"] for e in events]
             self.assertEqual(interactions, ["qel", "res", "dis", "coh", "mec", "other"])
+
+    def test_normalize_gst_root_derives_kinematics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            gst_path = work_dir / "events.gst.root"
+            energies = [1.0, 2.5, 4.0]
+            _write_gst_root(
+                gst_path,
+                energies_gev=energies,
+                weights=[1.0] * 3,
+                qel=[True, False, False],
+                res=[False, True, False],
+                dis=[False, False, True],
+                coh=[False] * 3,
+                mec=[False] * 3,
+            )
+            out_path = work_dir / "out.h5"
+
+            GenieNormalizer().normalize(gst_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            for event, energy in zip(events, energies):
+                expected = reference_kinematics(energy)
+                for field in KINEMATIC_FIELDS:
+                    self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+
+    def test_derived_kinematics_agree_with_genie_native_branches(self) -> None:
+        """Pin our definitions to GENIE's own.
+
+        The gst tree precomputes Q2/x/y/cthl. We deliberately recompute them from
+        the four-vectors instead (so every generator uses one formula), which is
+        only safe if the two agree. Here the native branches are filled with the
+        hand-derived values for the reference scatter and compared against what
+        the normalizer produces.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            gst_path = work_dir / "events.gst.root"
+            energies = np.array([1.0, 2.5, 4.0])
+            _write_gst_root(
+                gst_path,
+                energies_gev=energies,
+                weights=[1.0] * 3,
+                qel=[False] * 3,
+                res=[False] * 3,
+                dis=[True] * 3,
+                coh=[False] * 3,
+                mec=[False] * 3,
+            )
+            native = {
+                "Q2": np.array([reference_kinematics(e)["q2_gev2"] for e in energies]),
+                "x": np.array([reference_kinematics(e)["bjorken_x"] for e in energies]),
+                "y": np.array([reference_kinematics(e)["inelasticity_y"] for e in energies]),
+                "cthl": np.array([reference_kinematics(e)["lepton_costheta"] for e in energies]),
+            }
+            out_path = work_dir / "out.h5"
+
+            GenieNormalizer().normalize(gst_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            for index, event in enumerate(events):
+                self.assertAlmostEqual(event["q2_gev2"], native["Q2"][index], places=9)
+                self.assertAlmostEqual(event["bjorken_x"], native["x"][index], places=9)
+                self.assertAlmostEqual(event["inelasticity_y"], native["y"][index], places=9)
+                self.assertAlmostEqual(event["lepton_costheta"], native["cthl"][index], places=9)
+
+    def test_normalize_gst_root_blanks_bjorken_x_for_coherent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            gst_path = work_dir / "events.gst.root"
+            _write_gst_root(
+                gst_path,
+                energies_gev=[2.0, 2.0],
+                weights=[1.0, 1.0],
+                qel=[False, False],
+                res=[False, False],
+                dis=[True, False],
+                coh=[False, True],
+                mec=[False, False],
+            )
+            out_path = work_dir / "out.h5"
+            task = {**_base_task(), "event_count": 2}
+
+            GenieNormalizer().normalize(gst_path, out_path, task, "local")
+
+            _, events = read_events(out_path)
+            self.assertGreater(events[0]["bjorken_x"], 0.0)
+            self.assertEqual(events[1]["bjorken_x"], MISSING)
+            # Everything else stays physical for the coherent event.
+            self.assertAlmostEqual(events[1]["q2_gev2"], reference_kinematics(2.0)["q2_gev2"])
+            self.assertAlmostEqual(events[1]["inelasticity_y"], 0.5)
 
     def test_xsec_weight_matches_hand_derivation_for_flat_flux_and_constant_spline(self) -> None:
         """A flat (gamma=0) flux over [emin, emax] normalizes to a uniform

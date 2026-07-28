@@ -8,16 +8,35 @@ from unittest.mock import patch
 
 import numpy as np
 
+from tests.kinematics_reference import reference_kinematics, reference_lepton_p4
 from neutrino_factory.common_output import read_events
+from neutrino_factory.kinematics import KINEMATIC_FIELDS
 from neutrino_factory.normalizers.gibuu import GiBUUNormalizer
 
 
-def _write_roottuple(path: Path, lepIn_E, weight, evType) -> None:
+def _write_roottuple(path: Path, lepIn_E, weight, evType, lepton_p4=None) -> None:
+    """Write a synthetic ``RootTuple`` tree.
+
+    Unless ``lepton_p4`` is given, each event gets the reference scatter defined
+    by :func:`reference_lepton_p4`: a beam neutrino along +z with |p| = E, and an
+    outgoing lepton at E_l = E/2 with (px, pz) = (0.3E, 0.4E).
+    """
     import uproot
+
+    energies = np.array(lepIn_E, dtype=np.float64)
+    lepton = np.asarray(reference_lepton_p4(energies) if lepton_p4 is None else lepton_p4,
+                        dtype=np.float64)
 
     with uproot.recreate(path) as f:
         f["RootTuple"] = {
-            "lepIn_E": np.array(lepIn_E, dtype=np.float64),
+            "lepIn_E": energies,
+            "lepIn_Px": np.zeros_like(energies),
+            "lepIn_Py": np.zeros_like(energies),
+            "lepIn_Pz": energies,
+            "lepOut_E": lepton[:, 0],
+            "lepOut_Px": lepton[:, 1],
+            "lepOut_Py": lepton[:, 2],
+            "lepOut_Pz": lepton[:, 3],
             "weight": np.array(weight, dtype=np.float64),
             "evType": np.array(evType, dtype=np.int32),
         }
@@ -136,6 +155,24 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
             self.assertEqual(events[0]["probe"], "numu")
             self.assertEqual(events[0]["target"], "C12")
             self.assertEqual(metadata["generator"], "gibuu")
+
+    def test_normalize_root_derives_kinematics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "EventOutput.Pert.00000001.root"
+            _write_roottuple(
+                root_path, lepIn_E=[1.0, 2.5, 4.0], weight=[1.0] * 3, evType=[1, 2, 34]
+            )
+            out_path = work_dir / "out.h5"
+
+            GiBUUNormalizer().normalize(root_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            for event, energy in zip(events, [1.0, 2.5, 4.0]):
+                expected = reference_kinematics(energy)
+                for field in KINEMATIC_FIELDS:
+                    self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
 
     def test_normalize_root_xsec_weight_matches_hand_derivation_for_flat_flux(self) -> None:
         # Flat power-law flux (gamma=0) over [0.5, 5.0] GeV: the unit-normalized

@@ -268,3 +268,81 @@ inside NEUT; the source is unavailable to confirm.
 chunk seeds give different, independent event sets, which holds. What is lost is
 bit-exact re-running of a given chunk. Configs remain reproducible in
 distribution, not in individual events.
+## Derived kinematic variables in the common output
+
+**Context.** The common format originally carried a single kinematic quantity,
+`energy_gev` (the incoming neutrino energy), which is not enough for the standard
+neutrino cross-section measurements the harmonized output exists to support.
+GENIE, GiBUU and NuWro all write the incoming-neutrino and outgoing-lepton
+four-vectors; the normalizers simply were not reading them.
+
+**Decision.** Eight lab-frame columns are derived in one shared module,
+`src/neutrino_factory/kinematics.py`: `q2_gev2`, `bjorken_x`, `inelasticity_y`,
+`lepton_energy_gev`, `lepton_momentum_gev`, `lepton_p_parallel_gev`,
+`lepton_p_transverse_gev`, `lepton_costheta`.
+
+**Recomputed, not read.** GENIE's `gst` tree already precomputes `Q2`, `x`, `y`
+and `cthl`, and it would have been less code to use them. We recompute from the
+four-vectors for all three generators anyway, because the promise of the common
+format is that a Q^2 histogram from GENIE means exactly the same thing as one
+from GiBUU — which only holds if one formula produces all of them. GENIE further
+ships *two* variants (`Q2`/`x`/`y` "true" and `Q2s`/`xs`/`ys` reconstructed from
+the hadronic system), so "use the native branch" is not even unambiguous within
+one generator. `tests/test_genie_normalizer.py` pins our definitions against
+GENIE's own branches for a reference scatter.
+
+**Conventions.**
+- The beam axis is taken **per event** from the incoming neutrino three-momentum,
+  never assumed to be +z, so the parallel/transverse split and `cos(theta)` stay
+  correct for off-axis or divergent beams.
+- Bjorken-x uses a **fixed** isoscalar nucleon mass `NUCLEON_MASS_GEV`
+  ((m_p + m_n)/2), not the per-event struck-nucleon mass. Only GiBUU and NuWro
+  expose the hit nucleon; a fixed mass makes x identically defined everywhere.
+- `Q^2 = -(p_nu - p_l)^2` is non-negative for this process up to floating-point
+  noise near forward scattering, so it is clamped at 0 rather than blanked.
+- `inelasticity_y` can come out slightly **negative** when Fermi motion of the
+  struck nucleon pushes the outgoing lepton above the beam energy. That is
+  physical and is passed through; only `bjorken_x` (which would diverge) is
+  blanked when the energy transfer is non-positive.
+- The lepton variables are filled for NC as well as CC events — for NC the
+  "lepton" is the scattered neutrino. Detector observability is a downstream
+  question, not the generator-harmonization layer's to decide.
+
+**Placeholders.** Undefined values use a clearly unphysical marker, but *two* of
+them: `MISSING = -1.0` for the non-negative-definite columns, and
+`MISSING_SIGNED = -999.0` for `lepton_p_parallel_gev` and `lepton_costheta`,
+whose physical ranges include -1 (a backward-scattered lepton genuinely has
+`cos(theta) = -1`). Using a single -1 would have made backward scatters
+indistinguishable from missing data. Blanking rules: `bjorken_x` for coherent
+events (no struck nucleon) and for non-positive energy transfer;
+`lepton_costheta` when the lepton momentum is zero; the directional variables
+when the beam momentum is zero; and the whole block when the generator does not
+supply an outgoing lepton (NuWro's `e/out` can be empty) or the four-vectors are
+non-finite.
+
+**Schema mechanics.** `common_output.py` grew a single `NUMERIC_FIELD_SPECS`
+table (name -> dtype, default) that the writer, reader and merger are all driven
+off, replacing the column names that were hard-coded in four places. Two
+consequences: the writer emits placeholders for any column an event dict omits,
+so stub/JSON mode and the NEUT normalizer need no changes; and the reader
+synthesizes columns absent from a file, so HDF5 written before this change stays
+readable and mergeable. `validate_output.REQUIRED_COLUMNS` now tracks the schema
+directly, so those older files *do* fail validation and should be regenerated.
+
+Files: `kinematics.py`, `common_output.py`, `normalizers/{genie,gibuu,nuwro}.py`,
+`normalizers/base.py` (`interaction_from_flags`, shared by GENIE and NuWro),
+`validate_output.py`, `tests/kinematics_reference.py` (the reference scatter all
+three normalizer test modules assert against).
+
+**Verified on real generator output (2026-07-27).** 20k-event GENIE and NuWro
+runs plus an 83k-event GiBUU run, all `numu` CC on C12 with a γ=-2 power-law flux
+over 0.5–5 GeV, pass the structural invariants event-by-event (Q² ≥ 0, exact
+energy-transfer closure, |cos θ| ≤ 1, p_∥² + p_T² = |p|², coherent events blanked
+and only those) and agree on the cross-section-weighted distributions. Bjorken-x
+for quasi-elastic peaks at 0.75–0.85 with a weighted median of 0.824 (GENIE),
+0.815 (NuWro) and 0.809 (GiBUU) — a broad peak *below* 1, not the sharp x=1 of
+free-nucleon QE, because Fermi motion and binding smear it and the fixed `M_N`
+does not absorb that. The GiBUU number needs care: its QE weight is extremely
+concentrated (Kish n_eff = 35 out of 14579 events; the top 1% of events carry 86%
+of the weight), so it is quoted with a bootstrap CI of [0.797, 0.851] rather than
+as a point estimate — see the GiBUU weighting section above for why.

@@ -7,9 +7,26 @@ from typing import Any, Iterable
 import h5py
 import numpy as np
 
+from . import kinematics
+
 
 STRING_DTYPE = h5py.string_dtype(encoding="utf-8")
-EVENT_NUMERIC_FIELDS = ("event_id", "seed", "energy_gev", "weight", "xsec_weight")
+
+# The numeric event columns, each with its dtype and the default used when an
+# event dict omits it (stub/JSON mode) or when reading a file written before the
+# column existed; ``None`` marks a column every event must carry. Everything that
+# iterates over columns -- the writer, the reader, the merger -- is driven off
+# this single table.
+NUMERIC_FIELD_SPECS: dict[str, tuple[type, Any]] = {
+    "event_id": (np.int64, None),
+    "seed": (np.int64, None),
+    "energy_gev": (np.float64, None),
+    "weight": (np.float64, 1.0),
+    "xsec_weight": (np.float64, 1.0),
+    **{name: (np.float64, default) for name, default in kinematics.FIELD_DEFAULTS.items()},
+}
+
+EVENT_NUMERIC_FIELDS = tuple(NUMERIC_FIELD_SPECS)
 EVENT_STRING_FIELDS = ("interaction", "probe", "target", "generator")
 EVENT_FIELDS = (*EVENT_NUMERIC_FIELDS, *EVENT_STRING_FIELDS)
 
@@ -69,14 +86,24 @@ def _decode_text_array(values: np.ndarray) -> np.ndarray:
 
 
 def _read_event_columns(handle: h5py.File) -> dict[str, np.ndarray]:
+    """Read the ``events`` group into per-column arrays.
+
+    Columns a file does not carry are synthesized from their default. That keeps
+    files written before a column was introduced readable and mergeable; the
+    kinematic columns come back as placeholders rather than raising.
+    """
     event_group = handle["events"]
-    columns: dict[str, np.ndarray] = {
-        "event_id": np.asarray(event_group["event_id"][()], dtype=np.int64),
-        "seed": np.asarray(event_group["seed"][()], dtype=np.int64),
-        "energy_gev": np.asarray(event_group["energy_gev"][()], dtype=np.float64),
-        "weight": np.asarray(event_group["weight"][()], dtype=np.float64),
-        "xsec_weight": np.asarray(event_group["xsec_weight"][()], dtype=np.float64),
-    }
+    count = int(len(event_group["event_id"]))
+
+    columns: dict[str, np.ndarray] = {}
+    for key, (dtype, default) in NUMERIC_FIELD_SPECS.items():
+        if key in event_group:
+            columns[key] = np.asarray(event_group[key][()], dtype=dtype)
+        elif default is None:
+            raise KeyError(f"Required event column '{key}' is missing from the file")
+        else:
+            columns[key] = np.full(count, default, dtype=dtype)
+
     for key in EVENT_STRING_FIELDS:
         columns[key] = _decode_text_array(np.asarray(event_group[key][()]))
     return columns
@@ -84,35 +111,24 @@ def _read_event_columns(handle: h5py.File) -> dict[str, np.ndarray]:
 
 def _rows_from_event_columns(columns: dict[str, np.ndarray]) -> list[dict[str, Any]]:
     count = len(columns["event_id"])
+    casts: list[tuple[str, Any]] = [
+        (key, int if NUMERIC_FIELD_SPECS[key][0] is np.int64 else float)
+        for key in EVENT_NUMERIC_FIELDS
+    ]
+    casts += [(key, str) for key in EVENT_STRING_FIELDS]
     return [
-        {
-            "event_id": int(columns["event_id"][index]),
-            "seed": int(columns["seed"][index]),
-            "energy_gev": float(columns["energy_gev"][index]),
-            "weight": float(columns["weight"][index]),
-            "xsec_weight": float(columns["xsec_weight"][index]),
-            "interaction": str(columns["interaction"][index]),
-            "probe": str(columns["probe"][index]),
-            "target": str(columns["target"][index]),
-            "generator": str(columns["generator"][index]),
-        }
+        {key: cast(columns[key][index]) for key, cast in casts}
         for index in range(count)
     ]
 
 
 def _concat_event_columns(chunks: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
     if not chunks:
-        return {
-            "event_id": np.array([], dtype=np.int64),
-            "seed": np.array([], dtype=np.int64),
-            "energy_gev": np.array([], dtype=np.float64),
-            "weight": np.array([], dtype=np.float64),
-            "xsec_weight": np.array([], dtype=np.float64),
-            "interaction": np.array([], dtype="U"),
-            "probe": np.array([], dtype="U"),
-            "target": np.array([], dtype="U"),
-            "generator": np.array([], dtype="U"),
+        empty: dict[str, np.ndarray] = {
+            key: np.array([], dtype=dtype) for key, (dtype, _) in NUMERIC_FIELD_SPECS.items()
         }
+        empty.update({key: np.array([], dtype="U") for key in EVENT_STRING_FIELDS})
+        return empty
 
     merged: dict[str, np.ndarray] = {}
     for key in EVENT_FIELDS:
@@ -125,15 +141,26 @@ def write_common_hdf5(output_path: str | Path, metadata: dict[str, Any], events:
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    event_ids = np.array([int(event["event_id"]) for event in events], dtype=np.int64) if events else np.array([], dtype=np.int64)
-    seeds = np.array([int(event["seed"]) for event in events], dtype=np.int64) if events else np.array([], dtype=np.int64)
-    energies = np.array([float(event["energy_gev"]) for event in events], dtype=np.float64) if events else np.array([], dtype=np.float64)
-    weights = np.array([float(event.get("weight", 1.0)) for event in events], dtype=np.float64) if events else np.array([], dtype=np.float64)
-    xsec_weights = np.array([float(event.get("xsec_weight", 1.0)) for event in events], dtype=np.float64) if events else np.array([], dtype=np.float64)
-    interactions = np.array([str(event.get("interaction", "unknown")) for event in events], dtype=STRING_DTYPE)
-    probes = np.array([str(event.get("probe", "unknown")) for event in events], dtype=STRING_DTYPE)
-    targets = np.array([str(event.get("target", "unknown")) for event in events], dtype=STRING_DTYPE)
-    generators = np.array([str(event.get("generator", metadata.get("generator", "unknown"))) for event in events], dtype=STRING_DTYPE)
+    numeric_columns: dict[str, np.ndarray] = {}
+    for key, (dtype, default) in NUMERIC_FIELD_SPECS.items():
+        if default is None:
+            values = [dtype(event[key]) for event in events]
+        else:
+            values = [dtype(event.get(key, default)) for event in events]
+        numeric_columns[key] = np.array(values, dtype=dtype) if events else np.array([], dtype=dtype)
+
+    string_defaults = {
+        "interaction": "unknown",
+        "probe": "unknown",
+        "target": "unknown",
+        "generator": metadata.get("generator", "unknown"),
+    }
+    string_columns = {
+        key: np.array(
+            [str(event.get(key, string_defaults[key])) for event in events], dtype=STRING_DTYPE
+        )
+        for key in EVENT_STRING_FIELDS
+    }
 
     with h5py.File(output, "w") as handle:
         meta_group = handle.create_group("metadata")
@@ -144,15 +171,10 @@ def write_common_hdf5(output_path: str | Path, metadata: dict[str, Any], events:
         run_group.attrs["event_count"] = int(len(events))
 
         event_group = handle.create_group("events")
-        event_group.create_dataset("event_id", data=event_ids)
-        event_group.create_dataset("seed", data=seeds)
-        event_group.create_dataset("energy_gev", data=energies)
-        event_group.create_dataset("weight", data=weights)
-        event_group.create_dataset("xsec_weight", data=xsec_weights)
-        event_group.create_dataset("interaction", data=interactions, dtype=STRING_DTYPE)
-        event_group.create_dataset("probe", data=probes, dtype=STRING_DTYPE)
-        event_group.create_dataset("target", data=targets, dtype=STRING_DTYPE)
-        event_group.create_dataset("generator", data=generators, dtype=STRING_DTYPE)
+        for key, values in numeric_columns.items():
+            event_group.create_dataset(key, data=values)
+        for key, values in string_columns.items():
+            event_group.create_dataset(key, data=values, dtype=STRING_DTYPE)
 
     return str(output)
 
