@@ -124,16 +124,25 @@ def docker_wrap(
     args: list[str],
     binds: list[Bind],
     workdir: str,
+    env: dict[str, str] | None = None,
 ) -> list[str]:
     """Wrap a command in ``docker run`` with the project's standard flags.
 
     ``binds`` entries are ``(host, container)`` or ``(host, container, "ro")``;
     host paths are resolved to absolute paths as Docker requires.
+
+    ``env`` sets environment variables inside the container. The native branches
+    inherit the parent process environment, so a generator that is configured
+    through an environment variable (NEUT reads its random seed from the file
+    named by ``RANFILE``) needs it passed explicitly here to behave the same way
+    under Docker.
     """
     command = ["docker", "run", "--platform", "linux/amd64", "--rm"]
     for bind in binds:
         host, container = bind[0], bind[1]
         suffix = ":ro" if len(bind) > 2 and bind[2] == "ro" else ""
         command.extend(["-v", f"{Path(host).resolve()}:{container}{suffix}"])
+    for key, value in (env or {}).items():
+        command.extend(["-e", f"{key}={value}"])
     command.extend(["-w", workdir, image])
     return command + list(args)

@@ -9,7 +9,7 @@ Targets:
 - `GENIE` — Docker image built and working
 - `NuWro` — Docker image built and working
 - `GiBUU` — Docker image built and working (event generation; ROOT→HDF5 normalizer still a stub)
-- `NEUT` — catalogued but not buildable; NEUT source is not freely available, so this backend is blocked indefinitely
+- `NEUT` — Docker image pulled and working; NEUT source is not freely available, so the image is extracted from the published NUISANCE tutorial image rather than built
 
 The workflow is **develop locally, deploy to the cluster**:
 1. validate, plan, and smoke-test runs locally with Docker (or stub mode),
@@ -149,14 +149,16 @@ active runtime is chosen by `NF_CONTAINER_RUNTIME` (persisted in `.env`).
 
 **Docker (local):** each generator is built by its own setup script —
 `setup/setup_all.sh`, `setup/setup_genie.sh`, `setup/setup_nuwro.sh`,
-`setup/setup_gibuu.sh` (`setup/setup_neut.sh` is not buildable — NEUT source is
-not freely available). Each accepts `--list-versions` and validates the
+`setup/setup_gibuu.sh`, `setup/setup_neut.sh` (which pulls and retags a published
+image instead of building — NEUT source is not freely available). Each accepts
+`--list-versions` and validates the
 requested `code_version` against the catalog. At runtime the adapter prefers a
 native binary on `$PATH` and otherwise wraps the generator in `docker run`.
 
 **Apptainer (cluster):** SIFs are built by `setup/build_apptainer_images.sh`
 from the hand-written definitions in `setup/apptainer/*.def` (each mirrors its
-`setup/Dockerfile.*` — update both together). The Slurm array task runs inside
+`setup/Dockerfile.*` — update both together; `neut.def` is the exception, having
+no Dockerfile to mirror). The Slurm array task runs inside
 the unified `nf-base.sif` image, which provides one Python runtime plus
 generator wrappers in a single interactive environment.
 
@@ -197,9 +199,11 @@ versions of the same generator coexist without file collisions.
 ## Status
 
 Functional locally; first real HPC deployment (ODSL/MPP cluster via the
-Apptainer pathway) is the current objective. GENIE, NuWro, and GiBUU build and
-run in Docker, and every generator also runs in synthetic `stub_mode` for
-development without real binaries. Known gaps are tracked in the source tree:
-the GiBUU ROOT→HDF5 normalizer is a stub, NEUT is blocked on source
-availability, and the Apptainer pathway is written but not yet verified on the
-cluster (the dev machine is macOS, where Apptainer cannot run).
+Apptainer pathway) is the current objective. All four generators run in Docker,
+and every generator also runs in synthetic `stub_mode` for development without
+real binaries. Known gaps are tracked in the source tree: the GiBUU ROOT→HDF5
+normalizer is a stub, `xsec_weight` is
+normalized per chunk and so does not survive merging (see `.claude/TODOS.md`),
+NEUT is not bit-reproducible from its seed (see `docs/design_decisions.md`), and
+the Apptainer pathway is written but not yet verified on the cluster (the dev
+machine is macOS, where Apptainer cannot run).

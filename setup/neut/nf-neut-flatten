@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Convert NEUT's native NeutVect output into the flat tree the normalizer reads.
+# Usage: nf-neut-flatten <events.neut.root> <events.flat.root>
+#
+# One artifact serves both container pathways: the Apptainer payload stages this
+# script next to nf_flatten.C in its bin/, and the Docker path bind-mounts
+# setup/neut into the container. Both resolve the macro relative to this file.
+set -euo pipefail
+
+if [[ $# -ne 2 ]]; then
+    echo "usage: $(basename "$0") <input.root> <output.root>" >&2
+    exit 2
+fi
+
+here="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+macro="$here/nf_flatten.C"
+[[ -f "$macro" ]] || { echo "nf_flatten.C not found next to $0" >&2; exit 1; }
+
+# ROOT resolves relative paths against its own CWD, and the macro is invoked
+# through ProcessLine, so absolutize both arguments against the caller's CWD.
+abspath() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$PWD" "$1" ;; esac; }
+input="$(abspath "$1")"
+output="$(abspath "$2")"
+
+# Cling needs the NEUT headers on its include path or nf_flatten.C fails to
+# compile with "unknown type name 'NeutVect'". neut-config resolves them, but it
+# cross-checks its own location against the prefix baked into NEUT.pc, so
+# NF_NEUT_INCDIR lets a relocated install (the Apptainer payload) say it directly.
+incdir="${NF_NEUT_INCDIR:-$(neut-config --incdir)}"
+[[ -d "$incdir" ]] || { echo "NEUT include directory not found: $incdir" >&2; exit 1; }
+
+# `exec root` on a missing or dangling launcher reports a bare "root: not found",
+# which says nothing about where ROOT was expected. Name the problem instead.
+if ! command -v root >/dev/null 2>&1; then
+    echo "ROOT is not on \$PATH (ROOTSYS=${ROOTSYS:-unset})." >&2
+    if [[ -n "${ROOTSYS:-}" && -L "$ROOTSYS/bin/root" && ! -e "$ROOTSYS/bin/root" ]]; then
+        echo "$ROOTSYS/bin/root is a dangling symlink -> $(readlink "$ROOTSYS/bin/root")" >&2
+        echo "The payload's ROOT was relocated without rewriting its symlinks." >&2
+    fi
+    exit 1
+fi
+
+exec root -l -b -q \
+    -e ".include $incdir" \
+    -e "gROOT->ProcessLine(\".x $macro(\\\"$input\\\",\\\"$output\\\")\")"

@@ -1,6 +1,11 @@
+# End-to-end smoke test — NEUT.
+# Minimal real (non-stub) run to confirm the pipeline can translate a config,
+# write NEUT's card / flux histogram / RANLUX seed file, run neutroot2, flatten
+# its NeutVect output with nf-neut-flatten, and normalize to the common HDF5.
+
 run:
-  name: genie_xsec_numu_c12
-  events: 100
+  name: smoke_neut_c12
+  events: 50
   seed: 12345
   executor: local
   stub_mode: false
@@ -21,20 +26,25 @@ physics:
   current: cc
 
 generators:
-  genie:
-    versions:
-      - enabled: true
-        code_version: "R-3_06_00"
-        config_version: "G18_10a_02_11a"
   neut:
     versions:
-      - enabled: false
+      - enabled: true
         code_version: "5.7.0-nuint2024"
         config_version: "default"
   nuwro:
     versions:
       - enabled: false
         code_version: "nuwro_25.11"
+        config_version: "default"
+  genie:
+    versions:
+      - enabled: false
+        code_version: "R-3_06_00"
+        config_version: "G18_10a_02_11a"
+  gibuu:
+    versions:
+      - enabled: false
+        code_version: "release2025"
         config_version: "default"
 
 splitting:

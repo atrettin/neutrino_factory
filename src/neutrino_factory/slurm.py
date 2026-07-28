@@ -96,12 +96,17 @@ def render_sbatch_script(config: dict[str, Any], manifest_path: str | Path) -> s
 
     if containers.runtime() == "apptainer":
         # Unified Apptainer runtime: every task runs inside nf-base.sif.
+        # Note the closing quote on the last line: writing it as a bare `"` right
+        # before the f-string's `"""` terminator silently merges into the
+        # delimiter, which is how this shipped an unterminated quote and made
+        # every apptainer-runtime submission die with "unexpected EOF while
+        # looking for matching". Keep the escape.
         task_launcher = f"""NF_BASE_SIF="${{NF_IMAGE_ROOT:-{repo_root}/software/images}}/nf-base.sif"
 if [[ ! -f "$NF_BASE_SIF" ]]; then
     echo "ERROR: unified Apptainer runtime image not found: $NF_BASE_SIF" >&2
     exit 1
 fi
-apptainer exec "$NF_BASE_SIF" bash "{repo_root}/jobs/run_task.sh" "{config.get('config_path', '')}" "{manifest_path}" "${{SLURM_ARRAY_TASK_ID}}"""
+apptainer exec "$NF_BASE_SIF" bash "{repo_root}/jobs/run_task.sh" "{config.get('config_path', '')}" "{manifest_path}" "${{SLURM_ARRAY_TASK_ID}}\""""
         python_export = ""
     else:
         task_launcher = (

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -59,6 +60,68 @@ class SlurmPlanningTests(unittest.TestCase):
             # The apptainer pathway must not pin the render-time interpreter:
             # the task uses the unified image's own python3.
             self.assertNotIn("export PYTHON=", script)
+
+    def test_rendered_script_is_valid_shell_for_every_runtime(self) -> None:
+        """Parse the rendered sbatch with `bash -n`, per runtime.
+
+        The substring assertions above all passed while the apptainer branch
+        emitted an unterminated quote — its launcher ends in `"${SLURM_ARRAY_TASK_ID}"`
+        and the final quote had merged into the f-string's `\"\"\"` terminator. Slurm
+        only reported `unexpected EOF while looking for matching '"'` at run time,
+        after submission. Syntax-check the whole script instead of grepping it.
+        """
+        repo_root = Path(__file__).resolve().parents[1]
+        config_path = repo_root / "configs" / "examples" / "power_law_numu_Ar.yaml"
+
+        for runtime in ("apptainer", "docker", "none"):
+            with self.subTest(runtime=runtime):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    env = {
+                        "NF_OUTPUT_ROOT": f"{tmpdir}/output",
+                        "NF_WORK_ROOT": f"{tmpdir}/work",
+                        "NF_CONTAINER_RUNTIME": runtime,
+                        "NF_IMAGE_ROOT": f"{tmpdir}/images",
+                    }
+                    with patch.dict(os.environ, env, clear=False):
+                        config = load_config(config_path)
+                        script = render_sbatch_script(config, f"{tmpdir}/manifest.json")
+
+                    script_path = Path(tmpdir) / "job.sbatch"
+                    script_path.write_text(script, encoding="utf-8")
+                    result = subprocess.run(
+                        ["bash", "-n", str(script_path)],
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(
+                        result.returncode,
+                        0,
+                        f"rendered sbatch is not valid shell for runtime "
+                        f"{runtime!r}: {result.stderr}\n{script}",
+                    )
+
+    def test_apptainer_launcher_line_is_fully_quoted(self) -> None:
+        # Guards the specific regression: the task index argument must be a
+        # closed "${SLURM_ARRAY_TASK_ID}", not a dangling open quote.
+        repo_root = Path(__file__).resolve().parents[1]
+        config_path = repo_root / "configs" / "examples" / "power_law_numu_Ar.yaml"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = {
+                "NF_OUTPUT_ROOT": f"{tmpdir}/output",
+                "NF_WORK_ROOT": f"{tmpdir}/work",
+                "NF_CONTAINER_RUNTIME": "apptainer",
+                "NF_IMAGE_ROOT": f"{tmpdir}/images",
+            }
+            with patch.dict(os.environ, env, clear=False):
+                config = load_config(config_path)
+                script = render_sbatch_script(config, f"{tmpdir}/manifest.json")
+
+        launcher = next(
+            line for line in script.splitlines() if line.startswith("apptainer exec")
+        )
+        self.assertTrue(launcher.endswith('"${SLURM_ARRAY_TASK_ID}"'), launcher)
+        self.assertEqual(launcher.count('"') % 2, 0, launcher)
 
     def test_docker_runtime_keeps_direct_invocation(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

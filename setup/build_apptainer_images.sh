@@ -172,7 +172,20 @@ build_def() {
     return 0
   fi
   log "Building $sif from $def"
-  nice -n 15 apptainer build --force "$@" "$sif" "$def"
+  # Build from the repo root so a def's %files source paths are repo-relative
+  # regardless of where this script was invoked from (setup/apptainer/neut.def
+  # stages the flattener out of setup/neut/). Absolutize the SIF path first,
+  # since NF_IMAGE_ROOT may be relative.
+  mkdir -p "$(dirname "$sif")"
+  sif="$(cd "$(dirname "$sif")" && pwd)/$(basename "$sif")"
+  def="$(cd "$(dirname "$def")" && pwd)/$(basename "$def")"
+  # --warn-unused-build-args: JOBS is passed to every def uniformly, but a def
+  # that compiles nothing (setup/apptainer/neut.def, whose payload is extracted
+  # from a prebuilt image) never references it. Apptainer's default is to abort
+  # on a build arg it does not see used — declaring it in %arguments is not
+  # enough, it must actually appear as {{ JOBS }} — so downgrade that to a
+  # warning rather than making every def carry a dummy reference.
+  (cd "$REPO_ROOT" && nice -n 15 apptainer build --force --warn-unused-build-args "$@" "$sif" "$def")
 }
 
 # ── nf-base bootstrap runtime (always ensured, fast) ─────────────────────────

@@ -63,3 +63,50 @@ one generator with both payload SIFs present are composed side by side; a task
 selects one via `nf-run <generator> <code_version> <binary>` (emitted
 automatically by the adapter under the apptainer runtime), while bare binary
 names resolve to the default (highest, sorted-last) version.
+
+## Variant: a generator you cannot build from source
+
+NEUT is the one backend whose source is not publicly available, so its payload is
+*extracted from a published container image* rather than built. If you add
+another generator in that situation, follow `setup/apptainer/neut.def` and
+`setup/setup_neut.sh`:
+
+- Record the image in the adapter's `CODE_VERSIONS` entry as `source_image`
+  (leaving `repo`/`git_ref` `None`) and override `is_buildable()` to accept it —
+  the base class treats only `git_ref` as a source, so without the override the
+  catalog-driven build script skips the generator entirely.
+- Override `build_arg()` to pass the image (e.g.
+  `NEUT_SOURCE_IMAGE=nuisancemc/tutorial:nuint2024`) instead of the code version.
+  The def's `CODE_VERSION` argument then has to *default* to the catalog key,
+  because the build script passes only the catalog's single build arg.
+- Make `code_version` name both the release and the image tag
+  (`5.7.0-nuint2024`). The image tag is the real pin when the build cannot be
+  reproduced from source.
+- Bootstrap stage 1 of the def from the image (`Bootstrap: docker` /
+  `From: {{ SOURCE_IMAGE }}`) and `%files from` only the subtrees you need — a
+  published image is usually far larger than the payload.
+- There is no Dockerfile to mirror, so the "update the def and the Dockerfile
+  together" rule does not apply; say so in the def header.
+- Your def will not reference `{{ JOBS }}`, since nothing is compiled, but
+  `build_apptainer_images.sh` passes `--build-arg JOBS` to every def. Apptainer
+  aborts on a build arg it does not see *used* (`FATAL: unused build args:
+  JOBS`) — and declaring it in `%arguments` does not satisfy that, it has to
+  appear in the body. The build script therefore passes
+  `--warn-unused-build-args`; nothing is needed in the def.
+- Watch for absolute paths baked into the original install. `neut.def` has to
+  rewrite `NEUT.pc`'s `prefix=` after relocation, or `neut-config` refuses to run.
+
+## Variant: a second processing stage
+
+GENIE (`gevgen` → `gntpc`) and NEUT (`neutroot2` → `nf-neut-flatten`) both need a
+second binary run inside the generator's environment before the output is
+readable. Implement it as a private method on the adapter (`_run_gntpc`,
+`_run_flatten`) called from `normalize_output`, dispatching through the *same*
+native/docker branches as `build_run_command`, and declare the extra binary in
+`nf-payload.json`'s `binaries` list so composition verifies its wrapper.
+
+If the second stage is a project-owned artifact rather than something the
+generator ships (NEUT's `setup/neut/nf_flatten.C`), stage it into the payload
+with a host `%files` block — `build_apptainer_images.sh` runs `apptainer build`
+from the repo root, so those source paths are repo-relative — and bind-mount the
+same directory under Docker.

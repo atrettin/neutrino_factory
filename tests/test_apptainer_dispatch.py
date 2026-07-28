@@ -18,7 +18,9 @@ from unittest.mock import patch
 from neutrino_factory.config import resolve_config
 from neutrino_factory.generators.genie import GenieAdapter
 from neutrino_factory.generators.gibuu import GiBUUAdapter
+from neutrino_factory.generators.neut import NeutAdapter
 from neutrino_factory.generators.nuwro import NuWroAdapter
+from neutrino_factory.translators.neut import NeutTranslator
 
 
 class ApptainerDispatchAdapterTests(unittest.TestCase):
@@ -64,6 +66,74 @@ class ApptainerDispatchAdapterTests(unittest.TestCase):
         self.assertEqual(
             command,
             ["nf-run", "nuwro", "nuwro_25.11", "nuwro", "-o", "events.root", "-i", "params.txt"],
+        )
+
+    def _neut_translated(self) -> tuple[dict, dict]:
+        config = resolve_config(
+            {
+                "flux": {
+                    "type": "power_law",
+                    "particle": "numu",
+                    "emin_gev": 0.5,
+                    "emax_gev": 5.0,
+                    "gamma": -2.0,
+                },
+                "target": {"nucleus": "C12"},
+            }
+        )
+        translated = NeutTranslator().translate(
+            config,
+            {
+                "event_count": 10,
+                "seed": 1,
+                "code_version": "5.7.0-nuint2024",
+                "config_version": "default",
+                "generator_version_id": "5.7.0-nuint2024+default",
+            },
+        )
+        return config, translated
+
+    def test_neut_native_branch_dispatches_with_version(self) -> None:
+        config, translated = self._neut_translated()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = NeutAdapter(config)
+            env = {"NF_CONTAINER_RUNTIME": "apptainer"}
+            with patch.dict(os.environ, env, clear=False):
+                with patch(
+                    "neutrino_factory.generators.neut.shutil.which",
+                    return_value="/usr/local/bin/neutroot2",
+                ):
+                    command = adapter.build_run_command(translated, Path(tmpdir))
+
+        self.assertEqual(
+            command,
+            [
+                "nf-run", "neut", "5.7.0-nuint2024",
+                "neutroot2", "neut.card", "events.neut.root",
+            ],
+        )
+
+    def test_neut_flatten_stage_dispatches_with_version(self) -> None:
+        # NEUT's second stage is a second payload binary, so it needs the same
+        # version-explicit dispatch as the generation step.
+        config, _ = self._neut_translated()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = NeutAdapter(config)
+            env = {"NF_CONTAINER_RUNTIME": "apptainer"}
+            with patch.dict(os.environ, env, clear=False):
+                with patch(
+                    "neutrino_factory.generators.neut.shutil.which",
+                    return_value="/usr/local/bin/nf-neut-flatten",
+                ):
+                    with patch("neutrino_factory.generators.neut.subprocess.run") as run:
+                        adapter._run_flatten(Path(tmpdir), "5.7.0-nuint2024")
+
+        self.assertEqual(
+            run.call_args[0][0],
+            [
+                "nf-run", "neut", "5.7.0-nuint2024",
+                "nf-neut-flatten", "events.neut.root", "events.flat.root",
+            ],
         )
 
     def test_gibuu_native_branch_dispatches_inside_shell_string(self) -> None:
