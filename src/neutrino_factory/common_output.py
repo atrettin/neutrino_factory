@@ -35,6 +35,12 @@ EVENT_FIELDS = (*EVENT_NUMERIC_FIELDS, *EVENT_STRING_FIELDS)
 VERSION_IDENTITY_KEYS = ("generator", "code_version", "config_version")
 
 
+# Metadata key recording the denominator a chunk's ``xsec_weight`` was divided
+# by (see ``ConfigTranslator.xsec_norm_count``). Present on real generator
+# output; absent on stub output, whose weights are placeholders.
+XSEC_NORM_COUNT_KEY = "xsec_norm_count"
+
+
 class MergeError(ValueError):
     """Raised when attempting to merge HDF5 files with inconsistent version metadata."""
 
@@ -191,11 +197,42 @@ def read_events(input_path: str | Path) -> tuple[dict[str, Any], list[dict[str, 
     return metadata, _rows_from_event_columns(columns)
 
 
+def _xsec_norm_count(metadata: dict[str, Any]) -> float | None:
+    """Read a chunk's declared normalization denominator, or None if absent."""
+    if XSEC_NORM_COUNT_KEY not in metadata:
+        return None
+    try:
+        value = float(metadata[XSEC_NORM_COUNT_KEY])
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0.0 else None
+
+
 def merge_hdf5_files(
     input_files: Iterable[str | Path],
     output_path: str | Path,
     run_metadata: dict[str, Any] | None = None,
 ) -> str:
+    """Concatenate common-output files, averaging their cross-section weights.
+
+    Every generator's ``xsec_weight`` column is a *per-chunk* estimate of sigma:
+    ``sum(xsec_weight in an energy bin) / bin_width`` converges to sigma(E) for
+    each chunk on its own. Plain concatenation therefore reports N times the
+    cross section for an N-chunk run — the events add up, but the estimates must
+    be *averaged*.
+
+    Each chunk declares its statistical size as ``xsec_norm_count`` (the ``D`` in
+    ``compute_xsec_weight``'s ``numerator / (D * phi_hat)``; see
+    ``ConfigTranslator.xsec_norm_count``). Scaling chunk *c* by ``D_c / sum(D)``
+    turns the concatenation into exactly that weighted average — equivalently,
+    the merged weights are what a single run of ``sum(D)`` would have produced.
+    Recording the summed count on the output keeps the operation associative, so
+    merging merged files stays correct.
+
+    Files without the key (stub output, or output from before this was recorded)
+    are left untouched: their weights are placeholders, not cross sections. A set
+    that mixes the two is refused rather than silently half-rescaled.
+    """
     merged_chunks: list[dict[str, np.ndarray]] = []
     normalized_inputs = [str(Path(path)) for path in input_files]
     if not normalized_inputs:
@@ -205,6 +242,7 @@ def merge_hdf5_files(
     identity_source: str | None = None
     first_file_metadata: dict[str, Any] = {}
     expected_events_total = 0
+    norm_counts: list[float | None] = []
 
     for input_file in normalized_inputs:
         with h5py.File(input_file, "r") as handle:
@@ -225,7 +263,28 @@ def merge_hdf5_files(
                 f"but {input_file} is {dict(zip(VERSION_IDENTITY_KEYS, current))}"
             )
         expected_events_total += int(file_metadata.get("expected_events", 0))
+        norm_counts.append(_xsec_norm_count(file_metadata))
         merged_chunks.append(columns)
+
+    declared = [count for count in norm_counts if count is not None]
+    if declared and len(declared) != len(norm_counts):
+        missing = [
+            path for path, count in zip(normalized_inputs, norm_counts) if count is None
+        ]
+        raise MergeError(
+            f"Refusing to merge: {len(declared)} of {len(norm_counts)} inputs declare "
+            f"'{XSEC_NORM_COUNT_KEY}' and the rest do not, so their xsec_weight "
+            "columns cannot be put on a common normalization. Inputs missing it "
+            f"(stub output, or generated before it was recorded): {', '.join(missing)}"
+        )
+
+    norm_count_total = float(sum(declared)) if declared else None
+    if norm_count_total:
+        # Rescale each chunk to its share of the combined estimate. With a single
+        # input this is a no-op (share == 1), so one-chunk runs are unaffected.
+        for columns, count in zip(merged_chunks, norm_counts):
+            assert count is not None
+            columns["xsec_weight"] = columns["xsec_weight"] * (count / norm_count_total)
 
     merged_columns = _concat_event_columns(merged_chunks)
     merged_events = _rows_from_event_columns(merged_columns)
@@ -246,5 +305,8 @@ def merge_hdf5_files(
     metadata.setdefault("merged_inputs", normalized_inputs)
     metadata["merged_file_count"] = len(normalized_inputs)
     metadata["merged_event_count"] = int(len(merged_columns["event_id"]))
+    # Carry the combined denominator so a merged file can itself be merged.
+    if norm_count_total:
+        metadata[XSEC_NORM_COUNT_KEY] = norm_count_total
 
     return write_common_hdf5(output_path, metadata, merged_events)

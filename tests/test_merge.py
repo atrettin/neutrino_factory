@@ -147,3 +147,202 @@ class LegacyFileCompatibilityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _write_normalized_chunk(
+    path: Path,
+    *,
+    energies: list[float],
+    xsec_weights: list[float],
+    norm_count: float | None,
+    chunk_id: int = 0,
+) -> str:
+    """A chunk as a real normalizer writes it, optionally declaring its norm count."""
+    metadata = {
+        "generator": "neut",
+        "code_version": "5.7.0-nuint2024",
+        "config_version": "default",
+        "generator_version_id": "5.7.0-nuint2024+default",
+        "run_name": "test_run",
+        "chunk_id": chunk_id,
+        "seed": 1,
+    }
+    if norm_count is not None:
+        metadata["xsec_norm_count"] = norm_count
+    events = [
+        {
+            "event_id": i,
+            "seed": 1,
+            "energy_gev": energy,
+            "weight": 1.0,
+            "xsec_weight": xsec_weight,
+            "interaction": "qel",
+            "probe": "numu",
+            "target": "C12",
+            "generator": "neut",
+        }
+        for i, (energy, xsec_weight) in enumerate(zip(energies, xsec_weights))
+    ]
+    return write_common_hdf5(path, metadata, events)
+
+
+def _total_xsec_weight(path: Path) -> float:
+    _, events = read_events(path)
+    return sum(event["xsec_weight"] for event in events)
+
+
+class MergeCrossSectionNormalizationTests(unittest.TestCase):
+    """Merging must average per-chunk cross-section estimates, not sum them.
+
+    Each chunk's `sum(xsec_weight in a bin) / bin_width` already estimates
+    sigma(E) on its own, so concatenating N chunks used to report N * sigma.
+    """
+
+    def test_equal_chunks_merge_to_the_same_cross_section(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            # Two independent 100-event chunks, each estimating the same sigma.
+            # sum(xsec_weight) per chunk = 100 * 0.02 = 2.0
+            for chunk_id in (0, 1):
+                _write_normalized_chunk(
+                    d / f"chunk{chunk_id}.h5",
+                    energies=[1.0 + 0.01 * i for i in range(100)],
+                    xsec_weights=[0.02] * 100,
+                    norm_count=100.0,
+                    chunk_id=chunk_id,
+                )
+            single = _total_xsec_weight(d / "chunk0.h5")
+
+            merge_hdf5_files([d / "chunk0.h5", d / "chunk1.h5"], d / "merged.h5")
+
+            merged = _total_xsec_weight(d / "merged.h5")
+            self.assertAlmostEqual(single, 2.0)
+            # The merged estimate equals the per-chunk estimate; before the fix
+            # this was 2x it. Event count still doubles.
+            self.assertAlmostEqual(merged, single)
+            _, events = read_events(d / "merged.h5")
+            self.assertEqual(len(events), 200)
+
+    def test_unequal_chunks_are_weighted_by_their_norm_count(self) -> None:
+        # A 300-event chunk estimating sigma=3 and a 100-event chunk estimating
+        # sigma=1 must combine to the sample-size-weighted mean, 2.5 — not the
+        # unweighted mean 2.0, and not the sum 4.0.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            _write_normalized_chunk(
+                d / "big.h5",
+                energies=[1.0] * 300,
+                xsec_weights=[3.0 / 300] * 300,
+                norm_count=300.0,
+                chunk_id=0,
+            )
+            _write_normalized_chunk(
+                d / "small.h5",
+                energies=[1.0] * 100,
+                xsec_weights=[1.0 / 100] * 100,
+                norm_count=100.0,
+                chunk_id=1,
+            )
+
+            merge_hdf5_files([d / "big.h5", d / "small.h5"], d / "merged.h5")
+
+            self.assertAlmostEqual(_total_xsec_weight(d / "merged.h5"), 2.5)
+
+    def test_single_input_is_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            _write_normalized_chunk(
+                d / "chunk0.h5",
+                energies=[1.0] * 10,
+                xsec_weights=[0.5] * 10,
+                norm_count=10.0,
+            )
+
+            merge_hdf5_files([d / "chunk0.h5"], d / "merged.h5")
+
+            self.assertAlmostEqual(_total_xsec_weight(d / "merged.h5"), 5.0)
+
+    def test_merging_merged_files_stays_correct(self) -> None:
+        # Associativity: the merged file carries the combined norm count, so
+        # re-merging it with a third chunk still yields the same sigma.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            for chunk_id in range(3):
+                _write_normalized_chunk(
+                    d / f"chunk{chunk_id}.h5",
+                    energies=[1.0] * 100,
+                    xsec_weights=[0.02] * 100,
+                    norm_count=100.0,
+                    chunk_id=chunk_id,
+                )
+
+            merge_hdf5_files([d / "chunk0.h5", d / "chunk1.h5"], d / "ab.h5")
+            merge_hdf5_files([d / "ab.h5", d / "chunk2.h5"], d / "abc.h5")
+            merge_hdf5_files(
+                [d / "chunk0.h5", d / "chunk1.h5", d / "chunk2.h5"], d / "flat.h5"
+            )
+
+            self.assertAlmostEqual(_total_xsec_weight(d / "abc.h5"), 2.0)
+            self.assertAlmostEqual(
+                _total_xsec_weight(d / "abc.h5"), _total_xsec_weight(d / "flat.h5")
+            )
+
+    def test_merged_file_records_the_combined_norm_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            _write_normalized_chunk(
+                d / "a.h5", energies=[1.0] * 5, xsec_weights=[1.0] * 5, norm_count=100.0
+            )
+            _write_normalized_chunk(
+                d / "b.h5",
+                energies=[1.0] * 5,
+                xsec_weights=[1.0] * 5,
+                norm_count=250.0,
+                chunk_id=1,
+            )
+
+            merge_hdf5_files([d / "a.h5", d / "b.h5"], d / "merged.h5")
+
+            metadata, _ = read_events(d / "merged.h5")
+            self.assertAlmostEqual(float(metadata["xsec_norm_count"]), 350.0)
+
+    def test_stub_files_without_norm_count_are_not_rescaled(self) -> None:
+        # Stub output carries placeholder weights of 1.0, not cross sections;
+        # rescaling them would be meaningless.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            for chunk_id in (0, 1):
+                _write_normalized_chunk(
+                    d / f"chunk{chunk_id}.h5",
+                    energies=[1.0] * 4,
+                    xsec_weights=[1.0] * 4,
+                    norm_count=None,
+                    chunk_id=chunk_id,
+                )
+
+            merge_hdf5_files([d / "chunk0.h5", d / "chunk1.h5"], d / "merged.h5")
+
+            _, events = read_events(d / "merged.h5")
+            self.assertEqual(len(events), 8)
+            self.assertTrue(all(event["xsec_weight"] == 1.0 for event in events))
+            metadata, _ = read_events(d / "merged.h5")
+            self.assertNotIn("xsec_norm_count", metadata)
+
+    def test_mixing_declared_and_undeclared_inputs_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            _write_normalized_chunk(
+                d / "real.h5", energies=[1.0], xsec_weights=[1.0], norm_count=100.0
+            )
+            _write_normalized_chunk(
+                d / "stub.h5",
+                energies=[1.0],
+                xsec_weights=[1.0],
+                norm_count=None,
+                chunk_id=1,
+            )
+
+            with self.assertRaises(MergeError) as ctx:
+                merge_hdf5_files([d / "real.h5", d / "stub.h5"], d / "merged.h5")
+            self.assertIn("xsec_norm_count", str(ctx.exception))
+            self.assertIn("stub.h5", str(ctx.exception))

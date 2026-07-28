@@ -136,6 +136,14 @@ class NuWroNormalizer(OutputNormalizer):
         ]
         kinematics = derive_kinematics(nu_p4, lepton_p4, interactions, valid=has_lepton)
 
+        # Declare how much this chunk's estimate is worth, so merging averages
+        # the chunks instead of summing them (see ConfigTranslator.xsec_norm_count
+        # and merge_hdf5_files). Recorded only on the real path: stub output
+        # carries placeholder weights that must not be rescaled.
+        metadata["xsec_norm_count"] = NuWroTranslator().xsec_norm_count(
+            translated, len(energies_gev)
+        )
+
         events = []
         for i, (e_gev, w, xw, itype) in enumerate(
             zip(energies_gev, weights, xsec_weights, interactions)

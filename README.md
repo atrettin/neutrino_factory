@@ -251,12 +251,9 @@ versions of the same generator coexist without file collisions.
 
 ## Status
 
-Functional locally; first real HPC deployment (ODSL/MPP cluster via the
-Apptainer pathway) is the current objective. All four generators run in Docker,
-and every generator also runs in synthetic `stub_mode` for development without
-real binaries. Known gaps are tracked in the source tree: the GiBUU ROOT→HDF5
-normalizer is a stub, `xsec_weight` is
-normalized per chunk and so does not survive merging (see `.claude/TODOS.md`),
-NEUT is not bit-reproducible from its seed (see `docs/design_decisions.md`), and
-the Apptainer pathway is written but not yet verified on the cluster (the dev
-machine is macOS, where Apptainer cannot run).
+Functional locally and on the ODSL/MPP cluster: all four generators run in
+Docker on a dev machine and through the Apptainer pathway on the cluster, where
+the Slurm array path has been verified end to end. Every generator also runs in
+synthetic `stub_mode` for development without real binaries. Known gaps are
+tracked in the source tree: the GiBUU ROOT→HDF5 normalizer is a stub, and NEUT
+is not bit-reproducible from its seed (see `docs/design_decisions.md`).

@@ -211,6 +211,21 @@ class GiBUUTranslator(ConfigTranslator):
         xsec_weight[nonzero] = raw_weights[nonzero] / (num_runs * flux_hat)
         return xsec_weight
 
+    def xsec_norm_count(
+        self, translated_config: dict[str, Any], event_count: int
+    ) -> float:
+        """The chunk's run multiplicity — ``num_runs``, *not* its event count.
+
+        GiBUU is the one generator where these differ. Its per-event weights
+        already sum to the flux-folded cross section within a single run
+        (numEnsembles is folded into the weight), so a chunk's contribution to a
+        merged estimate is measured in generator runs, not in events. Using the
+        event count here would weight chunks by how many interactions GiBUU
+        happened to produce — which varies with the cross section itself — and
+        skew the merged average.
+        """
+        return float(max(1, int(translated_config.get("num_runs", NUM_RUNS_SAME_ENERGY))))
+
     @staticmethod
     def _flux_table(flux: Any) -> str:
         """Render GiBUU's user-flux file: two columns ``energy[GeV] flux``.

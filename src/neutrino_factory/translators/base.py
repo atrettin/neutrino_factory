@@ -34,3 +34,26 @@ class ConfigTranslator(ABC):
         shared default.
         """
         raise NotImplementedError
+
+    @abstractmethod
+    def xsec_norm_count(
+        self, translated_config: dict[str, Any], event_count: int
+    ) -> float:
+        """Return the normalization denominator ``compute_xsec_weight`` divided by.
+
+        Every generator's ``xsec_weight`` column is an estimate of sigma built
+        from *one chunk*, so chunks must be **averaged, not summed**, when they
+        are merged — concatenating N chunks otherwise reports N times the cross
+        section. ``merge_hdf5_files`` performs that averaging by rescaling each
+        input's weights by its share of the total, and this method is how a chunk
+        declares the size of its own contribution.
+
+        Concretely, ``compute_xsec_weight`` has the shape
+        ``numerator_i / (D * phi_hat(E_i))``; return that ``D``. It is the
+        per-event sample count for rejection-sampled/unweighted generators
+        (GENIE, NuWro, NEUT: the number of events in the chunk) but the number of
+        independent generator *runs* for GiBUU, whose per-event weights already
+        sum to sigma within one run. Getting it wrong reintroduces the merge bug,
+        so it is abstract rather than defaulting to ``event_count``.
+        """
+        raise NotImplementedError
