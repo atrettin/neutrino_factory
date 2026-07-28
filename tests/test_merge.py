@@ -328,21 +328,84 @@ class MergeCrossSectionNormalizationTests(unittest.TestCase):
             metadata, _ = read_events(d / "merged.h5")
             self.assertNotIn("xsec_norm_count", metadata)
 
-    def test_mixing_declared_and_undeclared_inputs_raises(self) -> None:
+    def test_undeclared_inputs_are_skipped_not_fatal(self) -> None:
+        """A few bad chunks must not cost the run its other 98.
+
+        On the cluster this showed up as a merge refusing outright because two
+        of a hundred chunks were still queued. Those two cannot share a
+        normalization with the rest, so they are dropped with a warning and the
+        merge proceeds.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            for i in range(3):
+                _write_normalized_chunk(
+                    d / f"real{i}.h5",
+                    energies=[1.0] * 10,
+                    xsec_weights=[0.1] * 10,
+                    norm_count=10.0,
+                    chunk_id=i,
+                )
+            _write_normalized_chunk(
+                d / "stub.h5",
+                energies=[1.0] * 10,
+                xsec_weights=[1.0] * 10,
+                norm_count=None,
+                chunk_id=9,
+            )
+
+            inputs = [d / "real0.h5", d / "real1.h5", d / "stub.h5", d / "real2.h5"]
+            with self.assertLogs("neutrino_factory.common_output", level="WARNING") as logs:
+                merge_hdf5_files(inputs, d / "merged.h5")
+
+            self.assertTrue(any("stub.h5" in line for line in logs.output))
+            metadata, events = read_events(d / "merged.h5")
+            # Only the three normalized chunks contribute.
+            self.assertEqual(len(events), 30)
+            self.assertAlmostEqual(_total_xsec_weight(d / "merged.h5"), 1.0)
+            self.assertEqual(int(metadata["merged_file_count"]), 3)
+            self.assertEqual(int(metadata["requested_file_count"]), 4)
+            self.assertIn("stub.h5", str(metadata["skipped_inputs"]))
+
+    def test_unreadable_inputs_are_skipped(self) -> None:
+        # A chunk still being written, or truncated by a killed job, is not a
+        # reason to lose the finished ones.
         with tempfile.TemporaryDirectory() as tmpdir:
             d = Path(tmpdir)
             _write_normalized_chunk(
-                d / "real.h5", energies=[1.0], xsec_weights=[1.0], norm_count=100.0
+                d / "good.h5", energies=[1.0] * 10, xsec_weights=[0.2] * 10, norm_count=10.0
             )
-            _write_normalized_chunk(
-                d / "stub.h5",
-                energies=[1.0],
-                xsec_weights=[1.0],
-                norm_count=None,
-                chunk_id=1,
-            )
+            (d / "truncated.h5").write_bytes(b"\x89HDF\r\n\x1a\n not really an hdf5 file")
+
+            with self.assertLogs("neutrino_factory.common_output", level="WARNING") as logs:
+                merge_hdf5_files([d / "good.h5", d / "truncated.h5"], d / "merged.h5")
+
+            self.assertTrue(any("truncated.h5" in line for line in logs.output))
+            metadata, events = read_events(d / "merged.h5")
+            self.assertEqual(len(events), 10)
+            self.assertAlmostEqual(_total_xsec_weight(d / "merged.h5"), 2.0)
+            self.assertEqual(int(metadata["requested_file_count"]), 2)
+
+    def test_merge_fails_when_nothing_usable_remains(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            (d / "a.h5").write_bytes(b"not hdf5")
+            (d / "b.h5").write_bytes(b"not hdf5 either")
 
             with self.assertRaises(MergeError) as ctx:
-                merge_hdf5_files([d / "real.h5", d / "stub.h5"], d / "merged.h5")
-            self.assertIn("xsec_norm_count", str(ctx.exception))
-            self.assertIn("stub.h5", str(ctx.exception))
+                merge_hdf5_files([d / "a.h5", d / "b.h5"], d / "merged.h5")
+            self.assertIn("No usable input files", str(ctx.exception))
+
+    def test_version_mismatch_is_still_fatal(self) -> None:
+        # Resilience covers partial runs, not physics errors: merging different
+        # generator versions must keep failing.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            _write_normalized_chunk(
+                d / "a.h5", energies=[1.0], xsec_weights=[1.0], norm_count=10.0
+            )
+            _write_chunk(d / "b.h5", "genie", "R-3_06_00", "G18_10a_02_11a", 2)
+
+            with self.assertRaises(MergeError) as ctx:
+                merge_hdf5_files([d / "a.h5", d / "b.h5"], d / "merged.h5")
+            self.assertIn("different generator versions", str(ctx.exception))
