@@ -179,7 +179,13 @@ build_def() {
   mkdir -p "$(dirname "$sif")"
   sif="$(cd "$(dirname "$sif")" && pwd)/$(basename "$sif")"
   def="$(cd "$(dirname "$def")" && pwd)/$(basename "$def")"
-  (cd "$REPO_ROOT" && nice -n 15 apptainer build --force "$@" "$sif" "$def")
+  # --warn-unused-build-args: JOBS is passed to every def uniformly, but a def
+  # that compiles nothing (setup/apptainer/neut.def, whose payload is extracted
+  # from a prebuilt image) never references it. Apptainer's default is to abort
+  # on a build arg it does not see used — declaring it in %arguments is not
+  # enough, it must actually appear as {{ JOBS }} — so downgrade that to a
+  # warning rather than making every def carry a dummy reference.
+  (cd "$REPO_ROOT" && nice -n 15 apptainer build --force --warn-unused-build-args "$@" "$sif" "$def")
 }
 
 # ── nf-base bootstrap runtime (always ensured, fast) ─────────────────────────
