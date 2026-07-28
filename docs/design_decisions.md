@@ -268,3 +268,129 @@ inside NEUT; the source is unavailable to confirm.
 chunk seeds give different, independent event sets, which holds. What is lost is
 bit-exact re-running of a given chunk. Configs remain reproducible in
 distribution, not in individual events.
+
+## Derived kinematic variables in the common output
+
+**Context.** The common format originally carried a single kinematic quantity,
+`energy_gev` (the incoming neutrino energy), which is not enough for the standard
+neutrino cross-section measurements the harmonized output exists to support.
+All four generators expose the incoming-neutrino and outgoing-lepton
+four-vectors; the normalizers simply were not reading them.
+
+**Decision.** Eight lab-frame columns are derived in one shared module,
+`src/neutrino_factory/kinematics.py`: `q2_gev2`, `bjorken_x`, `inelasticity_y`,
+`lepton_energy_gev`, `lepton_momentum_gev`, `lepton_p_parallel_gev`,
+`lepton_p_transverse_gev`, `lepton_costheta`.
+
+**Recomputed, not read.** GENIE's `gst` tree already precomputes `Q2`, `x`, `y`
+and `cthl`, and it would have been less code to use them. We recompute from the
+four-vectors for all three generators anyway, because the promise of the common
+format is that a Q^2 histogram from GENIE means exactly the same thing as one
+from GiBUU — which only holds if one formula produces all of them. GENIE further
+ships *two* variants (`Q2`/`x`/`y` "true" and `Q2s`/`xs`/`ys` reconstructed from
+the hadronic system), so "use the native branch" is not even unambiguous within
+one generator. `tests/test_genie_normalizer.py` pins our definitions against
+GENIE's own branches for a reference scatter.
+
+**Conventions.**
+- The beam axis is taken **per event** from the incoming neutrino three-momentum,
+  never assumed to be +z, so the parallel/transverse split and `cos(theta)` stay
+  correct for off-axis or divergent beams.
+- Bjorken-x uses a **fixed** isoscalar nucleon mass `NUCLEON_MASS_GEV`
+  ((m_p + m_n)/2), not the per-event struck-nucleon mass. Only GiBUU and NuWro
+  expose the hit nucleon; a fixed mass makes x identically defined everywhere.
+- `Q^2 = -(p_nu - p_l)^2` is non-negative for this process up to floating-point
+  noise near forward scattering, so it is clamped at 0 rather than blanked.
+- `inelasticity_y` can come out slightly **negative** when Fermi motion of the
+  struck nucleon pushes the outgoing lepton above the beam energy. That is
+  physical and is passed through; only `bjorken_x` (which would diverge) is
+  blanked when the energy transfer is non-positive.
+- The lepton variables are filled for NC as well as CC events — for NC the
+  "lepton" is the scattered neutrino. Detector observability is a downstream
+  question, not the generator-harmonization layer's to decide.
+
+**NEUT needs the four-vectors carried across explicitly.** The other three
+generators write them into their native output, so the normalizer just reads more
+branches. NEUT's NeutVect output cannot be read from Python at all (see the
+`nf_flatten.C` section above), and the flattener wrote only `mode`, `pdgnu`,
+`enu_gev` and `totcrs` -- the four-vectors were dropped before Python ever saw
+them. `nf_flatten.C` therefore gained `nu_p{x,y,z}_gev`, `lep_{e,px,py,pz}_gev`
+and `pdglep`, converted to GeV in the macro so the flat tree is single-unit.
+
+**Do not read NEUT's outgoing lepton at `PartInfo(2)`.** The usual layout is
+[0] beam neutrino, [1] struck nucleon, [2] outgoing lepton, and 49 of 50 events
+in a real numu-CC C12 run follow it. The exception is **2p2h (Mode 2), which has
+two initial-state nucleons at [1] and [2], putting the lepton at [3]** -- a fixed
+index would have read a neutron as the outgoing lepton and silently corrupted
+Q^2/x/y for the entire MEC channel. The flattener instead scans from index 1 for
+the first particle with |PDG| in 11..16 (the charged lepton for CC, the scattered
+neutrino for NC; leptons do not rescatter, so there is no FSI copy to confuse
+it), and reports `pdglep = 0` when it finds none, which blanks the kinematics for
+that event. Verified by dumping every NeutVect entry of a real run and comparing
+against the flattened tree: 50/50 events agree.
+
+**Placeholders.** Undefined values use a clearly unphysical marker, but *two* of
+them: `MISSING = -1.0` for the non-negative-definite columns, and
+`MISSING_SIGNED = -999.0` for `lepton_p_parallel_gev` and `lepton_costheta`,
+whose physical ranges include -1 (a backward-scattered lepton genuinely has
+`cos(theta) = -1`). Using a single -1 would have made backward scatters
+indistinguishable from missing data. Blanking rules: `bjorken_x` for coherent
+events (no struck nucleon) and for non-positive energy transfer;
+`lepton_costheta` when the lepton momentum is zero; the directional variables
+when the beam momentum is zero; and the whole block when the generator does not
+supply an outgoing lepton (NuWro's `e/out` can be empty) or the four-vectors are
+non-finite.
+
+**Schema mechanics.** `common_output.py` grew a single `NUMERIC_FIELD_SPECS`
+table (name -> dtype, default) that the writer, reader and merger are all driven
+off, replacing the column names that were hard-coded in four places. Two
+consequences: the writer emits placeholders for any column an event dict omits,
+so stub/JSON mode and the NEUT normalizer need no changes; and the reader
+synthesizes columns absent from a file, so HDF5 written before this change stays
+readable and mergeable. `validate_output.REQUIRED_COLUMNS` now tracks the schema
+directly, so those older files *do* fail validation and should be regenerated.
+
+Files: `kinematics.py`, `common_output.py`, `normalizers/{genie,gibuu,nuwro}.py`,
+`normalizers/base.py` (`interaction_from_flags`, shared by GENIE and NuWro),
+`validate_output.py`, `tests/kinematics_reference.py` (the reference scatter all
+three normalizer test modules assert against).
+
+**Verified on real generator output (2026-07-28).** 20k-event GENIE, NuWro and
+NEUT runs plus an 83k-event GiBUU run, all `numu` CC on C12 with a γ=-2 power-law
+flux over 0.5–5 GeV, pass the structural invariants event-by-event (Q² ≥ 0, exact
+energy-transfer closure, |cos θ| ≤ 1, p_∥² + p_T² = |p|², coherent events blanked
+and only those) and agree on the cross-section-weighted distributions. Bjorken-x
+for quasi-elastic peaks at 0.75–0.85 with a weighted median of 0.825 (GENIE),
+0.815 (NuWro), 0.825 (NEUT) and 0.809 (GiBUU) — a broad peak *below* 1, not the sharp x=1 of
+free-nucleon QE, because Fermi motion and binding smear it and the fixed `M_N`
+does not absorb that. The GiBUU number needs care: its QE weight is extremely
+concentrated (Kish n_eff = 35 out of 14579 events; the top 1% of events carry 86%
+of the weight), so it is quoted with a bootstrap CI of [0.797, 0.851] rather than
+as a point estimate — see the GiBUU weighting section above for why.
+
+## `analyze-kinematics`: weighted by default, with the weight efficiency in view
+
+**Decision.** `kinematics_report.py` (CLI: `analyze-kinematics`) reports every
+mean and median **weighted by `xsec_weight`**, never raw, and prints a
+weight-efficiency table alongside — Kish `n_eff = (Σw)² / Σw²` per interaction
+channel, plus the share of weight in the heaviest 1% of events.
+
+**Why.** Unweighted event distributions are simply not the physical ones for a
+cross-section-weighted generator, and the failure is silent: a 100k-event GiBUU
+run reports a perfectly healthy-looking quasi-elastic sample whose effective size
+is 35 events. Making the weighted statistic the only one available removes the
+foot-gun; showing `n_eff/n` next to it says how much to trust the number. The
+efficiency is computed on `|w|` so GiBUU's negative interference weights cannot
+cancel into a meaningless ratio, while `Σw` is reported signed.
+
+**Placeholders are excluded per variable, and counted.** A `blank` column shows
+how many events were dropped, so `bjorken_x` for a coherent selection reports
+"0 used, 127 blank" rather than silently averaging in `-1`.
+
+**The weighted quantile uses the midpoint convention** — cumulative weight
+evaluated at the centre of each point's weight, not its upper edge. The naive
+cumulative sum biases the median low by half a bin (it puts the median of 0..100
+at 49.5); a unit test pins the uniform-weight case to the ordinary median.
+
+Files: `kinematics_report.py`, `cli.py` (`cmd_analyze_kinematics`),
+`tests/test_kinematics_report.py`.

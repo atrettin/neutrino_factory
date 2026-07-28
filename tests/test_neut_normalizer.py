@@ -8,7 +8,9 @@ from unittest.mock import patch
 
 import numpy as np
 
+from tests.kinematics_reference import reference_kinematics, reference_lepton_p4
 from neutrino_factory.common_output import read_events
+from neutrino_factory.kinematics import FIELD_DEFAULTS, KINEMATIC_FIELDS, MISSING
 from neutrino_factory.normalizers.neut import NeutNormalizer
 
 
@@ -21,24 +23,51 @@ def _write_flat_root(
     flux_hist: str = "flux_numu",
     rate_hist: str = "evtrt_numu",
     rate_edges=None,
+    lepton_pdgs=None,
+    drop_lepton_branches: bool = False,
 ) -> None:
     """Write the file nf_flatten.C produces: an nf_neut tree + the two TH1Ds.
 
     The histograms are flat with a known integral ratio, so the flux-averaged
     cross section the normalizer derives from them is exactly ``sigma_avg``.
+
+    Four-vectors follow the reference scatter from
+    :func:`kinematics_reference.reference_lepton_p4` and, like nf_flatten.C's
+    output, are already in GeV. ``lepton_pdgs`` entries of 0 mark an event where
+    the flattener found no outgoing lepton.
     """
     import uproot
 
     edges = np.linspace(0.5, 5.0, 11)
     flux = np.ones(10, dtype=np.float64)
     rate = np.full(10, sigma_avg, dtype=np.float64)
+    energies = np.array(energies_gev, dtype=np.float64)
+    lepton = reference_lepton_p4(energies)
+    if lepton_pdgs is None:
+        lepton_pdgs = np.full(len(modes), 13, dtype=np.int32)
+    lepton_pdgs = np.asarray(lepton_pdgs, dtype=np.int32)
+
+    branches = {
+        "mode": np.array(modes, dtype=np.int32),
+        "pdgnu": np.full(len(modes), 14, dtype=np.int32),
+        "enu_gev": energies,
+        "totcrs": np.ones(len(modes), dtype=np.float64),
+    }
+    if not drop_lepton_branches:
+        branches.update({
+            # Beam neutrino along +z with |p| = E, as NEUT generates it.
+            "nu_px_gev": np.zeros_like(energies),
+            "nu_py_gev": np.zeros_like(energies),
+            "nu_pz_gev": energies,
+            "pdglep": lepton_pdgs,
+            "lep_e_gev": lepton[:, 0],
+            "lep_px_gev": lepton[:, 1],
+            "lep_py_gev": lepton[:, 2],
+            "lep_pz_gev": lepton[:, 3],
+        })
+
     with uproot.recreate(path) as f:
-        f["nf_neut"] = {
-            "mode": np.array(modes, dtype=np.int32),
-            "pdgnu": np.full(len(modes), 14, dtype=np.int32),
-            "enu_gev": np.array(energies_gev, dtype=np.float64),
-            "totcrs": np.ones(len(modes), dtype=np.float64),
-        }
+        f["nf_neut"] = branches
         f[flux_hist] = (flux, edges)
         f[rate_hist] = (rate, edges if rate_edges is None else rate_edges)
 
@@ -149,6 +178,77 @@ class NeutNormalizerRootTests(unittest.TestCase):
                 self.assertEqual(event["weight"], 1.0)
                 self.assertGreater(event["xsec_weight"], 0.0)
                 self.assertTrue(np.isfinite(event["xsec_weight"]))
+
+    def test_normalize_root_derives_kinematics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.flat.root"
+            energies = [1.0, 2.5, 4.0]
+            _write_flat_root(root_path, energies, [1, 11, 26])
+            out_path = work_dir / "out.h5"
+
+            NeutNormalizer().normalize(root_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            for event, energy in zip(events, energies):
+                expected = reference_kinematics(energy)
+                for field in KINEMATIC_FIELDS:
+                    self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+
+    def test_normalize_root_blanks_bjorken_x_for_coherent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.flat.root"
+            # 1 = CC QE, 16 = CC coherent pi, 36 = NC coherent pi.
+            _write_flat_root(root_path, [2.0, 2.0, 2.0], [1, 16, 36])
+            out_path = work_dir / "out.h5"
+            task = _base_task(event_count=3)
+
+            NeutNormalizer().normalize(root_path, out_path, task, "local")
+
+            _, events = read_events(out_path)
+            self.assertGreater(events[0]["bjorken_x"], 0.0)
+            self.assertEqual(events[1]["bjorken_x"], MISSING)
+            self.assertEqual(events[2]["bjorken_x"], MISSING)
+            # Only x is suppressed for coherent events.
+            for event in events:
+                self.assertAlmostEqual(event["q2_gev2"], reference_kinematics(2.0)["q2_gev2"])
+                self.assertAlmostEqual(event["inelasticity_y"], 0.5)
+
+    def test_normalize_root_blanks_kinematics_when_no_lepton_was_found(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.flat.root"
+            # pdglep = 0 is how nf_flatten.C reports "no outgoing lepton".
+            _write_flat_root(root_path, [1.0, 2.0], [1, 1], lepton_pdgs=[13, 0])
+            out_path = work_dir / "out.h5"
+            task = _base_task(event_count=2)
+
+            NeutNormalizer().normalize(root_path, out_path, task, "local")
+
+            _, events = read_events(out_path)
+            self.assertAlmostEqual(events[0]["lepton_costheta"], 0.8)
+            for field in KINEMATIC_FIELDS:
+                self.assertEqual(events[1][field], FIELD_DEFAULTS[field], msg=field)
+            # Non-kinematic columns are unaffected.
+            self.assertAlmostEqual(events[1]["energy_gev"], 2.0)
+            self.assertEqual(events[1]["interaction"], "qel")
+
+    def test_normalize_root_raises_on_flat_file_without_lepton_branches(self) -> None:
+        """A flat file from a pre-kinematics nf_flatten.C must fail loudly."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.flat.root"
+            _write_flat_root(root_path, [1.0, 2.0], [1, 11], drop_lepton_branches=True)
+            out_path = work_dir / "out.h5"
+
+            with self.assertRaises(RuntimeError) as ctx:
+                NeutNormalizer().normalize(root_path, out_path, _base_task(), "local")
+            self.assertIn("nf_flatten.C", str(ctx.exception))
 
     def test_mode_maps_to_every_interaction_category(self) -> None:
         # One representative NEUT mode per common-output category, plus an

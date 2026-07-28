@@ -7,6 +7,7 @@ import numpy as np
 
 from ..common_output import version_metadata, write_common_hdf5
 from ..flux import build_flux
+from ..kinematics import KINEMATIC_FIELDS, derive_kinematics
 from ..translators.gibuu import GiBUUTranslator
 from .base import OutputNormalizer
 
@@ -96,6 +97,22 @@ class GiBUUNormalizer(OutputNormalizer):
                 raise RuntimeError(
                     f"Cannot read interaction class from branch 'evType': {exc}"
                 ) from exc
+            try:
+                # Both four-vectors are in GeV: lepIn_* is the incoming neutrino,
+                # lepOut_* the outgoing lepton (the scattered neutrino for NC).
+                nu_p4 = np.column_stack([
+                    energies_gev,
+                    *(tree[branch].array(library="np") for branch in ("lepIn_Px", "lepIn_Py", "lepIn_Pz")),
+                ])
+                lepton_p4 = np.column_stack([
+                    tree[branch].array(library="np")
+                    for branch in ("lepOut_E", "lepOut_Px", "lepOut_Py", "lepOut_Pz")
+                ])
+            except Exception as exc:
+                raise RuntimeError(
+                    "Cannot read lepton four-vectors from 'lepIn_P*' and 'lepOut_*': "
+                    f"{exc}"
+                ) from exc
 
         energies_gev = np.asarray(energies_gev, dtype=np.float64)
         weights_arr = np.asarray(weights, dtype=np.float64)
@@ -104,20 +121,25 @@ class GiBUUNormalizer(OutputNormalizer):
             energies_gev, weights_arr, translated, flux
         )
 
+        interactions = [_interaction_from_evtype(int(ev_type)) for ev_type in ev_types]
+        kinematics = derive_kinematics(nu_p4, lepton_p4, interactions)
+
         events = []
-        for i, (e_gev, w, xw, ev_type) in enumerate(
-            zip(energies_gev, weights_arr, xsec_weights, ev_types)
+        for i, (e_gev, w, xw, itype) in enumerate(
+            zip(energies_gev, weights_arr, xsec_weights, interactions)
         ):
-            events.append({
+            event = {
                 "event_id": start_event + i,
                 "seed": int(task["seed"]),
                 "energy_gev": float(e_gev),
                 "weight": float(w),
                 "xsec_weight": float(xw),
-                "interaction": _interaction_from_evtype(int(ev_type)),
+                "interaction": itype,
                 "probe": probe,
                 "target": target,
                 "generator": self.name,
-            })
+            }
+            event.update({field: float(kinematics[field][i]) for field in KINEMATIC_FIELDS})
+            events.append(event)
 
         return write_common_hdf5(out_path, metadata, events)

@@ -7,8 +7,9 @@ import numpy as np
 
 from ..common_output import version_metadata, write_common_hdf5
 from ..flux import build_flux
+from ..kinematics import KINEMATIC_FIELDS, derive_kinematics
 from ..translators.genie import GenieTranslator
-from .base import OutputNormalizer
+from .base import OutputNormalizer, interaction_from_flags
 
 
 class GenieNormalizer(OutputNormalizer):
@@ -74,6 +75,22 @@ class GenieNormalizer(OutputNormalizer):
                 flag_mec = tree["mec"].array(library="np")
             except Exception as exc:
                 raise RuntimeError(f"Cannot read interaction flags from 'qel/res/dis/coh/mec': {exc}") from exc
+            try:
+                # gst stores both four-vectors in GeV: (Ev, pxv, pyv, pzv) is the
+                # incoming neutrino, (El, pxl, pyl, pzl) the outgoing primary
+                # lepton (the scattered neutrino for NC events).
+                nu_p4 = np.column_stack([
+                    energies_gev,
+                    *(tree[branch].array(library="np") for branch in ("pxv", "pyv", "pzv")),
+                ])
+                lepton_p4 = np.column_stack([
+                    tree[branch].array(library="np") for branch in ("El", "pxl", "pyl", "pzl")
+                ])
+            except Exception as exc:
+                raise RuntimeError(
+                    "Cannot read lepton four-vectors from 'pxv/pyv/pzv' and 'El/pxl/pyl/pzl': "
+                    f"{exc}"
+                ) from exc
 
         energies_gev = np.asarray(energies_gev, dtype=np.float64)
         weights_arr = np.asarray(weights, dtype=np.float64)
@@ -82,23 +99,19 @@ class GenieNormalizer(OutputNormalizer):
             energies_gev, weights_arr, translated, flux
         )
 
+        interactions = [
+            interaction_from_flags(qel, res, dis, coh, mec)
+            for qel, res, dis, coh, mec in zip(
+                flag_qel, flag_res, flag_dis, flag_coh, flag_mec
+            )
+        ]
+        kinematics = derive_kinematics(nu_p4, lepton_p4, interactions)
+
         events = []
-        for i, (ev, w, xw, qel, res, dis, coh, mec) in enumerate(
-            zip(energies_gev, weights, xsec_weights, flag_qel, flag_res, flag_dis, flag_coh, flag_mec)
+        for i, (ev, w, xw, itype) in enumerate(
+            zip(energies_gev, weights, xsec_weights, interactions)
         ):
-            if qel:
-                itype = "qel"
-            elif res:
-                itype = "res"
-            elif dis:
-                itype = "dis"
-            elif coh:
-                itype = "coh"
-            elif mec:
-                itype = "mec"
-            else:
-                itype = "other"
-            events.append({
+            event = {
                 "event_id": start_event + i,
                 "seed": int(task["seed"]),
                 "energy_gev": float(ev),
@@ -108,6 +121,8 @@ class GenieNormalizer(OutputNormalizer):
                 "probe": probe,
                 "target": target,
                 "generator": self.name,
-            })
+            }
+            event.update({field: float(kinematics[field][i]) for field in KINEMATIC_FIELDS})
+            events.append(event)
 
         return write_common_hdf5(out_path, metadata, events)

@@ -8,17 +8,50 @@ from unittest.mock import patch
 
 import numpy as np
 
+from tests.kinematics_reference import reference_kinematics, reference_lepton_p4
 from neutrino_factory.common_output import read_events
+from neutrino_factory.kinematics import FIELD_DEFAULTS, KINEMATIC_FIELDS, MISSING
 from neutrino_factory.normalizers.nuwro import NuWroNormalizer
 
 
-def _write_root_tree(path: Path, energies_mev, weights, qel, res, dis, coh, mec) -> None:
+def _write_root_tree(
+    path: Path, energies_mev, weights, qel, res, dis, coh, mec, out_counts=None
+) -> None:
+    """Write a synthetic ``treeout`` tree, all momenta in MeV as NuWro does.
+
+    ``e/in`` holds [beam neutrino, struck nucleon]; ``e/out`` holds the primary
+    outgoing lepton at index 0 and is jagged, so ``out_counts`` can be used to
+    give an event no outgoing particles at all. The lepton follows the reference
+    scatter from :func:`kinematics_reference.reference_lepton_p4`.
+    """
+    import awkward as ak
     import uproot
 
-    in_t = np.array([[e, 0.0, 0.0, 0.0] for e in energies_mev], dtype=np.float64)
+    energies = np.asarray(energies_mev, dtype=np.float64)
+    count = len(energies)
+    lepton = reference_lepton_p4(energies)
+    if out_counts is None:
+        out_counts = np.ones(count, dtype=np.int64)
+    zeros = np.zeros(count, dtype=np.float64)
+
+    def jagged(component: int):
+        return ak.Array([
+            [float(lepton[i, component])] + [0.0] * (int(n) - 1) if int(n) > 0 else []
+            for i, n in enumerate(out_counts)
+        ])
+
     with uproot.recreate(path) as f:
         f["treeout"] = {
-            "e/in/in.t": in_t,
+            # Beam neutrino along +z with |p| = E; the struck nucleon is at rest
+            # here since the normalizer does not read it.
+            "e/in/in.t": np.column_stack([energies, zeros]),
+            "e/in/in.x": np.column_stack([zeros, zeros]),
+            "e/in/in.y": np.column_stack([zeros, zeros]),
+            "e/in/in.z": np.column_stack([energies, zeros]),
+            "e/out/out.t": jagged(0),
+            "e/out/out.x": jagged(1),
+            "e/out/out.y": jagged(2),
+            "e/out/out.z": jagged(3),
             "e/weight": np.array(weights, dtype=np.float64),
             "e/flag/flag.qel": np.array(qel, dtype=np.bool_),
             "e/flag/flag.res": np.array(res, dtype=np.bool_),
@@ -144,6 +177,88 @@ class NuWroNormalizerRootTests(unittest.TestCase):
             for event in events:
                 self.assertGreater(event["xsec_weight"], 0.0)
                 self.assertTrue(np.isfinite(event["xsec_weight"]))
+
+    def test_normalize_root_derives_kinematics_in_gev(self) -> None:
+        """NuWro stores MeV; the common format must come out in GeV."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.root"
+            _write_root_tree(
+                root_path,
+                energies_mev=[1000.0, 2500.0, 4000.0],
+                weights=[1e-38] * 3,
+                qel=[True, False, False],
+                res=[False, True, False],
+                dis=[False, False, True],
+                coh=[False] * 3,
+                mec=[False] * 3,
+            )
+            out_path = work_dir / "out.h5"
+
+            NuWroNormalizer().normalize(root_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            for event, energy_gev in zip(events, [1.0, 2.5, 4.0]):
+                expected = reference_kinematics(energy_gev)
+                for field in KINEMATIC_FIELDS:
+                    self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+
+    def test_normalize_root_blanks_kinematics_without_outgoing_lepton(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.root"
+            _write_root_tree(
+                root_path,
+                energies_mev=[1000.0, 2000.0],
+                weights=[1e-38, 1e-38],
+                qel=[True, True],
+                res=[False, False],
+                dis=[False, False],
+                coh=[False, False],
+                mec=[False, False],
+                out_counts=[1, 0],
+            )
+            out_path = work_dir / "out.h5"
+            task = {**_base_task(), "event_count": 2}
+
+            NuWroNormalizer().normalize(root_path, out_path, task, "local")
+
+            _, events = read_events(out_path)
+            # The event with an outgoing lepton is unaffected...
+            self.assertAlmostEqual(events[0]["lepton_costheta"], 0.8)
+            # ...the one without gets placeholders throughout, while the
+            # non-kinematic columns stay valid.
+            for field in KINEMATIC_FIELDS:
+                self.assertEqual(events[1][field], FIELD_DEFAULTS[field], msg=field)
+            self.assertAlmostEqual(events[1]["energy_gev"], 2.0)
+            self.assertEqual(events[1]["interaction"], "qel")
+
+    def test_normalize_root_blanks_bjorken_x_for_coherent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.root"
+            _write_root_tree(
+                root_path,
+                energies_mev=[2000.0, 2000.0],
+                weights=[1e-38, 1e-38],
+                qel=[True, False],
+                res=[False, False],
+                dis=[False, False],
+                coh=[False, True],
+                mec=[False, False],
+            )
+            out_path = work_dir / "out.h5"
+            task = {**_base_task(), "event_count": 2}
+
+            NuWroNormalizer().normalize(root_path, out_path, task, "local")
+
+            _, events = read_events(out_path)
+            self.assertGreater(events[0]["bjorken_x"], 0.0)
+            self.assertEqual(events[1]["bjorken_x"], MISSING)
+            self.assertAlmostEqual(events[1]["q2_gev2"], reference_kinematics(2.0)["q2_gev2"])
 
     def test_xsec_weight_matches_hand_derivation_for_flat_flux(self) -> None:
         """A flat (gamma=0) flux normalizes to a uniform density over
