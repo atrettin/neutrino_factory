@@ -34,6 +34,10 @@ Stage: source
 %arguments
     NEUT_SOURCE_IMAGE=nuisancemc/tutorial:nuint2024
     CODE_VERSION=5.7.0-nuint2024
+    # Nothing is compiled here (the payload is extracted from a prebuilt image),
+    # but build_apptainer_images.sh passes --build-arg JOBS to every def and
+    # Apptainer makes an undeclared build arg a FATAL error, not a warning.
+    JOBS=4
 
 # ── Stage 2: Runtime ─────────────────────────────────────────────────────────
 Bootstrap: docker
@@ -44,6 +48,7 @@ Stage: final
 %arguments
     NEUT_SOURCE_IMAGE=nuisancemc/tutorial:nuint2024
     CODE_VERSION=5.7.0-nuint2024
+    JOBS=4
 
 # Version-namespaced, self-contained payload root, so nf-base composition is a
 # single generic copy of /opt/nf/generators/neut/<code_version>. NEUT's own tree

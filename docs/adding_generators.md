@@ -87,6 +87,10 @@ another generator in that situation, follow `setup/apptainer/neut.def` and
   published image is usually far larger than the payload.
 - There is no Dockerfile to mirror, so the "update the def and the Dockerfile
   together" rule does not apply; say so in the def header.
+- **Still declare `JOBS` in `%arguments`** even though nothing is compiled:
+  `build_apptainer_images.sh` passes `--build-arg JOBS` to every def, and
+  Apptainer makes an undeclared build arg a *fatal* error
+  (`FATAL: unused build args: JOBS`), not a warning.
 - Watch for absolute paths baked into the original install. `neut.def` has to
   rewrite `NEUT.pc`'s `prefix=` after relocation, or `neut-config` refuses to run.
 
