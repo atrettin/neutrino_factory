@@ -73,6 +73,28 @@ Stage: final
     mkdir -p "$PREFIX/bin"
     chmod +x "$PREFIX/share/nf-neut-flatten"
 
+    # Repoint symlinks that were absolute in the source image and now dangle,
+    # rewriting them relative so they survive this move and nf-base composition.
+    # Three exist: ROOT's bin/root -> /opt/root/v6-30-04/bin/root.exe (a dangling
+    # launcher reads as `root: not found` on $PATH, which is how this was found),
+    # and NEUT's src/neutclass and include/include -> /opt/neut/include.
+    relocate_links() {
+        old_root="$1"; new_root="$2"
+        find "$new_root" -type l -print | while IFS= read -r link; do
+            target="$(readlink "$link")"
+            case "$target" in
+                "$old_root"|"$old_root"/*)
+                    rebased="$new_root${target#"$old_root"}"
+                    ln -sfn \
+                        "$(realpath -m --relative-to="$(dirname "$link")" "$rebased")" \
+                        "$link"
+                    ;;
+            esac
+        done
+    }
+    relocate_links /opt/root/v6-30-04 "$PREFIX/root"
+    relocate_links /opt/neut "$PREFIX/neut"
+
     # NEUT.pc bakes in the original install prefix, and neut-config refuses to
     # run when that disagrees with its own location. Repoint it so neut-config
     # keeps working inside the relocated payload (the flattener does not depend
@@ -131,11 +153,28 @@ EOF
     export LD_LIBRARY_PATH=/opt/nf/generators/neut/{{ CODE_VERSION }}/neut/lib:/opt/nf/generators/neut/{{ CODE_VERSION }}/root/lib
 
 %test
-    test -x /opt/nf/generators/neut/{{ CODE_VERSION }}/bin/neutroot2
-    test -x /opt/nf/generators/neut/{{ CODE_VERSION }}/bin/nf-neut-flatten
-    test -x /opt/nf/generators/neut/{{ CODE_VERSION }}/neut/bin/neutroot2
-    test -f /opt/nf/generators/neut/{{ CODE_VERSION }}/neut/include/neutvect.h
-    test -f /opt/nf/generators/neut/{{ CODE_VERSION }}/neut/share/neut/crsdat/94mod_p.dat
+    PREFIX=/opt/nf/generators/neut/{{ CODE_VERSION }}
+    test -x "$PREFIX/bin/neutroot2"
+    test -x "$PREFIX/bin/nf-neut-flatten"
+    test -x "$PREFIX/neut/bin/neutroot2"
+    test -f "$PREFIX/neut/include/neutvect.h"
+    test -f "$PREFIX/neut/share/neut/crsdat/94mod_p.dat"
+
+    # `test -e` follows symlinks, so this fails on a *dangling* bin/root — the
+    # relocation bug that let a broken payload ship and only surfaced at run
+    # time, as `root: not found` from the flattener.
+    test -e "$PREFIX/root/bin/root"
+    # And prove it actually runs, rather than merely resolving.
+    "$PREFIX/root/bin/root" --version
+
+    # Anything else left dangling is a relocation miss too. Reported rather than
+    # fatal: an unrelated broken link somewhere in ROOT's tree should not cost a
+    # ~5 GB rebuild, but it should be visible in the build log.
+    broken="$(find "$PREFIX" -xtype l -print 2>/dev/null || true)"
+    if [ -n "$broken" ]; then
+        echo "WARNING: dangling symlinks in the NEUT payload:" >&2
+        echo "$broken" >&2
+    fi
 
 %labels
     org.neutrino-factory.image neut

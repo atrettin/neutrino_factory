@@ -29,6 +29,17 @@ output="$(abspath "$2")"
 incdir="${NF_NEUT_INCDIR:-$(neut-config --incdir)}"
 [[ -d "$incdir" ]] || { echo "NEUT include directory not found: $incdir" >&2; exit 1; }
 
+# `exec root` on a missing or dangling launcher reports a bare "root: not found",
+# which says nothing about where ROOT was expected. Name the problem instead.
+if ! command -v root >/dev/null 2>&1; then
+    echo "ROOT is not on \$PATH (ROOTSYS=${ROOTSYS:-unset})." >&2
+    if [[ -n "${ROOTSYS:-}" && -L "$ROOTSYS/bin/root" && ! -e "$ROOTSYS/bin/root" ]]; then
+        echo "$ROOTSYS/bin/root is a dangling symlink -> $(readlink "$ROOTSYS/bin/root")" >&2
+        echo "The payload's ROOT was relocated without rewriting its symlinks." >&2
+    fi
+    exit 1
+fi
+
 exec root -l -b -q \
     -e ".include $incdir" \
     -e "gROOT->ProcessLine(\".x $macro(\\\"$input\\\",\\\"$output\\\")\")"

@@ -73,6 +73,15 @@ That proves the binary launched, its shared libraries resolved, and
 `$NEUT_CRSPATH` points into the payload. A missing-library error here instead
 means the payload is incomplete — see "If it fails" below.
 
+Also confirm ROOT survived relocation, since the flattener needs it:
+
+```bash
+apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" \
+  /opt/nf/generators/neut/5.7.0-nuint2024/root/bin/root --version
+```
+
+Expected: `ROOT Version: 6.30/04`.
+
 Then check the flattener's environment:
 
 ```bash
@@ -199,7 +208,14 @@ into `libNEUT.a`). Add it to the `%files from source` block in
 `setup/apptainer/neut.def` alongside `/opt/neut` and rebuild. Otherwise add the
 missing package to `nf-base.def`'s baseline list.
 
-**The flatten stage fails (step 3).** Two likely causes:
+**The flatten stage fails (step 3).** Three likely causes:
+- `ROOT is not on $PATH` / `root: not found` — ROOT's `bin/root` is an *absolute*
+  symlink to `/opt/root/v6-30-04/bin/root.exe` in the source image and dangles
+  once relocated, which bash reports as "not found". `neut.def`'s `%post`
+  rewrites it (and NEUT's two absolute include links) relative; the `%test`
+  section now runs `root --version` from the payload, so a build that gets this
+  wrong fails at build time. If it resurfaces, check
+  `readlink "$PREFIX/root/bin/root"` — it should be plain `root.exe`.
 - `nf_flatten.C not found next to …` — the `%files` staging in `neut.def` did not
   land. Check `apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" ls
   /opt/nf/generators/neut/5.7.0-nuint2024/share/`.
