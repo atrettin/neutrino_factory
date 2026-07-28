@@ -10,6 +10,7 @@ confirm the composed `nf-base.sif` actually works after (re)building images.
 | `genie_c12.yaml` | GENIE `R-3_06_00` / `G18_10a_02_11a` | 50 | needs the tune's xsec spline staged |
 | `nuwro_c12.yaml` | NuWro `nuwro_25.11` | 50 | |
 | `gibuu_c12.yaml` | GiBUU `release2025` | 1000 | more events on purpose: GiBUU weights uniformly-sampled events by cross section (no rejection sampling), so a representative dataset needs many events — and it's fast |
+| `neut_c12.yaml` | NEUT `5.7.0-nuint2024` | 50 | two-stage: `neutroot2` then `nf-neut-flatten` |
 
 ## Run on the cluster (inside the composed image)
 
@@ -26,7 +27,7 @@ apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" \
   submit --config configs/smoke/genie_c12.yaml --executor local
 ```
 
-Swap in `nuwro_c12.yaml` / `gibuu_c12.yaml` for the others. A successful run
+Swap in `nuwro_c12.yaml` / `gibuu_c12.yaml` / `neut_c12.yaml` for the others. A successful run
 writes a normalized HDF5 under `$NF_OUTPUT_ROOT`; inspect it with:
 
 ```bash

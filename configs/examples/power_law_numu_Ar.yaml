@@ -32,7 +32,7 @@ generators:
   neut:
     versions:
       - enabled: false
-        code_version: "5.x"
+        code_version: "5.7.0-nuint2024"
         config_version: "default"
   nuwro:
     versions:

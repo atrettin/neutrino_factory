@@ -52,7 +52,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "versions": [
                 {
                     "enabled": False,
-                    "code_version": "5.x",
+                    "code_version": "5.7.0-nuint2024",
                     "config_version": "default",
                 }
             ]

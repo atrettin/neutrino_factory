@@ -1,0 +1,148 @@
+# Apptainer definition for the NEUT neutrino event generator on Linux x86_64.
+#
+# UNLIKE EVERY OTHER GENERATOR, THIS DEF HAS NO Dockerfile COUNTERPART TO MIRROR.
+# NEUT's source code is not publicly available, so there is nothing to build from
+# a git ref. The NUISANCE collaboration publishes a tutorial image carrying a
+# working NEUT 5.7.0 build, and both container pathways extract from it:
+# setup/setup_neut.sh pulls and retags it for Docker, and stage 1 below
+# bootstraps from it for Apptainer. See docs/design_decisions.md.
+#
+# The source image is a ~5 GB kitchen sink (GENIE, NuWro, NUISANCE, GEANT4);
+# only NEUT and the ROOT build it links against are staged into the payload.
+#
+# Build (on odslserv01/02, NOT the Slurm head node), FROM THE REPO ROOT — the
+# %files block below stages project files by repo-relative path:
+#   apptainer build \
+#     --build-arg NEUT_SOURCE_IMAGE=nuisancemc/tutorial:nuint2024 \
+#     "$NF_IMAGE_ROOT/neut_5.7.0-nuint2024.sif" setup/apptainer/neut.def
+# (setup/build_apptainer_images.sh does this for you.)
+#
+# CODE_VERSION below must stay in sync with the key in
+# NeutAdapter.CODE_VERSIONS: the build script passes only the catalog's build
+# arg (the source image), so the default here is what names the payload
+# directory. Adding a second NEUT version means passing CODE_VERSION explicitly.
+#
+# Runtime system libraries: neutroot2 and ROOT need only libgfortran5, libpcre3,
+# liblzma5, libz and libstdc++ — all already in nf-base.def's fixed baseline, so
+# composing NEUT in adds nothing there.
+
+# ── Stage 1: The published image holding the NEUT build ───────────────────────
+Bootstrap: docker
+From: {{ NEUT_SOURCE_IMAGE }}
+Stage: source
+
+%arguments
+    NEUT_SOURCE_IMAGE=nuisancemc/tutorial:nuint2024
+    CODE_VERSION=5.7.0-nuint2024
+
+# ── Stage 2: Runtime ─────────────────────────────────────────────────────────
+Bootstrap: docker
+From: python:3.13-slim-bookworm
+Stage: final
+
+# Defaults must be redeclared per stage; {{ }} placeholders below need them.
+%arguments
+    NEUT_SOURCE_IMAGE=nuisancemc/tutorial:nuint2024
+    CODE_VERSION=5.7.0-nuint2024
+
+# Version-namespaced, self-contained payload root, so nf-base composition is a
+# single generic copy of /opt/nf/generators/neut/<code_version>. NEUT's own tree
+# carries its cross-section tables (share/neut/crsdat) and headers (include/),
+# both of which are needed at run time — the headers because the second-stage
+# flattener compiles nf_flatten.C against them through Cling.
+%files from source
+    /opt/neut           /opt/nf/generators/neut/{{ CODE_VERSION }}/neut
+    /opt/root/v6-30-04  /opt/nf/generators/neut/{{ CODE_VERSION }}/root
+
+# The flattener is a project artifact, not part of NEUT: NEUT's native output is
+# a tree of NeutVect objects that uproot cannot read (see setup/neut/nf_flatten.C).
+%files
+    setup/neut/nf_flatten.C     /opt/nf/generators/neut/{{ CODE_VERSION }}/share/nf_flatten.C
+    setup/neut/nf-neut-flatten  /opt/nf/generators/neut/{{ CODE_VERSION }}/share/nf-neut-flatten
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y --no-install-recommends \
+        libgfortran5 \
+        libpcre3 \
+        pkg-config \
+        && rm -rf /var/lib/apt/lists/*
+
+    CV="{{ CODE_VERSION }}"
+    PREFIX="/opt/nf/generators/neut/$CV"
+    mkdir -p "$PREFIX/bin"
+    chmod +x "$PREFIX/share/nf-neut-flatten"
+
+    # NEUT.pc bakes in the original install prefix, and neut-config refuses to
+    # run when that disagrees with its own location. Repoint it so neut-config
+    # keeps working inside the relocated payload (the flattener does not depend
+    # on this — it is given NF_NEUT_INCDIR — but humans debugging in the image do).
+    sed -i \
+        -e "s|^prefix=.*|prefix=$PREFIX/neut|" \
+        -e "s|/opt/root/v6-30-04|$PREFIX/root|g" \
+        "$PREFIX/neut/NEUT.pc"
+
+    # Single source of truth for NEUT's runtime environment. Self-locating, so
+    # version-agnostic. NEUT resolves its cross-section tables from
+    # $NEUT_CRSPATH (the card's NEUT-CRSPATH is deliberately not set), and its
+    # RANLUX seed from $RANFILE, which the caller sets per task.
+    cat > "$PREFIX/bin/neutroot2" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+prefix="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+
+export NEUT_ROOT="$prefix/neut"
+export NEUT_CRSPATH="$prefix/neut/share/neut/crsdat"
+export NEUT_CARDS="$prefix/neut/share/neut/Cards"
+export ROOTSYS="$prefix/root"
+export PATH="$prefix/neut/bin:$prefix/root/bin:${PATH}"
+export LD_LIBRARY_PATH="$prefix/neut/lib:$prefix/root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$prefix/neut/bin/neutroot2" "$@"
+EOF
+    chmod +x "$PREFIX/bin/neutroot2"
+
+    # Second stage: NeutVect -> flat tree. Same environment plus the NEUT header
+    # directory, which Cling needs to compile nf_flatten.C.
+    cat > "$PREFIX/bin/nf-neut-flatten" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+prefix="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+
+export NEUT_ROOT="$prefix/neut"
+export NEUT_CRSPATH="$prefix/neut/share/neut/crsdat"
+export NF_NEUT_INCDIR="$prefix/neut/include"
+export ROOTSYS="$prefix/root"
+export PATH="$prefix/neut/bin:$prefix/root/bin:${PATH}"
+export LD_LIBRARY_PATH="$prefix/neut/lib:$prefix/root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$prefix/share/nf-neut-flatten" "$@"
+EOF
+    chmod +x "$PREFIX/bin/nf-neut-flatten"
+
+    cat > "$PREFIX/nf-payload.json" <<EOF
+{"schema_version":1,"generator":"neut","code_version":"$CV","binaries":["neutroot2","nf-neut-flatten"],"default_binary":"neutroot2","smoke_paths":["neut/share/neut/crsdat/94mod_p.dat","neut/include/neutvect.h","share/nf_flatten.C"]}
+EOF
+
+%environment
+    export NEUT_ROOT=/opt/nf/generators/neut/{{ CODE_VERSION }}/neut
+    export NEUT_CRSPATH=/opt/nf/generators/neut/{{ CODE_VERSION }}/neut/share/neut/crsdat
+    export NEUT_CARDS=/opt/nf/generators/neut/{{ CODE_VERSION }}/neut/share/neut/Cards
+    export ROOTSYS=/opt/nf/generators/neut/{{ CODE_VERSION }}/root
+    export PATH=/opt/nf/generators/neut/{{ CODE_VERSION }}/bin:/opt/nf/generators/neut/{{ CODE_VERSION }}/neut/bin:/opt/nf/generators/neut/{{ CODE_VERSION }}/root/bin:$PATH
+    export LD_LIBRARY_PATH=/opt/nf/generators/neut/{{ CODE_VERSION }}/neut/lib:/opt/nf/generators/neut/{{ CODE_VERSION }}/root/lib
+
+%test
+    test -x /opt/nf/generators/neut/{{ CODE_VERSION }}/bin/neutroot2
+    test -x /opt/nf/generators/neut/{{ CODE_VERSION }}/bin/nf-neut-flatten
+    test -x /opt/nf/generators/neut/{{ CODE_VERSION }}/neut/bin/neutroot2
+    test -f /opt/nf/generators/neut/{{ CODE_VERSION }}/neut/include/neutvect.h
+    test -f /opt/nf/generators/neut/{{ CODE_VERSION }}/neut/share/neut/crsdat/94mod_p.dat
+
+%labels
+    org.neutrino-factory.image neut
+    org.neutrino-factory.source {{ NEUT_SOURCE_IMAGE }}
+
+%help
+    NEUT {{ CODE_VERSION }} payload image for unified runtime composition.
+    Extracted from the published image {{ NEUT_SOURCE_IMAGE }} (NEUT is not
+    buildable from source). Runtime payload root:
+    /opt/nf/generators/neut/{{ CODE_VERSION }}.

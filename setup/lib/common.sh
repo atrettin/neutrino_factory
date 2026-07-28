@@ -164,6 +164,21 @@ for r in json.load(sys.stdin)["generators"]:
         break' "$code_version"
 }
 
+# Echo the build-arg value catalogued for a generator + code version, or empty.
+# For most generators this is the code version itself; NEUT uses it to carry the
+# published image its payload is extracted from.
+nf_catalog_build_arg_value() {
+  local generator="$1" code_version="$2"
+  nf_require_cli
+  nf_cli_exec list-generators --generator "$generator" --json \
+    | python3 -c 'import json,sys
+cv=sys.argv[1]
+for r in json.load(sys.stdin)["generators"]:
+    if r["code_version"]==cv:
+        print((r["build_arg"] or {}).get("value", ""))
+        break' "$code_version"
+}
+
 # Fail unless code_version is catalogued for the generator.
 nf_validate_code_version() {
   local generator="$1" code_version="$2"

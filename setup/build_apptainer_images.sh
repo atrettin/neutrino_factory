@@ -172,7 +172,14 @@ build_def() {
     return 0
   fi
   log "Building $sif from $def"
-  nice -n 15 apptainer build --force "$@" "$sif" "$def"
+  # Build from the repo root so a def's %files source paths are repo-relative
+  # regardless of where this script was invoked from (setup/apptainer/neut.def
+  # stages the flattener out of setup/neut/). Absolutize the SIF path first,
+  # since NF_IMAGE_ROOT may be relative.
+  mkdir -p "$(dirname "$sif")"
+  sif="$(cd "$(dirname "$sif")" && pwd)/$(basename "$sif")"
+  def="$(cd "$(dirname "$def")" && pwd)/$(basename "$def")"
+  (cd "$REPO_ROOT" && nice -n 15 apptainer build --force "$@" "$sif" "$def")
 }
 
 # ── nf-base bootstrap runtime (always ensured, fast) ─────────────────────────

@@ -73,9 +73,15 @@ class CatalogTests(unittest.TestCase):
                     "genie", "R-3_06_00", "AR23_20i_00_000", root, require_available=True
                 )
 
-    def test_neut_not_buildable(self) -> None:
-        self.assertFalse(catalog.is_buildable("neut", "5.x"))
+    def test_neut_buildable_from_published_image(self) -> None:
+        # NEUT has no git ref (its source is not public); its payload is
+        # extracted from a published image instead, which is just as buildable.
+        self.assertTrue(catalog.is_buildable("neut", "5.7.0-nuint2024"))
         self.assertTrue(catalog.is_buildable("genie", "R-3_06_00"))
+
+    def test_unknown_code_version_is_not_buildable(self) -> None:
+        self.assertFalse(catalog.is_buildable("neut", "5.x"))
+        self.assertFalse(catalog.is_buildable("genie", "R-9_99_99"))
 
     def test_build_arg_names_and_values(self) -> None:
         self.assertEqual(
@@ -91,8 +97,14 @@ class CatalogTests(unittest.TestCase):
             catalog.build_arg("gibuu", "release2025"),
             {"name": "GIBUU_RELEASE", "value": "2025"},
         )
+        # NEUT passes the published image its payload is extracted from, not the
+        # code version — there is no source ref to build.
+        self.assertEqual(
+            catalog.build_arg("neut", "5.7.0-nuint2024"),
+            {"name": "NEUT_SOURCE_IMAGE", "value": "nuisancemc/tutorial:nuint2024"},
+        )
 
-    def test_build_arg_none_for_unbuildable(self) -> None:
+    def test_build_arg_none_for_unknown_code_version(self) -> None:
         self.assertIsNone(catalog.build_arg("neut", "5.x"))
 
     def test_genie_xsecs_xml_exact_and_normalized(self) -> None:

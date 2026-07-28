@@ -144,3 +144,105 @@ branch):
 Files: `translators/gibuu.py` (`NUM_RUNS_SAME_ENERGY`, `compute_xsec_weight`),
 `normalizers/gibuu.py` (`_normalize_root` wires it in via the sidecar
 `flux_config`). Monoenergetic runs skip the flux division (`raw / num_runs`).
+
+## NEUT: a payload extracted from a published image, not built from source
+
+**Context.** Every other generator is built from a git ref by a Dockerfile plus a
+hand-mirrored Apptainer def. NEUT's source code is not publicly available, so
+there is nothing to build. The NUISANCE collaboration publishes a tutorial image
+(`nuisancemc/tutorial:nuint2024`) carrying a working NEUT 5.7.0 build.
+
+**Decision.** Both container pathways extract NEUT from that image:
+`setup/setup_neut.sh` pulls and retags it as `neut:<code_version>` for Docker,
+and `setup/apptainer/neut.def` bootstraps stage 1 from it and stages only
+`/opt/neut` and the ROOT build it links against (~1.5 GB of the ~5 GB image).
+Consequences, each a deliberate departure from the rules elsewhere in this file:
+
+- **There is no `setup/Dockerfile.neut`**, so the "each def mirrors its
+  Dockerfile — update both together" pairing does not apply to NEUT.
+- `code_version` is **`5.7.0-nuint2024`**: the NEUT release plus the image tag it
+  came from. Since the build is not reproducible from source, the image tag is
+  the real pin, and a re-push of that tag would otherwise be invisible.
+- `NeutAdapter` overrides `is_buildable` to treat a `source_image` catalog entry
+  as a source (the base class recognizes only `git_ref`), so the catalog-driven
+  `build_apptainer_images.sh` picks NEUT up with no generator-specific code, and
+  overrides `build_arg` to pass `NEUT_SOURCE_IMAGE` rather than the code version.
+- `build_apptainer_images.sh` now runs `apptainer build` from the repo root, so
+  `neut.def`'s `%files` can stage project files (the flattener) by repo-relative
+  path. No other def has a host `%files` block, so nothing else changes.
+- NEUT.pc bakes in the original install prefix and `neut-config` refuses to run
+  when that disagrees with its own location, so the def repoints it after
+  relocation.
+
+## NEUT output flattening (`nf_flatten.C`)
+
+**Context.** `neutroot2` writes a `neuttree` whose `vectorbranch` holds
+`NeutVect` objects. uproot deserializes their scalar members from the file's
+streamers but fails on the nested `TObjArray` of `NeutPart` ("invalid class-tag
+reference"), so NEUT's native output cannot be read from Python at all.
+
+**Decision.** A project-owned ROOT macro, `setup/neut/nf_flatten.C`, run through
+`setup/neut/nf-neut-flatten` as a second stage — the NEUT analogue of GENIE's
+`gevgen` → `gntpc`, dispatched by `NeutAdapter._run_flatten` through the same
+native/container branches as generation. It writes an `nf_neut` tree of plain
+scalars (`mode`, `pdgnu`, `enu_gev`, `totcrs`) and copies NEUT's normalization
+histograms across.
+
+**Alternatives rejected.** NEUT ships `neutclass_to_tree`, but its `nework`
+branch is a Fortran leaf-list containing `pne[100][3]`, which uproot mis-parses
+(it reads the dtype as `(3,)` rather than `(100,3)`); reading it would mean
+hand-maintaining a 2808-byte numpy dtype that must track NEUT's common block.
+NUISANCE's `nuisflat` produces a genuinely flat tree, but `ldd` shows it linking
+GENIE, NuWro, LHAPDF and Pythia — the payload would grow from ~1.5 GB to
+essentially the whole image.
+
+## NEUT cross-section weight (`xsec_weight`) normalization
+
+**Decision.** `NeutTranslator.compute_xsec_weight` uses
+`xsec_weight_i = σ_avg / (n_events · φ̂(E_i))` — structurally identical to GENIE,
+because NEUT is likewise unweighted and samples events with density proportional
+to `flux(E) · σ(E)`.
+
+**Where σ_avg comes from.** Unlike GENIE, no external spline file is needed:
+when sampling a flux histogram (`EVCT-MPV 3`), NEUT writes both that histogram
+(`flux_numu`) and the resulting event rate (`evtrt_numu`, = flux × σ) into its
+own output, and the ratio of their integrals *is* the flux-averaged total cross
+section. `NeutNormalizer` reads them and injects the ratio into the translated
+config as `flux_averaged_xsec_1e38`.
+
+**Validation** (not self-consistency — independent references):
+- *Units and per-nucleon convention.* The ratio does not scale with A:
+  regenerating the same flux on C12/O16/Ar40/CH gives 0.655/0.663/0.675/0.636,
+  the small isospin-driven spread of a per-nucleon quantity rather than the
+  factor ~3.3 a whole-nucleus quantity would show between C12 and Ar40. So there
+  is no `XSEC_SCALE` and no division by mass number, unlike GENIE.
+- *Absolute value.* NUISANCE, reading the same file through its own NEUT input
+  handler, reports `Event/Flux : 1.46774e-38 cm2/nucleon` where this ratio is
+  1.4677402686 — agreement to every printed digit.
+- *Sampling law.* The generated energy spectrum tracks `evtrt`, not `flux`: over
+  ten coarse bins the summed absolute difference in normalized shape is 0.035
+  against `evtrt` versus 0.52 against `flux`. This is what licenses the formula.
+- *End to end.* For a 4000-event single-chunk C12 run, `Σ xsec_weight / bin_width`
+  per energy bin reproduces NEUT's own `evtrt/flux` ratio per bin to
+  1.03 ± 0.05 — Monte-Carlo noise at that sample size.
+
+## NEUT is not bit-reproducible from its seed
+
+**Finding.** NEUT reads its RANLUX seed from the file named by `$RANFILE` when
+the card sets `NEUT-RAND 0` (`NeutAdapter._write_seed_file` writes the 25
+integers Fortran's `(5X,5I12)` read expects; only the first is used as the
+RLUXGO seed). That works — the log confirms `RANLUX INITIALIZED BY RLUXGO FROM
+SEEDS <seed> 0 0`, different seeds diverge immediately, and the same seed
+reproduces the opening events exactly.
+
+But two runs with the *same* seed diverge after ~4 events: NEUT's own `Ev.# N
+SEEDS` trace shows it consuming a different number of random numbers from there
+on. This is NEUT, not the harness — it reproduces on native aarch64 and on
+x86_64 under Rosetta, and with ASLR disabled (`setarch -R`), which rules out
+emulation and address-layout effects. The likely cause is uninitialized state
+inside NEUT; the source is unavailable to confirm.
+
+**Consequence.** Chunking is still safe — that requires only that different
+chunk seeds give different, independent event sets, which holds. What is lost is
+bit-exact re-running of a given chunk. Configs remain reproducible in
+distribution, not in individual events.
