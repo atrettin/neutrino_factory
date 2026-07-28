@@ -9,6 +9,11 @@ from pathlib import Path
 from . import catalog
 from .common_output import MergeError
 from .config import ConfigError, load_config, load_env_file
+from .kinematics_report import (
+    analyze_config,
+    analyze_file,
+    format_reports,
+)
 from .local import run_local, run_task_from_manifest
 from .merge import merge_outputs
 from .plots import DEFAULT_BINS, make_plots
@@ -238,6 +243,24 @@ def cmd_plot_output(args: argparse.Namespace) -> int:
     written = make_plots(args.input, args.output_dir, args.prefix, bins=args.bins)
     _print_json({"input": args.input, "plots": written})
     return 0
+
+
+def cmd_analyze_kinematics(args: argparse.Namespace) -> int:
+    if args.config:
+        analyses = analyze_config(load_config(args.config))
+        if not analyses:
+            raise RuntimeError(
+                f"{args.config} declares no enabled generator versions, so there "
+                "are no merged outputs to analyze."
+            )
+    else:
+        analyses = [analyze_file(args.input)]
+
+    if args.json:
+        _print_json({"analyses": analyses})
+    else:
+        print(format_reports(analyses))
+    return 0 if all(analysis["ok"] for analysis in analyses) else 1
 
 
 def _collect_catalog_rows(generator_filter: str | None, built_only: bool) -> list[dict]:
@@ -627,6 +650,39 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     plot_parser.set_defaults(func=cmd_plot_output)
+
+    analyze_parser = subparsers.add_parser(
+        "analyze-kinematics",
+        help="Print a kinematic summary of normalized HDF5 output",
+        description=(
+            "Summarize the kinematic content of common-output HDF5 files: event "
+            "counts broken down by interaction type, the weight efficiency of "
+            "each channel (Kish effective sample size, which reveals how much "
+            "statistical power a weighted sample actually carries), and per-"
+            "interaction tables of mean, median and range for every kinematic "
+            "variable. Means and medians are weighted by xsec_weight, and "
+            "placeholder values are excluded. Give either a single --input file "
+            "or a --config, in which case every merged output the run is expected "
+            "to produce is discovered and reported under its own heading. Exits "
+            "non-zero if any file could not be read."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  neutrino-factory analyze-kinematics --input output/merged/run_genie_ver.h5\n"
+            "  neutrino-factory analyze-kinematics --config configs/smoke/genie_c12.yaml"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    analyze_source = analyze_parser.add_mutually_exclusive_group(required=True)
+    analyze_source.add_argument("--input", help="A single common-output HDF5 file")
+    analyze_source.add_argument(
+        "--config",
+        help="Run configuration whose merged outputs are discovered and analyzed",
+    )
+    analyze_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON"
+    )
+    analyze_parser.set_defaults(func=cmd_analyze_kinematics)
 
     return parser
 

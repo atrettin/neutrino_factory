@@ -133,6 +133,26 @@ unphysical placeholder: `-1` for the non-negative quantities, `-999` for
 `-1`). Notably, `bjorken_x` is `-1` for coherent events. See
 `docs/design_decisions.md` for the full convention.
 
+Inspect a file's kinematic content with `analyze-kinematics`, which prints event
+counts by interaction type, the weight efficiency of each channel, and per-
+interaction tables of mean/median/range for every kinematic variable:
+
+```bash
+# a single file
+neutrino-factory analyze-kinematics --input output/merged/run_genie_ver.h5
+
+# or discover every merged output a config produces, each under its own heading
+neutrino-factory analyze-kinematics --config configs/smoke/genie_c12.yaml
+```
+
+Means and medians are weighted by `xsec_weight` and placeholders are excluded.
+The weight-efficiency table reports the Kish effective sample size
+`n_eff = (Σw)² / Σw²` — the number of unweighted events carrying the same
+statistical power. Read it before trusting any distribution: GiBUU samples phase
+space uniformly and weights by cross section, so its quasi-elastic channel can
+show `n_eff/n` below 1 % and raw event counts badly overstate what the sample
+supports.
+
 ## Quickstart B — HPC cluster (Apptainer, MPCDF/ODSL)
 
 MPCDF's host Python (3.9) is too old for this project. Use a container-backed

@@ -360,10 +360,37 @@ NEUT runs plus an 83k-event GiBUU run, all `numu` CC on C12 with a γ=-2 power-l
 flux over 0.5–5 GeV, pass the structural invariants event-by-event (Q² ≥ 0, exact
 energy-transfer closure, |cos θ| ≤ 1, p_∥² + p_T² = |p|², coherent events blanked
 and only those) and agree on the cross-section-weighted distributions. Bjorken-x
-for quasi-elastic peaks at 0.75–0.85 with a weighted median of 0.824 (GENIE),
+for quasi-elastic peaks at 0.75–0.85 with a weighted median of 0.825 (GENIE),
 0.815 (NuWro), 0.825 (NEUT) and 0.809 (GiBUU) — a broad peak *below* 1, not the sharp x=1 of
 free-nucleon QE, because Fermi motion and binding smear it and the fixed `M_N`
 does not absorb that. The GiBUU number needs care: its QE weight is extremely
 concentrated (Kish n_eff = 35 out of 14579 events; the top 1% of events carry 86%
 of the weight), so it is quoted with a bootstrap CI of [0.797, 0.851] rather than
 as a point estimate — see the GiBUU weighting section above for why.
+
+## `analyze-kinematics`: weighted by default, with the weight efficiency in view
+
+**Decision.** `kinematics_report.py` (CLI: `analyze-kinematics`) reports every
+mean and median **weighted by `xsec_weight`**, never raw, and prints a
+weight-efficiency table alongside — Kish `n_eff = (Σw)² / Σw²` per interaction
+channel, plus the share of weight in the heaviest 1% of events.
+
+**Why.** Unweighted event distributions are simply not the physical ones for a
+cross-section-weighted generator, and the failure is silent: a 100k-event GiBUU
+run reports a perfectly healthy-looking quasi-elastic sample whose effective size
+is 35 events. Making the weighted statistic the only one available removes the
+foot-gun; showing `n_eff/n` next to it says how much to trust the number. The
+efficiency is computed on `|w|` so GiBUU's negative interference weights cannot
+cancel into a meaningless ratio, while `Σw` is reported signed.
+
+**Placeholders are excluded per variable, and counted.** A `blank` column shows
+how many events were dropped, so `bjorken_x` for a coherent selection reports
+"0 used, 127 blank" rather than silently averaging in `-1`.
+
+**The weighted quantile uses the midpoint convention** — cumulative weight
+evaluated at the centre of each point's weight, not its upper edge. The naive
+cumulative sum biases the median low by half a bin (it puts the median of 0..100
+at 49.5); a unit test pins the uniform-weight case to the ordinary median.
+
+Files: `kinematics_report.py`, `cli.py` (`cmd_analyze_kinematics`),
+`tests/test_kinematics_report.py`.
