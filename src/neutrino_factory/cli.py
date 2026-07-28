@@ -194,10 +194,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
                 )
                 continue
 
-            print(
-                "Merging files into "
-                f"{merged['path']}: {', '.join(str(path) for path in valid_inputs)}"
-            )
+            print(f"Merging {len(valid_inputs)} files into {merged['path']}")
             output = merge_outputs(valid_inputs, merged["path"])
             merged_outputs_written.append(output)
             per_target.append(
@@ -230,10 +227,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
     if not args.inputs:
         raise RuntimeError("At least one input HDF5 file is required unless --config is provided")
 
-    print(
-        "Merging files into "
-        f"{args.output}: {', '.join(str(path) for path in args.inputs)}"
-    )
+    print(f"Merging {len(args.inputs)} files into {args.output}")
     output = merge_outputs(args.inputs, args.output)
     _print_json({"merged_output": output, "input_count": len(args.inputs)})
     return 0
