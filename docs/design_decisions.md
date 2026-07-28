@@ -226,6 +226,28 @@ config as `flux_averaged_xsec_1e38`.
   per energy bin reproduces NEUT's own `evtrt/flux` ratio per bin to
   1.03 ± 0.05 — Monte-Carlo noise at that sample size.
 
+## NEUT paths are limited to 80 characters
+
+NEUT reads filenames into 80-character Fortran buffers and **truncates anything
+longer without complaining** — the failure surfaces much later as
+`Fortran runtime error: End of file` on a path that has silently lost its tail.
+A real cluster work directory overruns this easily
+(`/ptmp/.../work/raw/neut/<version>/<run>_<gen>_<version>_chunk000` is ~90
+characters before the filename).
+
+Everything NEUT is handed is therefore a **bare filename**, resolved against the
+working directory: the card (`neut.card`), its `EVCT-FILENM 'flux.root'`, the
+output (`events.neut.root`), and `$RANFILE` (`ranseed.dat`). `local.run_task`
+launches with `cwd=work_dir`, which is the same assumption the other adapters'
+relative output paths already make, and the payload wrapper deliberately does
+not `cd` (unlike NuWro's, which must). Keep it that way — an absolute path
+anywhere in this chain is a latent bug that only appears on deep work roots.
+
+The one absolute path NEUT still receives is `$NEUT_CRSPATH`, set by the payload
+wrapper to `/opt/nf/generators/neut/<code_version>/neut/share/neut/crsdat` (~62
+characters). That fits, but it is close enough that a longer `code_version`
+would break it.
+
 ## NEUT is not bit-reproducible from its seed
 
 **Finding.** NEUT reads its RANLUX seed from the file named by `$RANFILE` when

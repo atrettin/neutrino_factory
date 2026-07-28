@@ -165,8 +165,14 @@ class NeutAdapter(GeneratorAdapter):
         # executed directly whenever it is on $PATH. Do not reorder these branches.
         if shutil.which(self.binary_name()):
             # subprocess inherits this process's environment, and NEUT reads its
-            # RANLUX seed from the file named here (NEUT-RAND 0).
-            os.environ["RANFILE"] = str((work_dir / SEED_FILE).resolve())
+            # RANLUX seed from the file named here (NEUT-RAND 0). Deliberately a
+            # bare filename, not an absolute path: NEUT reads $RANFILE into an
+            # 80-character Fortran buffer and silently truncates anything longer,
+            # which a real work root overruns (a /ptmp task directory is ~90
+            # characters). Relative is safe because run_task always launches the
+            # command with cwd=work_dir, the same assumption the card and output
+            # filenames below already make.
+            os.environ["RANFILE"] = SEED_FILE
             return containers.apptainer_dispatch(self.name, code_version, neut_args)
 
         if self.container_available(code_version):
@@ -178,7 +184,9 @@ class NeutAdapter(GeneratorAdapter):
                 neut_args,
                 [(work_dir, "/work")],
                 "/work",
-                env={"RANFILE": f"/work/{SEED_FILE}"},
+                # Relative for the same 80-character reason as the native branch;
+                # the container's working directory is the bind-mounted work dir.
+                env={"RANFILE": SEED_FILE},
             )
 
         return neut_args

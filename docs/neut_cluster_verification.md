@@ -91,7 +91,7 @@ apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" \
 ```
 
 Expected: two container-side stages run (`neutroot2`, then `nf_flatten:` printing
-`wrote 50 events`), and the CLI prints one `chunk_outputs` and one
+`wrote <run.events> events`), and the CLI prints one `chunk_outputs` and one
 `merged_outputs` path.
 
 Ignore `Error in cling::AutoLoadingVisitor: Missing FileEntry for
@@ -114,10 +114,10 @@ print("code_version:", f["metadata"].attrs["code_version"])
 PY
 ```
 
-Expected, matching what the Docker run produced locally: 50 events; all nine
-columns populated; more than one interaction category (locally: qel 27, res 13,
-dis 4, mec 4, coh 2); **no** zero `xsec_weight`; `code_version` =
-`5.7.0-nuint2024`.
+Expected, matching what the Docker run produced locally: `run.events` events;
+all nine columns populated; more than one interaction category (in a 50-event
+local run: qel 27, res 13, dis 4, mec 4, coh 2); **no** zero `xsec_weight`;
+`code_version` = `5.7.0-nuint2024`.
 
 ## 5. Cross-check the normalization against NUISANCE
 
@@ -174,7 +174,7 @@ happens on a native x86_64 cluster node.
 ```bash
 cd "$(mktemp -d)" && cp <the smoke run's work dir>/{neut.card,flux.root,ranseed.dat} .
 for x in 1 2; do
-  RANFILE=$PWD/ranseed.dat apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" \
+  RANFILE=ranseed.dat apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" \
     nf-run neut 5.7.0-nuint2024 neutroot2 neut.card o$x.root 2>&1 \
     | tr -d '\000' | grep -a '^Ev\.#' > seeds$x.txt
 done
@@ -212,6 +212,12 @@ missing package to `nf-base.def`'s baseline list.
 `sed` in `neut.def`'s `%post` that repoints `NEUT.pc`'s `prefix=` after
 relocation did not apply. The flattener does not depend on this (it is given
 `NF_NEUT_INCDIR` directly), but it will confuse anyone debugging by hand.
+
+**`Fortran runtime error: End of file` in `nerdseed.F`, on a path ending
+mid-directory.** NEUT truncated a filename to its 80-character Fortran buffer.
+Everything NEUT is handed must be a bare filename resolved against the working
+directory — see "NEUT paths are limited to 80 characters" in
+`docs/design_decisions.md`.
 
 **Every chunk generates identical events.** `$RANFILE` is not reaching NEUT, so
 it fell back to the RANLUX default seed. Confirm the run log contains

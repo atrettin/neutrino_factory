@@ -124,6 +124,13 @@ class NeutAdapterCommandBranchTests(unittest.TestCase):
         self.assertNotIn("apptainer", command)
 
     def test_native_branch_points_ranfile_at_the_seed_file(self) -> None:
+        """RANFILE must stay a bare filename, resolved against cwd.
+
+        NEUT reads $RANFILE into an 80-character Fortran buffer and truncates
+        anything longer without complaint, so an absolute path breaks as soon as
+        the work root is deep (a real /ptmp task directory is ~90 characters).
+        run_task launches the command with cwd=work_dir, so relative resolves.
+        """
         config = _config()
         adapter = NeutAdapter(config)
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -134,9 +141,9 @@ class NeutAdapterCommandBranchTests(unittest.TestCase):
                     return_value="/opt/neut/bin/neutroot2",
                 ):
                     adapter.build_run_command(_translated(config), work_dir)
-                    self.assertEqual(
-                        os.environ["RANFILE"], str((work_dir / "ranseed.dat").resolve())
-                    )
+                    self.assertEqual(os.environ["RANFILE"], "ranseed.dat")
+                    self.assertFalse(Path(os.environ["RANFILE"]).is_absolute())
+                    self.assertLess(len(os.environ["RANFILE"]), 80)
 
     def test_docker_runtime_wraps_command_and_passes_ranfile(self) -> None:
         config = _config()
@@ -150,8 +157,9 @@ class NeutAdapterCommandBranchTests(unittest.TestCase):
         self.assertEqual(command[:3], ["docker", "run", "--platform"])
         self.assertIn(f"neut:{CODE_VERSION}", command)
         # Without this the container would fall back to RANLUX's default seed and
-        # every chunk would generate the same events.
-        self.assertIn("RANFILE=/work/ranseed.dat", command)
+        # every chunk would generate the same events. Relative for the same
+        # 80-character-buffer reason as the native branch.
+        self.assertIn("RANFILE=ranseed.dat", command)
 
     def test_apptainer_runtime_refuses_to_wrap(self) -> None:
         # Apptainer cannot nest: reaching the container branch without a native
