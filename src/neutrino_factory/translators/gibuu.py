@@ -14,10 +14,17 @@ from ..flux import Flux, build_flux
 FLUX_NBINS = 500
 
 # num_runs_SameEnergy in the jobcard: the number of independent GiBUU runs at the
-# same flux/energy, each writing one EventOutput.Pert.*.root file. GiBUU
+# same flux/energy, each writing its own EventOutput.Pert.<run>.root. GiBUU
 # normalizes perweight so that the sum over one run reproduces the cross section,
 # so compute_xsec_weight must divide by this. Kept in one place so the jobcard
 # and the xsec-weight normalization can never drift.
+#
+# Raising this above 1 is safe but only because the normalizer reads *every*
+# part (normalizers.gibuu.pert_output_parts) — reading one while dividing by N
+# would report sigma/N. Prefer numEnsembles for more statistics anyway: GiBUU
+# divides it out of perweight itself (initNeutrino.f90 normalizes by the nucleon
+# test-particle count summed over ensembles), so scaling it leaves each chunk an
+# unbiased estimate of sigma, which is what makes merging chunks well-defined.
 NUM_RUNS_SAME_ENERGY = 1
 
 # Jobcard path of the flux table the adapter writes into the work directory.
@@ -210,6 +217,21 @@ class GiBUUTranslator(ConfigTranslator):
         flux_hat = flux_density[nonzero] / integral
         xsec_weight[nonzero] = raw_weights[nonzero] / (num_runs * flux_hat)
         return xsec_weight
+
+    def xsec_norm_count(
+        self, translated_config: dict[str, Any], event_count: int
+    ) -> float:
+        """The chunk's run multiplicity — ``num_runs``, *not* its event count.
+
+        GiBUU is the one generator where these differ. Its per-event weights
+        already sum to the flux-folded cross section within a single run
+        (numEnsembles is folded into the weight), so a chunk's contribution to a
+        merged estimate is measured in generator runs, not in events. Using the
+        event count here would weight chunks by how many interactions GiBUU
+        happened to produce — which varies with the cross section itself — and
+        skew the merged average.
+        """
+        return float(max(1, int(translated_config.get("num_runs", NUM_RUNS_SAME_ENERGY))))
 
     @staticmethod
     def _flux_table(flux: Any) -> str:

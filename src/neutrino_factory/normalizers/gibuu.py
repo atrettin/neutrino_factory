@@ -12,6 +12,19 @@ from ..translators.gibuu import GiBUUTranslator
 from .base import OutputNormalizer
 
 
+# GiBUU writes one perturbative-event file per run: with
+# num_runs_SameEnergy = N it produces EventOutput.Pert.00000001.root through
+# ...0000000N.root. Reading only the first while dividing the weights by N (as
+# compute_xsec_weight does) would report sigma/N and silently drop the other
+# runs' events, so every part must be read.
+PERT_OUTPUT_GLOB = "EventOutput.Pert.*.root"
+
+
+def pert_output_parts(directory: Path) -> list[Path]:
+    """Every GiBUU perturbative-event file in ``directory``, in run order."""
+    return sorted(Path(directory).glob(PERT_OUTPUT_GLOB))
+
+
 def _interaction_from_evtype(ev_type: int) -> str:
     """Map GiBUU's ``evType`` event-class code to the common interaction label.
 
@@ -52,6 +65,56 @@ class GiBUUNormalizer(OutputNormalizer):
         metadata["translated_config"] = raw.get("translated_config", {})
         return write_common_hdf5(out_path, metadata, raw.get("events", []))
 
+    @staticmethod
+    def _read_parts(
+        parts: list[Path],
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Read and concatenate the ``RootTuple`` branches across run files.
+
+        Concatenation is the right combination here, unlike merging chunks: the
+        runs are parts of *one* estimate whose weights are all divided by the
+        same ``num_runs`` in ``compute_xsec_weight``, so summing them recovers
+        sigma rather than a multiple of it.
+        """
+        import uproot
+
+        columns: dict[str, list[np.ndarray]] = {
+            "energies": [], "weights": [], "ev_types": [], "nu_p4": [], "lepton_p4": []
+        }
+        for part in parts:
+            with uproot.open(part) as f:
+                tree = f["RootTuple"]
+
+                def branch(name: str) -> np.ndarray:
+                    try:
+                        return tree[name].array(library="np")
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"Cannot read branch '{name}' from {part.name}: {exc}"
+                        ) from exc
+
+                # GiBUU writes lepIn_E in GeV; it is the incoming neutrino energy.
+                energies = branch("lepIn_E")
+                columns["energies"].append(energies)
+                columns["weights"].append(branch("weight"))
+                columns["ev_types"].append(branch("evType"))
+                # Both four-vectors are in GeV: lepIn_* is the incoming neutrino,
+                # lepOut_* the outgoing lepton (the scattered neutrino for NC).
+                columns["nu_p4"].append(np.column_stack([
+                    energies, *(branch(b) for b in ("lepIn_Px", "lepIn_Py", "lepIn_Pz"))
+                ]))
+                columns["lepton_p4"].append(np.column_stack([
+                    branch(b) for b in ("lepOut_E", "lepOut_Px", "lepOut_Py", "lepOut_Pz")
+                ]))
+
+        return (
+            np.concatenate(columns["energies"]),
+            np.concatenate(columns["weights"]),
+            np.concatenate(columns["ev_types"]),
+            np.concatenate(columns["nu_p4"]),
+            np.concatenate(columns["lepton_p4"]),
+        )
+
     def _normalize_root(self, root_path: Path, out_path, task: dict, mode: str) -> str:
         try:
             import uproot
@@ -76,43 +139,20 @@ class GiBUUNormalizer(OutputNormalizer):
         target = translated["nucleus"]
         start_event = int(task["start_event"])
 
-        with uproot.open(root_path) as f:
-            tree = f["RootTuple"]
-            try:
-                # GiBUU writes lepIn_E in GeV; it is the incoming neutrino energy.
-                energies_gev = tree["lepIn_E"].array(library="np")
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Cannot read neutrino energy from branch 'lepIn_E': {exc}"
-                ) from exc
-            try:
-                weights = tree["weight"].array(library="np")
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Cannot read event weight from branch 'weight': {exc}"
-                ) from exc
-            try:
-                ev_types = tree["evType"].array(library="np")
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Cannot read interaction class from branch 'evType': {exc}"
-                ) from exc
-            try:
-                # Both four-vectors are in GeV: lepIn_* is the incoming neutrino,
-                # lepOut_* the outgoing lepton (the scattered neutrino for NC).
-                nu_p4 = np.column_stack([
-                    energies_gev,
-                    *(tree[branch].array(library="np") for branch in ("lepIn_Px", "lepIn_Py", "lepIn_Pz")),
-                ])
-                lepton_p4 = np.column_stack([
-                    tree[branch].array(library="np")
-                    for branch in ("lepOut_E", "lepOut_Px", "lepOut_Py", "lepOut_Pz")
-                ])
-            except Exception as exc:
-                raise RuntimeError(
-                    "Cannot read lepton four-vectors from 'lepIn_P*' and 'lepOut_*': "
-                    f"{exc}"
-                ) from exc
+        parts = pert_output_parts(root_path.parent) or [root_path]
+        # A missing run's events would be dropped while compute_xsec_weight still
+        # divided by the full num_runs, understating sigma by exactly that ratio.
+        expected_parts = max(1, int(translated.get("num_runs", 1)))
+        if len(parts) != expected_parts:
+            raise RuntimeError(
+                f"Expected {expected_parts} GiBUU perturbative output file(s) "
+                f"(num_runs={expected_parts}) in {root_path.parent}, found "
+                f"{len(parts)}: {', '.join(p.name for p in parts) or 'none'}. "
+                "The cross section is normalized per run, so a missing run would "
+                "silently understate it."
+            )
+
+        energies_gev, weights, ev_types, nu_p4, lepton_p4 = self._read_parts(parts)
 
         energies_gev = np.asarray(energies_gev, dtype=np.float64)
         weights_arr = np.asarray(weights, dtype=np.float64)
@@ -123,6 +163,14 @@ class GiBUUNormalizer(OutputNormalizer):
 
         interactions = [_interaction_from_evtype(int(ev_type)) for ev_type in ev_types]
         kinematics = derive_kinematics(nu_p4, lepton_p4, interactions)
+
+        # Declare how much this chunk's estimate is worth, so merging averages
+        # the chunks instead of summing them (see ConfigTranslator.xsec_norm_count
+        # and merge_hdf5_files). Recorded only on the real path: stub output
+        # carries placeholder weights that must not be rescaled.
+        metadata["xsec_norm_count"] = GiBUUTranslator().xsec_norm_count(
+            translated, len(energies_gev)
+        )
 
         events = []
         for i, (e_gev, w, xw, itype) in enumerate(

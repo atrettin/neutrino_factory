@@ -216,3 +216,13 @@ class NeutTranslator(ConfigTranslator):
         flux_hat = flux_density[nonzero] / integral
         xsec_weight[nonzero] = flux_averaged_xsec / (n_events * flux_hat)
         return xsec_weight
+
+    def xsec_norm_count(
+        self, translated_config: dict[str, Any], event_count: int
+    ) -> float:
+        """The chunk's event count — the ``n_events`` divided out above.
+
+        NEUT is unweighted, so each event is one sample of the same estimator and
+        a chunk's statistical size is simply how many events it holds.
+        """
+        return float(event_count)

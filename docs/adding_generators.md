@@ -10,7 +10,9 @@ To add a new backend, keep changes isolated to four places:
 ## Minimal checklist
 
 - create `setup/setup_<name>.sh`
-- create `src/neutrino_factory/translators/<name>.py`
+- create `src/neutrino_factory/translators/<name>.py` (both `compute_xsec_weight`
+  and `xsec_norm_count` are abstract — the latter tells `merge_hdf5_files` how to
+  average your chunks instead of summing them; see `docs/design_decisions.md`)
 - create `src/neutrino_factory/normalizers/<name>.py`
 - create `src/neutrino_factory/generators/<name>.py`
 - register the adapter in `src/neutrino_factory/generators/registry.py`

@@ -168,10 +168,11 @@ native on `$PATH`, so the adapter's native-first branch fires and emits
 Re-apply the step-4 checks to the per-chunk HDF5. Note that a Slurm array run
 currently leaves only per-chunk files (an existing item in `.claude/TODOS.md`).
 
-**Do not judge normalization from a multi-chunk merged file.** `xsec_weight` is
-normalized per chunk, so a merged N-chunk file overestimates the cross section by
-a factor N — a known, generator-independent bug tracked in `.claude/TODOS.md`.
-The smoke config uses one chunk deliberately.
+Multi-chunk merged files are safe to judge normalization from: `merge_hdf5_files`
+averages the per-chunk estimates rather than summing them (see "Merging chunks
+averages cross-section weights" in `docs/design_decisions.md`). This was a real
+bug — an N-chunk merge used to report N times the cross section — so if a merged
+file comes back an integer multiple too large, suspect that first.
 
 ## 7. Worth reporting back: is NEUT deterministic on native x86_64?
 

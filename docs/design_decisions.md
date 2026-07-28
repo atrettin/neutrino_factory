@@ -141,6 +141,29 @@ branch):
   (`num_runs`, no `1e38`), not the presence of the flux division.
 - Negative interference weights are passed through unchanged.
 
+**`numEnsembles` vs `num_runs_SameEnergy`.** Both scale statistics; only the
+first is normalized out for you, which is why `num_runs` is the divisor above
+and why we scale chunk size with `numEnsembles`. Read from the release2025
+source: `initNeutrino.f90:1292` sets `perweight = totalWeight/float(numtry)`,
+where `numtry` counts nucleon test-particles over *all* ensembles
+(`realParticles` is indexed `(ensemble, particle)`) — so doubling `numEnsembles`
+halves each weight and leaves the sum invariant. `num_runs_sameEnergy` never
+enters `perweight`; GiBUU divides by it in its own analysis
+(`neutrinoAnalysis.f90:3515`) and hands both counts to the consumer as ROOT
+branches (`EventOutput.f90:1132`). Confirmed by running one jobcard three ways:
+doubling ensembles gave 2.04x the events at 0.86x the weight sum, doubling runs
+gave 2.02x the events at 2.17x the weight sum (spread is GiBUU's heavy tails).
+
+Because `numEnsembles` is auto-normalized, a GiBUU chunk estimates sigma
+regardless of its size — the property that makes `num_runs`, not the event count,
+the right `xsec_norm_count` for merging.
+
+**One file per run.** `num_runs_SameEnergy = N` writes
+`EventOutput.Pert.00000001.root` .. `...0000000N.root`. The normalizer globs
+every part and fails loudly if it finds fewer than `num_runs`; reading only the
+first while still dividing by N would silently report sigma/N (measured: 4.07
+instead of 8.13 on a real 2-run job).
+
 Files: `translators/gibuu.py` (`NUM_RUNS_SAME_ENERGY`, `compute_xsec_weight`),
 `normalizers/gibuu.py` (`_normalize_root` wires it in via the sidecar
 `flux_config`). Monoenergetic runs skip the flux division (`raw / num_runs`).
@@ -394,3 +417,52 @@ at 49.5); a unit test pins the uniform-weight case to the ordinary median.
 
 Files: `kinematics_report.py`, `cli.py` (`cmd_analyze_kinematics`),
 `tests/test_kinematics_report.py`.
+
+## Merging chunks averages cross-section weights, it does not sum them
+
+**Context.** Every generator's `xsec_weight` column is a *per-chunk* estimate of
+the cross section: for one chunk on its own,
+`sum(xsec_weight in an energy bin) / bin_width` converges to sigma(E). Merging
+used to concatenate chunks and nothing else, so an N-chunk run reported roughly
+N times the true cross section — measured at 2.06x for a 2-chunk NEUT run whose
+single-chunk equivalent was correct to 1.03.
+
+This affected **all four generators**, not three. An earlier note here claimed
+GiBUU was exempt because its weights are per-event; that was wrong. GiBUU's
+weights sum to sigma *within one run* (`num_runs_SameEnergy = 1` per chunk), so
+two chunks are two independent estimates and adding them double-counts exactly
+as elsewhere.
+
+**Decision.** Each chunk declares the denominator its weights were divided by —
+the `D` in `compute_xsec_weight`'s `numerator_i / (D * phi_hat(E_i))` — as
+metadata `xsec_norm_count`, via the abstract `ConfigTranslator.xsec_norm_count`.
+`merge_hdf5_files` scales chunk *c* by `D_c / sum(D)`, turning concatenation into
+a weighted average. Equivalently, the merged weights are what a single run of
+`sum(D)` events would have produced.
+
+**Why the denominator is not just the event count.** For the rejection-sampled
+and unweighted generators (GENIE, NuWro, NEUT) it is the chunk's event count:
+one event is one sample of the estimator. For GiBUU it is `num_runs`, because its
+per-event weights already sum to sigma within a run — weighting GiBUU chunks by
+their event count would weight them by how many interactions GiBUU happened to
+produce, which itself varies with the cross section. That divergence is why the
+method is abstract rather than defaulting to `len(events)`.
+
+**Properties.** A single input is a no-op (share = 1), so one-chunk runs are
+unchanged. The merged file records the summed `sum(D)`, so merging merged files
+stays correct. Stub output declares no count and is left untouched — its weights
+are placeholders, not cross sections — and a set mixing declared with undeclared
+inputs is refused rather than half-rescaled.
+
+**Validation** (local Docker, comparing chunk counts against the same physics):
+
+| Generator | Events | 1 chunk | 2 chunks | 4 chunks |
+|---|---|---|---|---|
+| NEUT (vs its own evtrt/flux per bin) | 4000 | 1.015 | 1.018 | 1.011 |
+| GiBUU (relative to 1 chunk) | 40000 | 1.000 | 0.929 | 1.005 |
+| NuWro (relative to 1 chunk) | 4000 | 1.000 | 0.956 | — |
+
+The residual spread is Monte-Carlo noise, and GiBUU needs the larger sample for a
+meaningful comparison: its weights are heavy-tailed, and in a 1000-event run a
+single event carried 72% of one chunk's total. Before the fix the same NEUT
+comparison gave 2.06 at two chunks.
