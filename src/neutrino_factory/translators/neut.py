@@ -7,12 +7,17 @@ import numpy as np
 
 from .base import ConfigTranslator, physics_current
 from .nuwro import NUCLEUS_COMPOSITION, PARTICLE_PDG
-from ..flux import Flux, build_flux
+from ..flux import Flux, HistogramFlux, build_flux
 
-# Number of equal-width bins used both for the TH1 flux handed to NEUT and for
-# the flux-average in compute_xsec_weight. Matches the other translators so the
-# binning used to *generate* and to *reweight* is identical by construction.
-FLUX_NBINS = 500
+# Binning of the TH1 flux handed to NEUT. NEUT draws energies uniformly *within*
+# whichever bin it picks, so this histogram is the finest structure the
+# reconstructed sigma(E) can ever have: it is a resolution setting, not just a
+# sampling aid. Log spacing gives constant relative resolution (~0.62%/bin over
+# 0.1-50 GeV) where 500 equal-width bins gave 0.1 GeV steps that swallowed the
+# whole region in which sigma(E) rises by orders of magnitude. Matches GENIE's
+# GENIE_FLUX_NBINS; see the NEUT flux section of docs/design_decisions.md.
+FLUX_NBINS = 1000
+FLUX_SPACING = "log"
 
 # Names of the files the adapter writes into the task work directory. The card
 # references them by name, so translator and adapter must agree.
@@ -70,6 +75,22 @@ CRS_SLOT_CURRENTS: dict[str, tuple[str | None, ...]] = {
 }
 
 
+def _flux_grid(flux: Flux) -> tuple[np.ndarray, np.ndarray]:
+    """Return the ``(bin_edges, bin_contents)`` grid to divide the flux out on.
+
+    For a :class:`HistogramFlux` this is the histogram's *native* binning — for
+    NEUT that means the ``flux_numu`` histogram NEUT stamped into its own output,
+    which is the input TH1 copied verbatim. Re-binning it onto any other grid
+    would divide the events by a flux they were never drawn from. The same
+    helper, and the same reasoning, as ``translators/genie.py::_flux_grid``.
+
+    Only a flux with no native binning falls back to a resampled grid.
+    """
+    if isinstance(flux, HistogramFlux):
+        return flux.bin_edges, flux.bin_contents
+    return flux.to_histogram(nbins=FLUX_NBINS, spacing=FLUX_SPACING)
+
+
 class NeutTranslator(ConfigTranslator):
     name = "neut"
 
@@ -116,6 +137,7 @@ class NeutTranslator(ConfigTranslator):
             "flux_model": flux_config["type"],
             "flux_config": flux_config,
             "flux_nbins": FLUX_NBINS,
+            "flux_spacing": FLUX_SPACING,
             "current": current,
             "physics_mode": config["physics"].get("mode", "inclusive"),
             "code_version": task["code_version"],
@@ -218,11 +240,36 @@ class NeutTranslator(ConfigTranslator):
         divide the run's flux-averaged total cross section by the number of
         events and by the unit-normalized flux density at each event's energy.
 
+        ``flux`` must be the spectrum NEUT *actually sampled* — the ``flux_numu``
+        histogram it stamps into its own output, loaded on its native binning by
+        ``NeutNormalizer._generated_flux`` — not a flux rebuilt from the run
+        config. ``_flux_grid`` keeps that binning intact.
+
         Verified directly against NEUT 5.7.0 rather than assumed: the generated
         energy spectrum tracks the ``evtrt`` (flux x sigma) histogram NEUT writes
         into its own output and not the ``flux`` histogram — over ten coarse
         bins the summed absolute difference in normalized shape was 0.034
         against ``evtrt`` versus 0.95 against ``flux``.
+
+        How NEUT draws an energy, and why ``flux`` must be the histogram NEUT was
+        actually handed (``neutroot2``'s ``rndenuevtrt_`` -> ``Ufm2TH1dist``,
+        whose ``Init`` calls ``TH1::ComputeIntegral``/``GetIntegral`` and whose
+        ``GetValue`` inverts that cumulative — ``TH1::GetRandom`` semantics,
+        applied to the ``evtrt`` histogram):
+
+        * A bin is chosen in proportion to its **raw content**, with the bin
+          widths ignored — ``ComputeIntegral`` normalizes by the sum of the
+          contents. Measured on a deliberately unequal-width grid (10 log-spaced
+          bins over 0.1-50 GeV, 30k events): chi2/ndf 0.90 against
+          ``p_b ~ evtrt_b``, 1.7e4 against ``p_b ~ evtrt_b * width_b``. The
+          adapter therefore writes per-bin *integrals*, not densities, into the
+          TH1 — see ``NeutAdapter._write_flux_file``.
+        * Within the chosen bin the energy is **uniform in E**, not in log E.
+          Same run, splitting each flux bin into 8 slices: chi2/ndf between 0.4
+          and 2.9 against a flat density, in bins spanning up to a factor 1.9 in
+          energy. So the generated flux density is piecewise constant on exactly
+          the input bin edges, and the reconstructed sigma(E) is a staircase on
+          that same grid — which is why ``FLUX_NBINS`` is a resolution setting.
 
         Unlike GENIE, the flux-averaged constant needs no external spline file:
         NEUT stamps both the flux histogram it sampled and the resulting event
@@ -255,7 +302,7 @@ class NeutTranslator(ConfigTranslator):
         energies_gev = np.asarray(energies_gev, dtype=np.float64)
         xsec_weight = np.zeros_like(energies_gev)
 
-        edges, contents = flux.to_histogram(nbins=FLUX_NBINS)
+        edges, contents = _flux_grid(flux)
         widths = np.diff(edges)
         clipped = np.clip(contents, 0.0, None)
         integral = float(np.sum(clipped * widths))

@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from ..common_output import version_metadata, write_common_hdf5
-from ..flux import build_flux
+from ..flux import Flux, HistogramFlux
 from ..kinematics import KINEMATIC_FIELDS, derive_kinematics
 from ..translators.neut import NeutTranslator
 from .base import OutputNormalizer
@@ -147,7 +147,7 @@ class NeutNormalizer(OutputNormalizer):
         translated_with_xsec = dict(translated)
         translated_with_xsec["flux_averaged_xsec_1e38"] = flux_averaged_xsec
 
-        flux = build_flux(translated["flux_config"])
+        flux = self._generated_flux(root_path, translated)
         xsec_weights = NeutTranslator().compute_xsec_weight(
             energies_gev, weights, translated_with_xsec, flux
         )
@@ -189,6 +189,34 @@ class NeutNormalizer(OutputNormalizer):
         return write_common_hdf5(out_path, metadata, events)
 
     @staticmethod
+    def _generated_flux(root_path: Path, translated: dict) -> Flux:
+        """Load the spectrum NEUT actually sampled from.
+
+        NEUT copies the TH1 it was handed into its own output as ``flux_numu``
+        (edges and contents verbatim, verified against NEUT 5.7.0), and
+        nf_flatten.C carries it into the flattened file. That histogram — not the
+        run config — is the authoritative generated flux: NEUT draws a bin from
+        it in proportion to the raw bin content and then an energy uniformly
+        within that bin, so the generated flux density is piecewise constant on
+        exactly these edges. Rebuilding the flux from the config would divide the
+        events by a grid they were never drawn from (see the NEUT flux section of
+        docs/design_decisions.md, and the GENIE section for the same failure mode
+        found first there).
+
+        ``NeutAdapter._write_flux_file`` writes per-bin integrals, hence
+        ``contents_are_counts``: dividing by the bin widths recovers the density.
+
+        A missing histogram is already a hard error in
+        :meth:`_flux_averaged_xsec`; there is deliberately no fallback to the
+        configured flux, which would silently restore the bug and still produce
+        physical-looking numbers (CLAUDE.md, development posture).
+        """
+        particle = str(translated.get("probe") or "numu")
+        return HistogramFlux.from_root_file(
+            root_path, FLUX_HIST, particle, contents_are_counts=True
+        )
+
+    @staticmethod
     def _flux_averaged_xsec(handle, root_path: Path) -> float:
         """Flux-averaged total cross section, in 1e-38 cm^2 per target nucleon.
 
@@ -221,7 +249,11 @@ class NeutNormalizer(OutputNormalizer):
                 f"'{FLUX_HIST}' in {root_path} integrates to {flux_integral}; cannot "
                 "compute a flux-averaged cross section."
             )
-        # Bin widths cancel in the ratio: NEUT copies the input histogram's
-        # binning, and the adapter writes that from Flux.to_histogram, whose bins
-        # are equal-width.
+        # No bin-width factor is needed, on any binning: NEUT copies the input
+        # histogram verbatim, and NeutAdapter._write_flux_file writes per-bin
+        # integrals (flux density x bin width). evtrt_b is then flux_b * sigma_b
+        # with the width already folded in, so this ratio is
+        # sum(phi_b w_b sigma_b) / sum(phi_b w_b) — the flux-weighted average.
+        # Were the contents densities instead, this would only be correct for
+        # equal-width bins.
         return float(np.sum(rate_contents)) / flux_integral

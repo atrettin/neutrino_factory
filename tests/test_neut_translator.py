@@ -5,8 +5,8 @@ import unittest
 import numpy as np
 
 from neutrino_factory.config import resolve_config
-from neutrino_factory.flux import build_flux
-from neutrino_factory.translators.neut import FLUX_NBINS, NeutTranslator
+from neutrino_factory.flux import HistogramFlux, build_flux
+from neutrino_factory.translators.neut import NeutTranslator
 
 
 def _task(**overrides) -> dict:
@@ -130,31 +130,47 @@ class NeutXsecWeightTests(unittest.TestCase):
     def test_bin_sums_recover_the_cross_section(self) -> None:
         """The contract: sum(xsec_weight) / bin_width is sigma(E) in that bin.
 
-        Events sampled proportionally to flux(E) * sigma(E) with a *constant*
-        sigma reduce to sampling from the flux alone, so every energy bin must
-        come back with the same sigma — the flux-averaged value. Energies are
-        drawn exactly proportional to the flux density, so there is no sampling
-        noise and the check is a hard equality.
+        Energies are laid down exactly the way NEUT draws them, on a deliberately
+        coarse, unequal-width, steeply falling grid: a bin is picked in
+        proportion to its raw content (per-bin integral) and the energy is then
+        uniform in E *within* that bin. With a constant sigma every flux bin must
+        come back with the flux-averaged value.
+
+        The coarse unequal binning is the point: on the equal-width flat-flux
+        fixtures the other tests use, a divisor that ignored the bin widths, or
+        one resampled onto a different grid, would give exactly the same answer.
+        Both are wrong here, and both are what the pre-2026-07 divisor did — it
+        rebuilt ``to_histogram(FLUX_NBINS)`` from the run config instead of using
+        the grid NEUT was handed.
         """
-        config = _config()
-        translated = NeutTranslator().translate(config, _task())
+        translated = NeutTranslator().translate(_config(), _task())
         sigma_avg = 0.655
         translated["flux_averaged_xsec_1e38"] = sigma_avg
-        flux = build_flux(config["flux"])
 
-        edges, contents = flux.to_histogram(nbins=FLUX_NBINS)
-        centers = 0.5 * (edges[:-1] + edges[1:])
-        counts = np.round(contents / contents.sum() * 2_000_000).astype(int)
-        energies = np.repeat(centers, counts)
+        edges = np.geomspace(0.3, 30.0, 9)
+        widths = np.diff(edges)
+        # Exact per-bin integrals of an E^-2 density, and the density NEUT's
+        # stamped histogram yields back from them.
+        integrals = 1.0 / edges[:-1] - 1.0 / edges[1:]
+        flux = HistogramFlux("numu", edges, integrals / widths)
+
+        counts = np.round(integrals / integrals.sum() * 800_000).astype(int)
+        energies = np.concatenate([
+            lo + (np.arange(n) + 0.5) * (hi - lo) / n
+            for lo, hi, n in zip(edges[:-1], edges[1:], counts)
+        ])
 
         weights = NeutTranslator().compute_xsec_weight(
             energies, np.ones_like(energies), translated, flux
         )
 
-        coarse = np.linspace(0.5, 5.0, 11)
-        summed, _ = np.histogram(energies, bins=coarse, weights=weights)
-        sigma_per_bin = summed / np.diff(coarse)
-        np.testing.assert_allclose(sigma_per_bin, sigma_avg, rtol=2e-3)
+        summed, _ = np.histogram(energies, bins=edges, weights=weights)
+        np.testing.assert_allclose(summed / widths, sigma_avg, rtol=1e-3)
+        # Sum rule: the weights integrate to sigma_avg over the whole range.
+        # Not exact: the per-bin counts are rounded to whole events.
+        np.testing.assert_allclose(
+            float(np.sum(weights)), sigma_avg * (edges[-1] - edges[0]), rtol=1e-4
+        )
 
     def test_missing_flux_averaged_xsec_raises(self) -> None:
         config = _config()

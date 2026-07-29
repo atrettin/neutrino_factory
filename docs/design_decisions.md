@@ -313,6 +313,106 @@ config as `flux_averaged_xsec_1e38`.
   per energy bin reproduces NEUT's own `evtrt/flux` ratio per bin to
   1.03 ± 0.05 — Monte-Carlo noise at that sample size.
 
+## NEUT flux: log bins of per-bin integrals, divided out on NEUT's own grid (2026-07)
+
+**Symptom.** A 1M-event 0.1–50 GeV run showed, below ~1 GeV, a raw `dN/dE` that
+was a staircase with ~0.1 GeV steps — the width of the 500 equal-width flux bins
+the adapter used to write — and a σ(E)/E plot with an inverse sawtooth: a sharp
+jump at each step edge followed by a slow decay. NuWro and GiBUU, on the same
+config, looked smooth.
+
+**What NEUT actually samples** (measured against NEUT 5.7.0 in the Docker image;
+the generator source is not distributed, so this was established from the binary
+plus dedicated runs). `neutroot2`'s `rndenuevtrt_` calls `Ufm2TH1dist::GetValue`,
+whose `Init` calls `TH1::ComputeIntegral`/`TH1::GetIntegral` and then interpolates
+that cumulative with `GetBinLowEdge`/`GetBinWidth` — i.e. `TH1::GetRandom`
+semantics applied to the `evtrt` (flux × σ) histogram. Two consequences, both
+confirmed by generation:
+
+- *A bin is chosen in proportion to its raw content; the bin widths are ignored*
+  (`ComputeIntegral` normalizes by the sum of the contents). On 10 log-spaced
+  bins over 0.1–50 GeV, 30k events: χ²/ndf **0.90** against `p_b ∝ evtrt_b`,
+  **1.7 × 10⁴** against `p_b ∝ evtrt_b · width_b`.
+- *Within the chosen bin the energy is uniform in E* — not in log E, and with no
+  σ(E) dependence at all. A single flux bin spanning 0.2–2.0 GeV, where σ(E)
+  rises by a factor 56, gave a flat `dN/dE`: χ²/ndf **0.48**, mean energy
+  **1.0961 ± 0.0030 GeV** against 1.1000 predicted. The alternatives are excluded
+  by hundreds of σ (uniform-in-log-E predicts 0.7830; `dN/dE ∝ σ(E)` predicts
+  1.3676).
+
+So the generated flux density is piecewise constant on exactly the input bin
+edges, and the reconstructed σ(E) can have no structure finer than those bins.
+The staircase was that, at 0.1 GeV resolution, across the region where σ(E) varies
+by orders of magnitude; the "sawtooth" was the σ/E plotting convention drawn over
+a staircase, not a separate defect.
+
+**Decision, three parts.**
+
+1. *Resolution.* `FLUX_NBINS` is 1000 **log-spaced** bins (`FLUX_SPACING`),
+   matching GENIE — ~0.62%/bin over 0.1–50 GeV instead of 0.1 GeV steps. This is
+   a resolution setting for σ(E), not just a sampling aid.
+2. *Bin contents are per-bin integrals* (density × width), written by
+   `NeutAdapter._write_flux_file`. Since NEUT weights bins by raw content, feeding
+   densities on an unequal-width grid would generate a spectrum tilted by one
+   power of the bin width. This is GENIE's `WIDTH` flux field applied ahead of
+   time, because NEUT has no equivalent switch. It also makes the `evtrt`/`flux`
+   integral ratio a correctly flux-weighted σ average on *any* binning, so
+   `NeutNormalizer._flux_averaged_xsec` needs no width factor.
+3. *Provenance.* `NeutNormalizer` no longer rebuilds the flux from the run config.
+   It loads the `flux_numu` histogram NEUT stamped into its own output — the input
+   TH1 copied verbatim — on its **native binning** (`contents_are_counts=True`,
+   `_generated_flux`), and `translators/neut.py::_flux_grid` keeps that binning
+   intact. Only part 1 was needed for the reported symptom; part 3 is the GENIE
+   lesson applied pre-emptively, so that a future change to the written binning
+   cannot silently desynchronize generation from reweighting. There is no fallback
+   to the configured flux: it would restore the bug and still look physical.
+
+**Validation, full chain on real NEUT output.** Generated with a deliberately
+coarse version of the new convention — 10 log-spaced bins over 0.1–50 GeV holding
+per-bin integrals of an E^-2 density, 100× coarser than production — 15k events on
+C12, then normalized by `NeutNormalizer`. `Σ xsec_weight / bin_width` per flux bin
+against NEUT's own `evtrt/flux`, over a cross section spanning a factor 6700
+(0.0052 → 34.4):
+
+| E (GeV) | N | σ recovered | σ NEUT | pull |
+|---|---|---|---|---|
+| 0.100–0.186 | 70 | 0.00575 ± 0.00069 | 0.00517 | +0.85 |
+| 0.347–0.645 | 1620 | 0.4613 ± 0.0115 | 0.4571 | +0.37 |
+| 2.236–4.163 | 1796 | 3.299 ± 0.078 | 3.426 | −1.62 |
+| 26.858–50.0 | 1588 | 35.04 ± 0.88 | 34.44 | +0.69 |
+
+Over all ten bins the pull is mean **+0.06**, rms **0.88** — Monte-Carlo noise with
+no systematic tilt. The unequal widths are the point: a divisor that ignored the
+bin widths, or one resampled onto a different grid, is invisible on the
+equal-width flat-flux fixtures the unit tests otherwise use.
+
+At production binning (40k events, E^-2 over 0.1–50 GeV on C12, 40 log analysis
+bins) the same comparison gives ratio **1.006 ± 0.044** with pull rms 1.2, and the
+staircase is gone where it used to be worst: the four analysis bins between 0.1
+and 0.2 GeV, all of which fell inside the *single* first bin of the old 500-bin
+linear grid and therefore had to report one identical σ, now return 0.0026,
+0.0033, 0.0077 and 0.0184 — tracking NEUT's own σ(E) across a factor 7 within what
+used to be one flat step.
+
+**Caveat — a very wide topmost flux bin gets truncated.** Noticed while measuring
+the above: when the last bin of the flux histogram is *very wide*, energies in it
+are drawn uniformly over only part of the bin and then stop dead. Two-bin
+histogram `[10, 26.858, 50]`, 2000 events: the lower bin is uniform across all
+seven slices, the upper is uniform to ~43.7 GeV and empty above (slice counts
+`266 272 257 255 265 29 0`). The same `[26.858, 50]` top bin cut at 39.2 GeV in a
+ten-log-bin run over 0.1–50 GeV, so the cut is not a fixed energy, and it is not a
+cross-section-table limit either: a single bin spanning 30–80 GeV fills uniformly
+to 80 GeV. It is also not simply "the last bin" — ten equal-width bins over
+10–50 GeV (top bin 4 GeV wide) reach 49.99 GeV with a uniform top bin. The effect
+tracks how wide that last bin is; the cause is unidentified, since NEUT's source
+is not distributed.
+
+With 1000 log bins the last bin spans ~0.17 GeV at a 50 GeV endpoint — two orders
+of magnitude narrower than the widths that showed the effect, and narrower than
+the 4 GeV bin that did not — so the chosen binning stays clear of it. Recorded in
+`.claude/TODOS.md` rather than worked around: any workaround would have to distort
+the requested flux.
+
 ## NEUT paths are limited to 80 characters
 
 NEUT reads filenames into 80-character Fortran buffers and **truncates anything
