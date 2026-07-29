@@ -11,7 +11,7 @@ representation used both to hand the shape to generators and to draw synthetic
 energies in stub mode (``sample_energies``).
 
 Per-generator translation of this abstraction lives in the translators. GENIE
-consumes it via a ROOT TF1/TH1 flux driver (``translators/genie.py``); NuWro and
+consumes it via a ROOT TH1 flux driver (``translators/genie.py``); NuWro and
 GiBUU cannot take a continuous function, so they receive a finely-binned
 ``to_histogram`` spectrum (NuWro's ``beam_energy`` histogram string; GiBUU's
 ``nuExp=99`` user-flux file).
@@ -43,13 +43,36 @@ class Flux(ABC):
         """Flux density at ``energy_gev`` (0.0 outside ``[emin_gev, emax_gev]``)."""
         raise NotImplementedError
 
-    def to_histogram(self, nbins: int = 200) -> tuple[np.ndarray, np.ndarray]:
+    def to_histogram(
+        self, nbins: int = 200, spacing: str = "linear"
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Return ``(bin_edges, bin_contents)`` sampling the flux over its support.
 
         ``bin_edges`` has ``nbins + 1`` entries; ``bin_contents`` has ``nbins``.
-        Subclasses with a native binning may override this.
+        ``spacing`` is ``"linear"`` or ``"log"``; log spacing resolves a steeply
+        falling spectrum over a wide range at constant relative resolution, which
+        linear spacing cannot (see the GENIE flux section of
+        ``docs/design_decisions.md``). Subclasses with a native binning may
+        override this.
         """
-        edges = np.linspace(self.emin_gev, self.emax_gev, nbins + 1)
+        if spacing == "linear":
+            edges = np.linspace(self.emin_gev, self.emax_gev, nbins + 1)
+        elif spacing == "log":
+            if self.emin_gev <= 0.0:
+                raise FluxError(
+                    f"Log-spaced flux binning requires emin_gev > 0, got {self.emin_gev}"
+                )
+            edges = np.logspace(
+                np.log10(self.emin_gev), np.log10(self.emax_gev), nbins + 1
+            )
+            # np.logspace round-trips through log10/power, so the endpoints can
+            # drift by an ulp. Downstream consumers (GENIE's TH1 flux driver)
+            # compare edges against the configured range and silently zero any
+            # bin that falls outside it, so pin them exactly.
+            edges[0] = self.emin_gev
+            edges[-1] = self.emax_gev
+        else:
+            raise FluxError(f"Unknown flux binning spacing '{spacing}'. Use 'linear' or 'log'")
         centers = 0.5 * (edges[:-1] + edges[1:])
         contents = np.array([self(float(c)) for c in centers], dtype=np.float64)
         return edges, contents
@@ -120,8 +143,22 @@ class HistogramFlux(Flux):
         self.source_name: str | None = None
 
     @classmethod
-    def from_root_file(cls, path: str | Path, name: str, particle: str) -> "HistogramFlux":
-        """Load a TH1 histogram from a ROOT file via ``uproot``."""
+    def from_root_file(
+        cls,
+        path: str | Path,
+        name: str,
+        particle: str,
+        contents_are_counts: bool = False,
+    ) -> "HistogramFlux":
+        """Load a TH1 histogram from a ROOT file via ``uproot``.
+
+        ``contents_are_counts`` marks a histogram whose bin contents are already
+        integrated over the bin (entry counts, or a density that has been
+        multiplied by the bin width) rather than a density. Such contents are
+        divided by the bin widths on load, so that a variable-width histogram
+        yields the correct density. Required for GENIE's ``input-flux.root``,
+        whose ``spectrum`` holds per-bin integrals.
+        """
         try:
             import uproot
         except ImportError as exc:  # pragma: no cover - dependency always present in runtime
@@ -140,6 +177,8 @@ class HistogramFlux(Flux):
                     f"Histogram '{name}' not found in {root_path}. Available: {available}"
                 )
             contents, edges = handle[name].to_numpy()
+        if contents_are_counts:
+            contents = np.asarray(contents, dtype=np.float64) / np.diff(edges)
         flux = cls(particle, edges, contents)
         flux.source_path = root_path.resolve()
         flux.source_name = name

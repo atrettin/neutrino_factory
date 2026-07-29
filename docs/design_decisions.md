@@ -113,6 +113,70 @@ via `containers.apptainer_dispatch`.
   `/opt/nf/generators/<cv>` staging is Apptainer-composition-only and has no
   Docker counterpart, so the "update both together" pairing is not triggered.
 
+## GENIE flux: a histogram we write, divided out from the one GENIE saved (2026-07)
+
+**Context.** A 1M-event run over 0.1–50 GeV showed a sawtooth in both the raw and
+the `xsec_weight`-weighted GENIE event rate below ~1 GeV: a slow rise followed by a
+sharp drop, repeating, with a second interfering period. The framework passed the
+power-law flux to `gevgen` as a ROOT TF1 string (`-f "x^(-2.0)"`) on the assumption
+that GENIE samples the function continuously.
+
+**Finding (from `Apps/gEvGen.cxx`, `TH1FluxDriver`, GENIE R-3_06_00).** It does not.
+Every `-f` input ends up as a `TH1D` that `GCylindTH1Flux::GenerateNext` samples with
+`TH1::GetRandom`, which is **uniform within a bin** — so the generated flux density is
+always piecewise constant. The three input branches differ in how the TH1D is built:
+
+- **TF1 string** (the branch we used): `new TH1D("spectrum", ..., 300, emin, emax)`
+  followed by `spectrum->FillRandom("input_func", 100000)`. The generated flux is
+  therefore not merely binned into 300 uniform bins — it is *Monte-Carlo estimated*
+  from only 100k entries. For `E^-2` over 0.1–50 GeV about 63% of those entries land
+  in the first bin and bins above ~15 GeV hold single-digit entries (>40% Poisson
+  noise). `RandomGen::InitRandomGenerators` seeds `gRandom`, so the noise realization
+  differs per chunk.
+- **ROOT file** (`-f file.root,hist[,WIDTH]`): the histogram is `Clone()`d verbatim —
+  no resampling, arbitrary (including log) binning preserved. Bins not strictly inside
+  the `-e` range are zeroed, and contents are multiplied by the bin width when the axis
+  is variable-width or when the third field is `WIDTH`.
+- Text file: rejection-sampled into the same 300-bin histogram.
+
+The observed sawtooth was the 300-bin generated flux beating against the *different*
+grid the weight divided by — `flux.to_histogram(nbins=500)`, rebuilt from the run
+config. Events were being divided by a flux they were never drawn from.
+
+**Decision, two parts.**
+
+1. **Generation.** A power-law flux is no longer passed as a TF1 string. The adapter
+   writes `nf_flux.root` into the task work directory — `GENIE_FLUX_NBINS = 1000`
+   log-spaced bins holding the flux *density* — and passes
+   `-f nf_flux.root,nf_flux,WIDTH`, taking the clone branch. Log spacing gives constant
+   relative resolution (~0.27%/bin over 0.1–50 GeV), which no uniform binning can give
+   a steeply falling spectrum, and the explicit `WIDTH` field converts our density to
+   the per-bin sampling probability regardless of binning. The `-e` bounds are widened
+   by a relative `1e-12` because gevgen zeroes bins that round outside the range.
+2. **Normalization.** `GenieNormalizer` no longer rebuilds the flux from the run
+   config. It reads `input-flux.root` — which gevgen writes into its working directory
+   on every run — and uses that histogram's **native binning** as the denominator
+   (`_flux_grid` in `translators/genie.py`). That file is the only authoritative record
+   of what was sampled: it reflects the clipping, the width multiplication, and (for
+   legacy TF1-driven runs) the per-chunk noise realization. Its contents are per-bin
+   integrals, so they are divided by the bin widths on load
+   (`HistogramFlux.from_root_file(..., contents_are_counts=True)`).
+
+A missing `input-flux.root` is a hard error. Falling back to the config flux would
+silently restore the original bug and produce a wrong normalization that still looks
+physical — the failure mode the project's "fail loudly" posture exists to prevent.
+
+**Caveat.** Only part 2 is required for correctness; part 1 is a quality fix. Part 2
+alone yields unbiased weights even against the noisy 300-bin histogram, but the
+*variance* at high energy would stay bounded by the flux histogram's 100k entries
+rather than by the event count.
+
+**Verified** (local Docker, R-3_06_00/G18_10a_02_11a, numu on C12, 0.1–50 GeV): gevgen's
+`input-flux.root` came back with edges bit-identical to `nf_flux.root`, contents equal
+to our density × bin width, and no zeroed bins — i.e. cloned, not resampled. Across the
+resulting events `xsec_weight · E^-2` is constant to 1.25% (the residual expected from
+0.27%/bin log binning), with no step structure.
+
 ## GiBUU cross-section weight (`xsec_weight`) normalization
 
 **Context.** The common-output `xsec_weight` convention (see
