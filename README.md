@@ -8,30 +8,25 @@
 Targets:
 - `GENIE` — Docker image built and working
 - `NuWro` — Docker image built and working
-- `GiBUU` — Docker image built and working (event generation; ROOT→HDF5 normalizer still a stub)
+- `GiBUU` — Docker image built and working
 - `NEUT` — Docker image pulled and working; NEUT source is not freely available, so the image is extracted from the published NUISANCE tutorial image rather than built
-
-The workflow is **develop locally, deploy to the cluster**:
-1. validate, plan, and smoke-test runs locally with Docker (or stub mode),
-2. deploy the same repo to the ODSL cluster with the Apptainer pathway,
-3. submit the same config as a Slurm job array on the MPP cluster.
 
 ## Features
 
 - common YAML run configuration
 - per-generator config translators
 - per-generator output normalizers
-- initial common output format in `HDF5`
+- common output format in `HDF5`
 - local executor for development and smoke testing
 - MPP-oriented Slurm job-array scaffolding
 - Docker-based generator builds, one setup script per generator for easy extension
+- different generator versions can coexist and run in parallel
 - a global generator catalog (`neutrino-factory list-generators`) that pins each run to an exact code version + config version (GENIE tune)
 
 ## Repository layout
 
 ```text
 .
-├── bin/                      # helper scripts
 ├── configs/                  # schema templates and example user configs
 ├── docs/                     # usage, cluster notes, extension guide
 ├── jobs/                     # Slurm wrappers
@@ -56,7 +51,9 @@ automatically (already-set environment variables always win).
 | `NF_CONTAINER_RUNTIME` | `docker`, `apptainer`, or `auto` (default: prefer docker, then apptainer) |
 | `NF_EXECUTION_MODE` | `local` or `slurm`; defaults to `local` |
 
-## Quickstart A — local development (Docker)
+
+## Quickstart
+### Quickstart A — local development (Docker)
 
 The two pathways diverge at installation: locally the CLI is pip-installed on
 the host; on the cluster the host Python is too old, so the CLI itself runs
@@ -79,10 +76,6 @@ bash setup/download_genie_xsec.sh
 # 4. Validate and run a local smoke test
 neutrino-factory validate-config --config configs/examples/power_law_numu_Ar.yaml
 neutrino-factory submit --config configs/examples/power_law_numu_Ar.yaml --executor local
-
-# 5. Render the Slurm submission without submitting
-neutrino-factory submit --config configs/examples/power_law_numu_Ar.yaml \
-  --executor slurm --dry-run
 ```
 
 The local run creates a manifest, runs each enabled generator (or its stub),
@@ -99,6 +92,55 @@ In this mode, the CLI discovers expected chunk and merged outputs from the
 config, validates each chunk for required metadata/columns, warns about
 missing or invalid chunks, and merges the valid subset per expected merged
 output.
+
+### Quickstart B — HPC cluster (Apptainer, MPP cluster)
+
+For HPC applications, the Python environment as well as the event generators
+need to be containerized. The setup below builds each generator (or code
+version thereof) in a "payload" container, then assembles a base image
+`nf-base.sif` containing all of the generator executables as well as 
+Python.
+
+The following instructions are aimed at the MPP cluster, but can be used 
+on any similar Slurm setup by changing paths.
+
+```bash
+# 1. On odslserv01: clone onto /ptmp (shared, 6 TB/user, not backed up)
+git clone <repo-url> /ptmp/mpp/$USER/neutrino_factory/repo
+cd /ptmp/mpp/$USER/neutrino_factory/repo
+
+# 2. Build Apptainer images in a plain host shell (outside any container):
+#    bootstrap runtime, generator payloads, and composed nf-base.sif.
+bash setup/build_apptainer_images.sh
+
+# 3. Stage GENIE cross sections and verify built images
+bash setup/download_genie_xsec.sh
+apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" env PYTHONPATH="$PWD/src" \
+  python3 -m neutrino_factory.cli list-generators --built
+
+# 4. After images exist, create and enter a cenv based on nf-base.sif
+cenv --create nf-env "$NF_IMAGE_ROOT/nf-base.sif"
+cenv nf-env
+
+# 5. One-time setup inside the cenv
+pip install -e .
+neutrino-factory setup --pathway apptainer --no-build
+
+# 6. Render the Slurm job, then submit from a host shell on the head node
+neutrino-factory submit --config configs/examples/power_law_numu_Ar.yaml --executor slurm
+# ...prints:  sbatch /ptmp/.../work/slurm/<run>.sbatch   -> run that on mppui1
+neutrino-factory check-status --config configs/examples/power_law_numu_Ar.yaml
+```
+
+**Note:** `cenv` is optional, it is merely a convenience wrapper to create an interactive
+environment based on an Apptainer image. If it is unavailable, Python can still be run 
+with `apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" env PYTHONPATH="$PWD/src" python3 ...`.
+The cluster scripts all use `apptainer` directly, so submission does not depend on `cenv`.
+Usage reference: https://github.com/oschulz/container-env
+
+The full runbook, including the new-cluster Slurm requirements and filesystem
+guidance, is in `docs/mpp_cluster_usage.md`.
+
 
 ## Common output format
 
@@ -153,47 +195,6 @@ space uniformly and weights by cross section, so its quasi-elastic channel can
 show `n_eff/n` below 1 % and raw event counts badly overstate what the sample
 supports.
 
-## Quickstart B — HPC cluster (Apptainer, MPCDF/ODSL)
-
-MPCDF's host Python (3.9) is too old for this project. Use a container-backed
-interactive environment instead: create a `cenv` from `nf-base.sif`, enter it,
-install once with `pip install -e .`, and then run `neutrino-factory` directly.
-Build steps must run on an interactive node
-(`odslserv01`/`02`), not the Slurm head node.
-
-```bash
-# 1. On odslserv01: clone onto /ptmp (shared, 6 TB/user, not backed up)
-git clone <repo-url> /ptmp/mpp/$USER/neutrino_factory/repo
-cd /ptmp/mpp/$USER/neutrino_factory/repo
-
-# 2. Build Apptainer images in a plain host shell (outside any container):
-#    bootstrap runtime, generator payloads, and composed nf-base.sif.
-bash setup/build_apptainer_images.sh
-
-# 3. Stage GENIE cross sections and verify built images
-bash setup/download_genie_xsec.sh
-apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" env PYTHONPATH="$PWD/src" \
-  python3 -m neutrino_factory.cli list-generators --built
-
-# 4. After images exist, create and enter a cenv based on nf-base.sif
-cenv --create nf-env "$NF_IMAGE_ROOT/nf-base.sif"
-cenv nf-env
-
-# 5. One-time setup inside the cenv
-pip install -e .
-neutrino-factory setup --pathway apptainer --no-build
-
-# 6. Render the Slurm job, then submit from a host shell on the head node
-neutrino-factory submit --config configs/examples/power_law_numu_Ar.yaml --executor slurm
-# ...prints:  sbatch /ptmp/.../work/slurm/<run>.sbatch   -> run that on mppui1
-neutrino-factory check-status --config configs/examples/power_law_numu_Ar.yaml
-```
-
-`cenv` usage reference: https://github.com/oschulz/container-env
-
-The full runbook, including the new-cluster Slurm requirements and filesystem
-guidance, is in `docs/mpp_cluster_usage.md`.
-
 ## Generator setup (containers)
 
 The image tag is derived from the catalog (`src/neutrino_factory/catalog.py`)
@@ -244,16 +245,6 @@ setup/download_genie_xsec.sh --code-version R-3_06_00 --tune G18_10a_02_11a
 At runtime, GENIE tasks add `--cross-sections <xsecs.xml>` automatically when a staged file exists for
 the requested `code_version` + `config_version`. If no file is found, the run logs a warning and
 proceeds without it (fine for stub-mode or fixed-energy runs, but flux-driven runs require the splines).
-`neutrino-factory list-generators` only lists a GENIE tune as available once its `xsecs.xml` is present.
 
-Generator output directories include both generator name and generator version identifier, so different
-versions of the same generator coexist without file collisions.
-
-## Status
-
-Functional locally and on the ODSL/MPP cluster: all four generators run in
-Docker on a dev machine and through the Apptainer pathway on the cluster, where
-the Slurm array path has been verified end to end. Every generator also runs in
-synthetic `stub_mode` for development without real binaries. Known gaps are
-tracked in the source tree: the GiBUU ROOT→HDF5 normalizer is a stub, and NEUT
-is not bit-reproducible from its seed (see `docs/design_decisions.md`).
+**Note:** `neutrino-factory list-generators` only lists a GENIE tune as available once its `xsecs.xml` is present!
+If you have installed GENIE but no config version is shown as available, this is the likely culprit.
