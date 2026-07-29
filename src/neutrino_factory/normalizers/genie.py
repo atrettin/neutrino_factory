@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from ..common_output import version_metadata, write_common_hdf5
-from ..flux import build_flux
+from ..flux import Flux, HistogramFlux
 from ..kinematics import KINEMATIC_FIELDS, derive_kinematics
 from ..translators.genie import GenieTranslator
 from .base import OutputNormalizer, interaction_from_flags
@@ -32,6 +32,36 @@ class GenieNormalizer(OutputNormalizer):
         metadata = version_metadata(self.name, task, mode)
         metadata["translated_config"] = raw.get("translated_config", {})
         return write_common_hdf5(out_path, metadata, raw.get("events", []))
+
+    @staticmethod
+    def _generated_flux(work_dir: Path, translated: dict) -> Flux:
+        """Load the spectrum gevgen actually sampled from.
+
+        gevgen writes the TH1D it hands to its flux driver to ``input-flux.root``
+        (``Apps/gEvGen.cxx``, ``TH1FluxDriver``). That file — not the run config —
+        is the authoritative generated flux: gevgen zeroes bins outside the ``-e``
+        range and, for a TF1 input, Monte-Carlo resamples the function into a
+        coarse 300-bin histogram whose noise realization depends on the task seed.
+        Dividing events by anything else imprints a sawtooth on ``xsec_weight``.
+
+        Its bin contents are per-bin integrals, hence ``contents_are_counts``.
+
+        Missing file is a hard error: silently falling back to the configured flux
+        would restore exactly the bug this guards against, and a wrong
+        normalization is worse than no output (see CLAUDE.md, development posture).
+        """
+        path = work_dir / "input-flux.root"
+        if not path.is_file():
+            raise RuntimeError(
+                f"GENIE's generated flux histogram was not found at {path}. "
+                "gevgen writes it into its working directory on every run; without "
+                "it the flux the events were drawn from is unknown and xsec_weight "
+                "cannot be computed. Re-run the generation step."
+            )
+        particle = str(translated.get("probe") or "numu")
+        return HistogramFlux.from_root_file(
+            path, "spectrum", particle, contents_are_counts=True
+        )
 
     def _normalize_gst_root(self, root_path: Path, out_path, task: dict, mode: str) -> str:
         try:
@@ -94,7 +124,7 @@ class GenieNormalizer(OutputNormalizer):
 
         energies_gev = np.asarray(energies_gev, dtype=np.float64)
         weights_arr = np.asarray(weights, dtype=np.float64)
-        flux = build_flux(translated["flux_config"])
+        flux = self._generated_flux(root_path.parent, translated)
         xsec_weights = GenieTranslator().compute_xsec_weight(
             energies_gev, weights_arr, translated, flux
         )

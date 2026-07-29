@@ -6,8 +6,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
+
 from neutrino_factory.config import resolve_config
 from neutrino_factory.generators.genie import ESSENTIAL_OVERLAY_FILENAME, GenieAdapter
+from neutrino_factory.translators.genie import GENIE_FLUX_FILE, GENIE_FLUX_HIST
 
 
 class GenieAdapterTests(unittest.TestCase):
@@ -30,7 +33,20 @@ class GenieAdapterTests(unittest.TestCase):
             "seed": 42,
             "config_version": tune,
             "code_version": "R-3_06_00",
-            "genie_flux": {"kind": "function", "expr": "x^(-2.0)"},
+            "genie_flux": {
+                "kind": "generated_histogram",
+                "file": GENIE_FLUX_FILE,
+                "name": GENIE_FLUX_HIST,
+                "nbins": 64,
+                "spacing": "log",
+            },
+            "flux_config": {
+                "type": "power_law",
+                "particle": "numu",
+                "emin_gev": 0.5,
+                "emax_gev": 10.0,
+                "gamma": -2.0,
+            },
             "event_generator_list": None,
         }
         base.update(overrides)
@@ -42,8 +58,46 @@ class GenieAdapterTests(unittest.TestCase):
             command = adapter.build_run_command(self._translated_config("G18_10a_02_11a"), Path(tmpdir))
 
         self.assertEqual(command[command.index("-p") + 1], "14")
-        self.assertEqual(command[command.index("-f") + 1], "x^(-2.0)")
+        # A power-law flux is handed to gevgen as a ROOT histogram, never as a TF1
+        # string: gevgen resamples a TF1 into a coarse, noisy 300-bin histogram.
+        self.assertEqual(
+            command[command.index("-f") + 1],
+            f"{GENIE_FLUX_FILE},{GENIE_FLUX_HIST},WIDTH",
+        )
         self.assertNotIn("--event-generator-list", command)
+
+    def test_build_command_writes_log_binned_flux_histogram(self) -> None:
+        import uproot
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = GenieAdapter(self._base_config(tmpdir))
+            adapter.build_run_command(self._translated_config("G18_10a_02_11a"), Path(tmpdir))
+            with uproot.open(Path(tmpdir) / GENIE_FLUX_FILE) as handle:
+                contents, edges = handle[GENIE_FLUX_HIST].to_numpy()
+
+        self.assertEqual(len(contents), 64)
+        # Endpoints must land exactly on the configured range: gevgen zeroes any
+        # bin that is not strictly inside the -e bounds.
+        self.assertEqual(edges[0], 0.5)
+        self.assertEqual(edges[-1], 10.0)
+        # Log spacing -> constant ratio between successive edges.
+        ratios = edges[1:] / edges[:-1]
+        self.assertTrue(np.allclose(ratios, ratios[0]))
+        # Contents are the flux *density* at the bin centers (gevgen's WIDTH flag
+        # multiplies by the bin width to get the sampling probability).
+        centers = 0.5 * (edges[:-1] + edges[1:])
+        self.assertTrue(np.allclose(contents, centers ** -2.0))
+
+    def test_build_command_pads_energy_range_outward(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = GenieAdapter(self._base_config(tmpdir))
+            command = adapter.build_run_command(self._translated_config("G18_10a_02_11a"), Path(tmpdir))
+
+        lo, hi = (float(v) for v in command[command.index("-e") + 1].split(","))
+        self.assertLess(lo, 0.5)
+        self.assertGreater(hi, 10.0)
+        self.assertAlmostEqual(lo, 0.5, places=9)
+        self.assertAlmostEqual(hi, 10.0, places=9)
 
     def test_build_command_adds_event_generator_list(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

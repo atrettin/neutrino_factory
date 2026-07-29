@@ -40,6 +40,34 @@ class PowerLawFluxTests(unittest.TestCase):
         self.assertLess(np.mean(energies), 2.0)
 
 
+class ToHistogramTests(unittest.TestCase):
+    def test_linear_spacing_is_the_default(self) -> None:
+        edges, contents = PowerLawFlux("numu", 0.5, 10.0, -2.0).to_histogram(nbins=8)
+        self.assertEqual(len(contents), 8)
+        self.assertTrue(np.allclose(np.diff(edges), np.diff(edges)[0]))
+
+    def test_log_spacing_has_constant_edge_ratio_and_exact_endpoints(self) -> None:
+        emin, emax = 0.1, 50.0
+        edges, contents = PowerLawFlux("numu", emin, emax, -2.0).to_histogram(
+            nbins=32, spacing="log"
+        )
+        self.assertEqual(len(contents), 32)
+        ratios = edges[1:] / edges[:-1]
+        self.assertTrue(np.allclose(ratios, ratios[0]))
+        # Exact, not almost-equal: gevgen zeroes any bin outside its -e range,
+        # so an endpoint drifting by one ulp silently drops an edge bin.
+        self.assertEqual(edges[0], emin)
+        self.assertEqual(edges[-1], emax)
+
+    def test_log_spacing_rejects_non_positive_emin(self) -> None:
+        with self.assertRaises(FluxError):
+            PowerLawFlux("numu", 0.0, 10.0, -2.0).to_histogram(nbins=4, spacing="log")
+
+    def test_unknown_spacing_raises(self) -> None:
+        with self.assertRaises(FluxError):
+            PowerLawFlux("numu", 0.5, 10.0, -2.0).to_histogram(nbins=4, spacing="sqrt")
+
+
 class HistogramFluxTests(unittest.TestCase):
     def test_call_returns_bin_content(self) -> None:
         flux = HistogramFlux("numu", [0.5, 1.0, 2.0, 4.0], [10.0, 4.0, 1.0])
@@ -66,6 +94,21 @@ class HistogramFluxTests(unittest.TestCase):
         self.assertEqual(flux.source_name, "numu_flux")
         assert flux.source_path is not None
         self.assertEqual(flux.source_path.name, "flux.root")
+
+    def test_from_root_file_converts_counts_to_density(self) -> None:
+        """Per-bin integrals must become a density on variable-width bins.
+
+        GENIE's input-flux.root stores entry counts, so a wide bin with the same
+        count as a narrow one represents a *lower* flux density.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "input-flux.root"
+            _write_root_histogram(path, "spectrum", [1.0, 2.0, 6.0], [8.0, 8.0])
+            flux = HistogramFlux.from_root_file(
+                path, "spectrum", "numu", contents_are_counts=True
+            )
+        self.assertEqual(flux(1.5), 8.0 / 1.0)
+        self.assertEqual(flux(4.0), 8.0 / 4.0)
 
 
 class BuildFluxTests(unittest.TestCase):

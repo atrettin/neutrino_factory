@@ -8,8 +8,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import numpy as np
+
 from .base import GeneratorAdapter
 from .. import catalog, containers
+from ..flux import build_flux
 from ..normalizers.genie import GenieNormalizer
 from ..translators.genie import GenieTranslator
 
@@ -211,13 +214,24 @@ class GenieAdapter(GeneratorAdapter):
 
         flux_spec = translated_config["genie_flux"]
         flux_file = Path(flux_spec["file"]) if flux_spec["kind"] == "histogram" else None
+        if flux_spec["kind"] == "generated_histogram":
+            self._write_flux_histogram(flux_spec, translated_config, work_dir)
+
+        # gevgen zeroes every flux histogram bin that is not strictly inside the
+        # -e range (Apps/gEvGen.cxx, TH1FluxDriver, root-file branch), and it
+        # reconstructs the upper bound as emin + (emax - emin) in floating point.
+        # Widen the declared range by a relative 1e-12 so that round-off can never
+        # silently drop our first or last bin. Physically a no-op.
+        pad = 1e-12
+        edge_lo = float(energy_min) * (1.0 - pad)
+        edge_hi = float(energy_max) * (1.0 + pad)
 
         gevgen_args: list[str] = [
             "gevgen",
             "-n", str(translated_config["events"]),
             "-p", str(translated_config["probe_pdg"]),
             "-t", str(translated_config.get("target_pdg", translated_config["target"])),
-            "-e", f"{energy_min},{energy_max}",
+            "-e", f"{edge_lo!r},{edge_hi!r}",
             "-f", self._flux_arg(flux_spec, flux_file),
             "--seed", str(translated_config["seed"]),
             "-o", "events.ghep.root",
@@ -305,10 +319,48 @@ class GenieAdapter(GeneratorAdapter):
             return "default"
 
     @staticmethod
+    def _write_flux_histogram(
+        flux_spec: dict, translated_config: dict, work_dir: Path
+    ) -> Path:
+        """Materialize the flux histogram gevgen's TH1 driver will clone.
+
+        Bin contents are the flux *density* at the bin centers; the ``WIDTH``
+        field appended by :meth:`_flux_arg` makes gevgen multiply them by the bin
+        widths to obtain the per-bin sampling probability. Written as float64 so
+        uproot emits a TH1D, which is what gevgen casts the object to.
+        """
+        try:
+            import uproot
+        except ImportError as exc:  # pragma: no cover - dependency always present
+            raise RuntimeError(
+                "uproot is required to write the GENIE flux histogram. "
+                "Install it with: pip install uproot"
+            ) from exc
+
+        flux = build_flux(translated_config["flux_config"])
+        edges, contents = flux.to_histogram(
+            nbins=int(flux_spec["nbins"]), spacing=str(flux_spec["spacing"])
+        )
+        path = work_dir / str(flux_spec["file"])
+        with uproot.recreate(path) as handle:
+            handle[str(flux_spec["name"])] = (
+                np.asarray(contents, dtype=np.float64),
+                np.asarray(edges, dtype=np.float64),
+            )
+        return path
+
+    @staticmethod
     def _flux_arg(flux_spec: dict, flux_file: Path | None) -> str:
-        """Build gevgen's -f value: a TF1 string, or 'file.root,histname'."""
-        if flux_spec["kind"] == "function":
-            return flux_spec["expr"]
+        """Build gevgen's -f value: 'file.root,histname[,WIDTH]'.
+
+        ``WIDTH`` is gevgen's optional third field; it forces the per-bin
+        multiplication by the bin width, so a density histogram is interpreted
+        correctly regardless of whether the binning is uniform. Only set for the
+        histogram we write ourselves — a user-supplied file is passed through
+        unchanged, since we do not know its content convention.
+        """
+        if flux_spec["kind"] == "generated_histogram":
+            return f"{flux_spec['file']},{flux_spec['name']},WIDTH"
         return f"{flux_file},{flux_spec['name']}"
 
     def _run_gntpc(self, work_dir: Path, code_version: str | None) -> None:

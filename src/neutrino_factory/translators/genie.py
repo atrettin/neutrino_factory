@@ -21,9 +21,24 @@ PARTICLE_PDG = {
     "nutaubar": -16,
 }
 
-# Number of grid points used to flux-average the reconstructed total cross
-# section (see compute_xsec_weight). Mirrors NuWro's FLUX_NBINS.
+# Fallback number of grid points used to flux-average the reconstructed total
+# cross section (see compute_xsec_weight) when the flux has no native binning.
+# Mirrors NuWro's FLUX_NBINS.
 FLUX_NBINS = 500
+
+# Binning of the flux histogram handed to gevgen for a power-law flux. gevgen
+# never samples a continuous function: given a TF1 string it builds a 300-bin
+# uniform TH1D and *Monte-Carlo fills it* with only 100k entries
+# (Apps/gEvGen.cxx, TH1FluxDriver, the `else` branch), so the generated spectrum
+# is both coarse and Poisson-noisy at high energy. Handing gevgen a ROOT file
+# instead takes the branch that clones our histogram verbatim. Log spacing gives
+# constant relative resolution (~0.27%/bin over 0.1-50 GeV at 1000 bins), which
+# a uniform binning cannot deliver for a steeply falling spectrum.
+GENIE_FLUX_NBINS = 1000
+GENIE_FLUX_SPACING = "log"
+# TH1 name inside the flux file we write, and the file's basename in the work dir.
+GENIE_FLUX_HIST = "nf_flux"
+GENIE_FLUX_FILE = "nf_flux.root"
 
 # Cross section unit scale: matches XSEC_SCALE in translators/nuwro.py, the
 # shared "1e-38 cm^2" convention for the common output's xsec_weight column.
@@ -45,6 +60,24 @@ _SPLINE_OPEN_RE = re.compile(r'<spline\s+name="([^"]*)"')
 _KNOT_RE = re.compile(
     r"<knot>\s*<E>\s*([-+0-9.eE]+)\s*</E>\s*<xsec>\s*([-+0-9.eE]+)\s*</xsec>\s*</knot>"
 )
+
+
+def _flux_grid(flux: Flux) -> tuple[np.ndarray, np.ndarray]:
+    """Return the ``(bin_edges, bin_contents)`` grid to divide the flux out on.
+
+    For a :class:`HistogramFlux` this is the histogram's *native* binning. That
+    matters for correctness, not just accuracy: GENIE samples energies uniformly
+    within the bins of the histogram it was given
+    (``GCylindTH1Flux::GenerateNext`` -> ``TH1::GetRandom``), so the generated
+    flux density is piecewise constant on exactly those edges. Re-binning it onto
+    any other grid divides the events by a flux they were never drawn from and
+    imprints a sawtooth beating the two binnings against each other.
+
+    Only a flux with no native binning falls back to a resampled grid.
+    """
+    if isinstance(flux, HistogramFlux):
+        return flux.bin_edges, flux.bin_contents
+    return flux.to_histogram(nbins=FLUX_NBINS)
 
 
 class GenieTranslator(ConfigTranslator):
@@ -91,12 +124,20 @@ class GenieTranslator(ConfigTranslator):
     def _genie_flux_descriptor(flux: Any) -> dict[str, Any]:
         """Translate the framework flux into gevgen's -f argument spec.
 
-        Power law -> a ROOT TF1 function string ``x^(gamma)`` where ``x`` is the
-        neutrino energy in GeV. Histogram -> the ROOT file + TH1 name, consumed
-        directly by gevgen's TH1 flux driver.
+        Power law -> a log-binned TH1 that the adapter materializes into the work
+        directory (``GENIE_FLUX_FILE``) and hands to gevgen's TH1 flux driver. We
+        deliberately do *not* pass a TF1 function string: gevgen would resample it
+        into a coarse, Poisson-noisy 300-bin histogram (see ``GENIE_FLUX_NBINS``).
+        Histogram -> the ROOT file + TH1 name, consumed directly by the same driver.
         """
         if isinstance(flux, PowerLawFlux):
-            return {"kind": "function", "expr": f"x^({flux.gamma})"}
+            return {
+                "kind": "generated_histogram",
+                "file": GENIE_FLUX_FILE,
+                "name": GENIE_FLUX_HIST,
+                "nbins": GENIE_FLUX_NBINS,
+                "spacing": GENIE_FLUX_SPACING,
+            }
         if isinstance(flux, HistogramFlux):
             # HistogramFlux was built from a ROOT file; carry the source so the
             # adapter can hand the same file to gevgen. build_flux resolved the
@@ -154,6 +195,16 @@ class GenieTranslator(ConfigTranslator):
         R-3_06_00/G18_10a_02_11a (103 matching splines for numu/Ar40, covering
         QEL/RES/DIS/COH/MEC including the dummy 2p2h pair codes).
 
+        Flux note: ``flux`` must be the spectrum GENIE *actually sampled*, i.e.
+        the ``spectrum`` histogram gevgen writes to ``input-flux.root``, not the
+        flux from the run config. gevgen never draws from a continuous function:
+        ``TH1FluxDriver`` always ends up with a TH1D, and ``GCylindTH1Flux``
+        draws from it with ``TH1::GetRandom``, which is uniform within a bin. The
+        generated flux density is therefore piecewise constant, and it may differ
+        from the configured flux in ways only the file records (bins outside
+        ``-e`` are zeroed; a TF1 input is Monte-Carlo resampled with 100k
+        entries). ``_flux_grid`` keeps that native binning intact.
+
         Unit note: raw ``<xsec>`` knot values are in GENIE's internal natural
         units (GeV-based), not literal cm^2 - ``GENIE_UNITS_CM2`` converts them
         the same way ``gNtpConv.cxx`` does for its own ROOT branches.
@@ -170,7 +221,7 @@ class GenieTranslator(ConfigTranslator):
         target_pdg = int(translated_config["target_pdg"])
         mass_number = (target_pdg // 10) % 1000
 
-        edges, contents = flux.to_histogram(nbins=FLUX_NBINS)
+        edges, contents = _flux_grid(flux)
         widths = np.diff(edges)
         centers = 0.5 * (edges[:-1] + edges[1:])
         clipped = np.clip(contents, 0.0, None)

@@ -61,6 +61,22 @@ def _base_task() -> dict:
     }
 
 
+def _write_input_flux(
+    work_dir: Path, edges, counts, name: str = "spectrum"
+) -> Path:
+    """Write a stand-in for the ``input-flux.root`` gevgen drops in its work dir.
+
+    Bin contents are per-bin *integrals* (gevgen fills the histogram with entry
+    counts), matching what the normalizer expects to convert back to a density.
+    """
+    import uproot
+
+    path = work_dir / "input-flux.root"
+    with uproot.recreate(path) as f:
+        f[name] = (np.asarray(counts, dtype=np.float64), np.asarray(edges, dtype=np.float64))
+    return path
+
+
 def _write_sidecar(work_dir: Path, emin_gev: float = 0.5, emax_gev: float = 10.0) -> None:
     sidecar = {
         "probe": "numu",
@@ -82,6 +98,12 @@ def _write_sidecar(work_dir: Path, emin_gev: float = 0.5, emax_gev: float = 10.0
         "config_version": "G18_10a_02_11a",
     }
     (work_dir / "translated_config.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    # The normalizer divides events by the flux gevgen actually sampled, read
+    # back from input-flux.root — never by the config flux. The sidecar's
+    # gamma=0.0 flux corresponds to a flat histogram here.
+    nbins = 100
+    edges = np.linspace(emin_gev, emax_gev, nbins + 1)
+    _write_input_flux(work_dir, edges, np.full(nbins, (emax_gev - emin_gev) / nbins))
 
 
 def _write_fake_xsecs_xml(software_root: Path, xsec_internal: float) -> None:
@@ -428,6 +450,102 @@ class GenieNormalizerRootTests(unittest.TestCase):
             expected = sigma_per_nucleon * (emax - emin) / n_events
             for event in events:
                 self.assertAlmostEqual(event["xsec_weight"], expected, places=6)
+
+    def test_normalize_gst_root_raises_without_generated_flux(self) -> None:
+        """Missing input-flux.root must fail loudly, never fall back to the config.
+
+        The config flux is not what gevgen sampled (it bins, clips to the -e
+        range, and for a TF1 input resamples with 100k entries), so silently
+        substituting it produces a wrong normalization that looks physical.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            (work_dir / "input-flux.root").unlink()
+            gst_path = work_dir / "events.gst.root"
+            _write_gst_root(
+                gst_path,
+                energies_gev=[1.0],
+                weights=[1.0],
+                qel=[True],
+                res=[False],
+                dis=[False],
+                coh=[False],
+                mec=[False],
+            )
+
+            with self.assertRaises(RuntimeError) as ctx:
+                GenieNormalizer().normalize(
+                    gst_path, work_dir / "out.h5", _base_task(), "local"
+                )
+            self.assertIn("input-flux.root", str(ctx.exception))
+
+    def test_xsec_weight_uses_generated_flux_binning_not_the_config_flux(self) -> None:
+        """Closure test against an independently computed flux-averaged xsec.
+
+        Events are drawn the way GENIE draws them: energies uniform *within* the
+        bins of the generated flux histogram, with per-bin counts proportional to
+        that histogram. The histogram here is deliberately stepped and completely
+        unlike the sidecar's flat config flux, so a normalizer that divided by the
+        config flux (or re-binned onto its own grid) could not recover the answer.
+
+        The reference value is derived independently of the implementation. Since
+        w_i = <sigma>/(n * phi_hat(E_i)) and events land with density
+        n * phi_hat(E) * sigma(E)/<sigma>, summing over the events in an energy
+        interval estimates the *energy-integrated* cross section there:
+        sum(w) -> integral of sigma(E) dE. With the constant fake spline that is
+        just sigma * (emax - emin), and the estimator is exact (no Monte-Carlo
+        error) because the per-bin event counts match the flux histogram exactly.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            emin, emax = 0.5, 5.0
+            _write_sidecar(work_dir, emin_gev=emin, emax_gev=emax)
+
+            # A stepped, variable-width generated flux with nothing in common with
+            # the sidecar's flat 100-bin config flux.
+            edges = np.array([0.5, 0.8, 1.5, 3.0, 5.0])
+            counts = np.array([50.0, 10.0, 30.0, 10.0])  # per-bin integrals
+            _write_input_flux(work_dir, edges, counts)
+
+            # Events per bin proportional to the histogram; energies uniform in bin.
+            energies = np.concatenate([
+                np.linspace(lo, hi, int(n), endpoint=False) + 0.5 * (hi - lo) / int(n)
+                for lo, hi, n in zip(edges[:-1], edges[1:], counts)
+            ])
+            n_events = len(energies)
+
+            gst_path = work_dir / "events.gst.root"
+            _write_gst_root(
+                gst_path,
+                energies_gev=energies,
+                weights=np.ones(n_events),
+                qel=np.ones(n_events, dtype=bool),
+                res=np.zeros(n_events, dtype=bool),
+                dis=np.zeros(n_events, dtype=bool),
+                coh=np.zeros(n_events, dtype=bool),
+                mec=np.zeros(n_events, dtype=bool),
+            )
+            out_path = work_dir / "out.h5"
+            task = {**_base_task(), "event_count": n_events}
+
+            GenieNormalizer().normalize(gst_path, out_path, task, "local")
+
+            _, events = read_events(out_path)
+            total = sum(e["xsec_weight"] for e in events)
+            sigma_per_nucleon = 1.0e-15 * (XSEC_SCALE / GENIE_UNITS_CM2) / 40
+            expected = sigma_per_nucleon * (edges[-1] - edges[0])
+            self.assertAlmostEqual(total / expected, 1.0, places=9)
+
+            # And the weights genuinely track the stepped flux: an event in the
+            # low-density bin [1.5, 3.0) must weigh more than one in [0.5, 0.8).
+            by_bin = {}
+            for event in events:
+                index = int(np.searchsorted(edges, event["energy_gev"], side="right")) - 1
+                by_bin.setdefault(index, []).append(event["xsec_weight"])
+            for weights in by_bin.values():
+                self.assertTrue(np.allclose(weights, weights[0]))
+            self.assertGreater(by_bin[2][0], by_bin[0][0])
 
 
 if __name__ == "__main__":

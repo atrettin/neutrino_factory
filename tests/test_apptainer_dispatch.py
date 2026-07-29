@@ -35,7 +35,20 @@ class ApptainerDispatchAdapterTests(unittest.TestCase):
                 "seed": 42,
                 "config_version": "G18_10a_02_11a",
                 "code_version": "R-3_06_00",
-                "genie_flux": {"kind": "function", "expr": "x^(-2.0)"},
+                "genie_flux": {
+                    "kind": "generated_histogram",
+                    "file": "nf_flux.root",
+                    "name": "nf_flux",
+                    "nbins": 16,
+                    "spacing": "log",
+                },
+                "flux_config": {
+                    "type": "power_law",
+                    "particle": "numu",
+                    "emin_gev": 0.5,
+                    "emax_gev": 10.0,
+                    "gamma": -2.0,
+                },
                 "event_generator_list": None,
             }
             env = {"NF_CONTAINER_RUNTIME": "apptainer"}
