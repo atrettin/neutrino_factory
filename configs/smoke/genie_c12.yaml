@@ -11,6 +11,9 @@ run:
   seed: 12345
   executor: local
   stub_mode: false
+  # Keeps the gevgen job-configuration banner and the output-file writes while
+  # dropping the per-spline and per-event NOTICE floods.
+  log_level: essential
 
 flux:
   type: power_law

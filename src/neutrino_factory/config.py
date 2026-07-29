@@ -15,6 +15,12 @@ from . import flux as flux_module
 
 LOGGER = logging.getLogger(__name__)
 
+# How chatty the generator's own logs should be. Generator-agnostic names; each
+# adapter maps them onto its native mechanism (GENIE: messenger thresholds).
+# "essential" is the interesting one: initial job configuration, output-file
+# writes, and warnings/errors — nothing per-event.
+LOG_LEVELS = ("default", "essential", "quiet", "verbose")
+
 DEFAULT_CONFIG: Dict[str, Any] = {
     "run": {
         "name": "neutrino_factory_run",
@@ -22,6 +28,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "seed": 12345,
         "executor": "local",
         "stub_mode": True,
+        "log_level": "default",
     },
     "flux": {
         "type": "power_law",
@@ -148,6 +155,11 @@ def validate_config(config: Dict[str, Any]) -> None:
         errors.append("run.events must be >= 1")
     if int(splitting.get("chunks", 0)) < 1:
         errors.append("splitting.chunks must be >= 1")
+    log_level = run.get("log_level", "default")
+    if log_level not in LOG_LEVELS:
+        errors.append(
+            f"run.log_level must be one of {', '.join(LOG_LEVELS)} (got '{log_level}')"
+        )
 
     config_path = config.get("config_path")
     flux_base_dir = str(Path(config_path).parent) if config_path else None

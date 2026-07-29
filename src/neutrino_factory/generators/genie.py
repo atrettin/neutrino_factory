@@ -16,6 +16,41 @@ from ..translators.genie import GenieTranslator
 
 LOGGER = logging.getLogger(__name__)
 
+# Mapping of the generator-agnostic ``run.log_level`` onto GENIE's messenger
+# threshold files, passed to gevgen/gntpc via ``--message-thresholds``. Files are
+# read *in addition to* $GENIE/config/Messenger.xml, colon-separated, later file
+# wins for a stream listed twice. The presets ship inside the GENIE image, so
+# bare basenames resolve via $GENIE/config.
+#
+# Why "essential"/"quiet" still show the job configuration: gEvGen's main() calls
+# GetCommandLineArgs() — which prints the framed "gevgen job configuration"
+# banner — *before* Initialize(), and Initialize() is where the custom thresholds
+# are actually applied. Everything from cross-section spline loading onwards is
+# therefore silenced while the banner survives. Do not "fix" this by applying the
+# thresholds earlier: the banner and the per-event spam share the same stream
+# ("gevgen") at the same priority (NOTICE) and cannot otherwise be separated.
+#
+# Messenger_laconic.xml puts essentially every stream at WARN, so warnings and
+# errors always survive; ESSENTIAL_OVERLAY then re-raises the Ntp stream, whose
+# INFO messages name the output ROOT file as it is opened and saved.
+#
+# Ntp at INFO also emits one "Adding event N to output tree" line per event —
+# unavoidable, since it shares the stream and priority with the file-write
+# messages. That keeps "essential" linear in the event count (still ~200x
+# smaller than the default per event); "quiet" is the constant-size option for
+# large production arrays.
+ESSENTIAL_OVERLAY_FILENAME = "nf_messenger_essential.xml"
+ESSENTIAL_OVERLAY_XML = """<?xml version="1.0" encoding="ISO-8859-1"?>
+<messenger_config>
+  <priority msgstream="Ntp"> INFO </priority>
+</messenger_config>
+"""
+MESSENGER_PRESETS: dict[str, list[str]] = {
+    "verbose": ["Messenger_rambling.xml"],
+    "quiet": ["Messenger_laconic.xml"],
+    "essential": ["Messenger_laconic.xml", ESSENTIAL_OVERLAY_FILENAME],
+}
+
 
 class GenieAdapter(GeneratorAdapter):
     name = "genie"
@@ -197,6 +232,11 @@ class GenieAdapter(GeneratorAdapter):
         # cross-section splines; gevgen aborts without them. Load them if present.
         if xml_path is not None:
             gevgen_args.extend(["--cross-sections", str(xml_path)])
+        thresholds = self._message_threshold_arg(
+            str(translated_config.get("log_level") or "default"), work_dir
+        )
+        if thresholds is not None:
+            gevgen_args.extend(["--message-thresholds", thresholds])
 
         # Native binary first: on the cluster the Slurm task already runs inside
         # the generator's Apptainer image (which cannot nest), so gevgen must be
@@ -230,6 +270,41 @@ class GenieAdapter(GeneratorAdapter):
         return gevgen_args
 
     @staticmethod
+    def _message_threshold_arg(log_level: str, work_dir: Path) -> str | None:
+        """Value for ``--message-thresholds``, or None to leave GENIE's default.
+
+        The overlay for the "essential" level is written into ``work_dir``, which
+        is the process CWD in every execution branch (docker_wrap sets /work as
+        the workdir, the native branch runs with ``cwd=work_dir``). GENIE's
+        ``GetXMLFilePath`` falls back to the bare basename when it is not found
+        on $GXMLPATH, so the file resolves from the CWD — no bind mount and no
+        in-container path remapping are needed.
+        """
+        preset = MESSENGER_PRESETS.get(log_level)
+        if preset is None:
+            return None
+        if ESSENTIAL_OVERLAY_FILENAME in preset:
+            (work_dir / ESSENTIAL_OVERLAY_FILENAME).write_text(
+                ESSENTIAL_OVERLAY_XML, encoding="utf-8"
+            )
+        return ":".join(preset)
+
+    @staticmethod
+    def _log_level_from_sidecar(work_dir: Path) -> str:
+        """Recover ``log_level`` for steps that only get the manifest task.
+
+        ``normalize_output`` (and hence ``_run_gntpc``) is handed the manifest
+        task, which carries no log level, so read it back from the
+        ``translated_config.json`` sidecar that ``build_run_command`` wrote into
+        the same work dir.
+        """
+        sidecar = work_dir / "translated_config.json"
+        try:
+            return str(json.loads(sidecar.read_text(encoding="utf-8")).get("log_level", "default"))
+        except (OSError, ValueError):
+            return "default"
+
+    @staticmethod
     def _flux_arg(flux_spec: dict, flux_file: Path | None) -> str:
         """Build gevgen's -f value: a TF1 string, or 'file.root,histname'."""
         if flux_spec["kind"] == "function":
@@ -238,6 +313,11 @@ class GenieAdapter(GeneratorAdapter):
 
     def _run_gntpc(self, work_dir: Path, code_version: str | None) -> None:
         args = ["gntpc", "-i", "events.ghep.root", "-f", "gst", "-o", "events.gst.root"]
+        thresholds = self._message_threshold_arg(
+            self._log_level_from_sidecar(work_dir), work_dir
+        )
+        if thresholds is not None:
+            args.extend(["--message-thresholds", thresholds])
         if shutil.which("gntpc"):
             subprocess.run(
                 containers.apptainer_dispatch(self.name, code_version, args),
