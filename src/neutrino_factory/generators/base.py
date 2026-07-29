@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
+from ..config import physics_current
+
 
 class GeneratorAdapter(ABC):
     name = "base"
@@ -200,16 +202,24 @@ class GeneratorAdapter(ABC):
                 for _ in range(event_count)
             ]
 
+        # Stub events still have to carry a current, since it is a required
+        # column of the common output. "cc"/"nc" are honoured exactly; for
+        # "inclusive" the split is a seeded coin flip — synthetic, and not an
+        # estimate of the real CC:NC ratio, which no stub can know.
+        current = physics_current(self.config)
+
         events: list[dict[str, Any]] = []
 
         for offset in range(event_count):
             energy = energies[offset]
+            is_cc = rng.random() < 0.5 if current == "inclusive" else current == "cc"
             events.append(
                 {
                     "event_id": int(task["start_event"]) + offset,
                     "seed": int(task["seed"]),
                     "energy_gev": round(energy, 6),
                     "weight": 1.0,
+                    "is_cc": is_cc,
                     "interaction": self.config.get("physics", {}).get("mode", "inclusive"),
                     "probe": self.config.get("flux", {}).get("particle", "numu"),
                     "target": self.config.get("target", {}).get("nucleus", "Ar40"),

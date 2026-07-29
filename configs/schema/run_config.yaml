@@ -24,6 +24,11 @@ target:
 
 physics:
   mode: inclusive
+  # Weak current to generate: cc | nc | inclusive. Enforced in each generator's
+  # own configuration (GENIE --event-generator-list, NuWro dyn_* switches, NEUT
+  # NEUT-CRS mask, GiBUU process_ID), and recorded per event as `is_cc` in the
+  # output. "inclusive" runs GiBUU twice, once per current — see
+  # docs/configuration.md.
   current: cc
 
 # Every generator version entry has two required, independent axes:

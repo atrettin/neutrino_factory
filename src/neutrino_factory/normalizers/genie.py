@@ -98,6 +98,12 @@ class GenieNormalizer(OutputNormalizer):
             except Exception as exc:
                 raise RuntimeError(f"Cannot read event weight from branch 'wght': {exc}") from exc
             try:
+                # gst carries the current as its own boolean branch, independent
+                # of the qel/res/dis/... class flags, which span both currents.
+                flag_cc = tree["cc"].array(library="np")
+            except Exception as exc:
+                raise RuntimeError(f"Cannot read the current flag from branch 'cc': {exc}") from exc
+            try:
                 flag_qel = tree["qel"].array(library="np")
                 flag_res = tree["res"].array(library="np")
                 flag_dis = tree["dis"].array(library="np")
@@ -146,8 +152,8 @@ class GenieNormalizer(OutputNormalizer):
         )
 
         events = []
-        for i, (ev, w, xw, itype) in enumerate(
-            zip(energies_gev, weights, xsec_weights, interactions)
+        for i, (ev, w, xw, itype, is_cc) in enumerate(
+            zip(energies_gev, weights, xsec_weights, interactions, flag_cc)
         ):
             event = {
                 "event_id": start_event + i,
@@ -155,6 +161,7 @@ class GenieNormalizer(OutputNormalizer):
                 "energy_gev": float(ev),
                 "weight": float(w),
                 "xsec_weight": float(xw),
+                "is_cc": bool(is_cc),
                 "interaction": itype,
                 "probe": probe,
                 "target": target,

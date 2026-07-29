@@ -19,10 +19,24 @@ from .base import OutputNormalizer
 # runs' events, so every part must be read.
 PERT_OUTPUT_GLOB = "EventOutput.Pert.*.root"
 
+# Subdirectory of the task work directory each weak current's pass runs in, in
+# the order their events are concatenated. The adapter creates one per pass (see
+# GiBUUAdapter.build_run_command); an inclusive run has both, a cc/nc run one.
+PASS_DIR_NAMES = ("cc", "nc")
+
 
 def pert_output_parts(directory: Path) -> list[Path]:
     """Every GiBUU perturbative-event file in ``directory``, in run order."""
     return sorted(Path(directory).glob(PERT_OUTPUT_GLOB))
+
+
+def pass_output_dirs(work_dir: Path) -> list[tuple[str, Path]]:
+    """The ``(current, directory)`` pairs a run actually produced output in."""
+    return [
+        (name, work_dir / name)
+        for name in PASS_DIR_NAMES
+        if (work_dir / name).is_dir() and pert_output_parts(work_dir / name)
+    ]
 
 
 def _interaction_from_evtype(ev_type: int) -> str:
@@ -55,7 +69,7 @@ class GiBUUNormalizer(OutputNormalizer):
         execution_mode: str,
     ) -> str:
         path = Path(raw_output_path)
-        if path.suffix == ".root":
+        if path.is_dir():
             return self._normalize_root(path, normalized_output_path, task, execution_mode)
         return self._normalize_json(path, normalized_output_path, task, execution_mode)
 
@@ -115,7 +129,7 @@ class GiBUUNormalizer(OutputNormalizer):
             np.concatenate(columns["lepton_p4"]),
         )
 
-    def _normalize_root(self, root_path: Path, out_path, task: dict, mode: str) -> str:
+    def _normalize_root(self, work_dir: Path, out_path, task: dict, mode: str) -> str:
         try:
             import uproot
         except ImportError as exc:
@@ -124,10 +138,10 @@ class GiBUUNormalizer(OutputNormalizer):
                 "Install it with: pip install uproot"
             ) from exc
 
-        sidecar = root_path.parent / "translated_config.json"
+        sidecar = work_dir / "translated_config.json"
         if not sidecar.exists():
             raise RuntimeError(
-                f"translated_config.json not found alongside {root_path}. "
+                f"translated_config.json not found in {work_dir}. "
                 "Re-run with the current GiBUUAdapter to generate it."
             )
         translated = json.loads(sidecar.read_text(encoding="utf-8"))
@@ -139,20 +153,56 @@ class GiBUUNormalizer(OutputNormalizer):
         target = translated["nucleus"]
         start_event = int(task["start_event"])
 
-        parts = pert_output_parts(root_path.parent) or [root_path]
+        # One pass per weak current, each in its own subdirectory. Their events
+        # are concatenated: GiBUU's weights are absolute cross sections, so the
+        # union of a CC and an NC pass is the inclusive sample (see
+        # translators.gibuu.CURRENT_PASSES).
+        expected_currents = [
+            str(gibuu_pass["current"]) for gibuu_pass in translated.get("gibuu_passes", [])
+        ]
+        pass_dirs = pass_output_dirs(work_dir)
+        found_currents = [name for name, _ in pass_dirs]
+        if found_currents != expected_currents:
+            raise RuntimeError(
+                f"Expected GiBUU output for current(s) {expected_currents or 'none'} "
+                f"under {work_dir}, found {found_currents or 'none'}. A missing "
+                "pass would drop that current's events while the run still claims "
+                "to cover it."
+            )
+
         # A missing run's events would be dropped while compute_xsec_weight still
         # divided by the full num_runs, understating sigma by exactly that ratio.
         expected_parts = max(1, int(translated.get("num_runs", 1)))
-        if len(parts) != expected_parts:
-            raise RuntimeError(
-                f"Expected {expected_parts} GiBUU perturbative output file(s) "
-                f"(num_runs={expected_parts}) in {root_path.parent}, found "
-                f"{len(parts)}: {', '.join(p.name for p in parts) or 'none'}. "
-                "The cross section is normalized per run, so a missing run would "
-                "silently understate it."
-            )
+        parts_by_current: list[tuple[str, list[Path]]] = []
+        for pass_current, pass_dir in pass_dirs:
+            parts = pert_output_parts(pass_dir)
+            if len(parts) != expected_parts:
+                raise RuntimeError(
+                    f"Expected {expected_parts} GiBUU perturbative output file(s) "
+                    f"(num_runs={expected_parts}) in {pass_dir}, found "
+                    f"{len(parts)}: {', '.join(p.name for p in parts) or 'none'}. "
+                    "The cross section is normalized per run, so a missing run "
+                    "would silently understate it."
+                )
+            parts_by_current.append((pass_current, parts))
 
-        energies_gev, weights, ev_types, nu_p4, lepton_p4 = self._read_parts(parts)
+        # Read pass by pass, so each event's current is known from the pass it
+        # came from — GiBUU's RootTuple has no per-event current branch, and does
+        # not need one: a pass generates a single process_ID by construction.
+        per_pass = [
+            (pass_current, self._read_parts(parts))
+            for pass_current, parts in parts_by_current
+        ]
+        energies_gev, weights, ev_types, nu_p4, lepton_p4 = [
+            np.concatenate([columns[index] for _, columns in per_pass])
+            for index in range(5)
+        ]
+        is_cc_flags = np.concatenate(
+            [
+                np.full(len(columns[0]), pass_current == "cc", dtype=bool)
+                for pass_current, columns in per_pass
+            ]
+        )
 
         energies_gev = np.asarray(energies_gev, dtype=np.float64)
         weights_arr = np.asarray(weights, dtype=np.float64)
@@ -173,8 +223,8 @@ class GiBUUNormalizer(OutputNormalizer):
         )
 
         events = []
-        for i, (e_gev, w, xw, itype) in enumerate(
-            zip(energies_gev, weights_arr, xsec_weights, interactions)
+        for i, (e_gev, w, xw, itype, is_cc) in enumerate(
+            zip(energies_gev, weights_arr, xsec_weights, interactions, is_cc_flags)
         ):
             event = {
                 "event_id": start_event + i,
@@ -182,6 +232,7 @@ class GiBUUNormalizer(OutputNormalizer):
                 "energy_gev": float(e_gev),
                 "weight": float(w),
                 "xsec_weight": float(xw),
+                "is_cc": bool(is_cc),
                 "interaction": itype,
                 "probe": probe,
                 "target": target,

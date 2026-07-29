@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .base import GeneratorAdapter
 from .. import catalog, containers
-from ..normalizers.gibuu import GiBUUNormalizer, pert_output_parts
+from ..normalizers.gibuu import GiBUUNormalizer, pass_output_dirs
 from ..translators.gibuu import GiBUUTranslator
 
 
@@ -55,33 +55,49 @@ class GiBUUAdapter(GeneratorAdapter):
         return "/opt/GiBUU/buuinput"
 
     @staticmethod
-    def _write_jobcard(work_dir: Path, jobcard: str) -> Path:
-        jobcard_path = work_dir / "job.job"
-        jobcard_path.write_text(jobcard, encoding="utf-8")
-        return jobcard_path
+    def _write_pass_inputs(pass_dir: Path, jobcard: str, flux_table: str | None) -> None:
+        """Stage one pass's jobcard and flux table into its own directory.
 
-    @staticmethod
-    def _write_flux_file(work_dir: Path, flux_table: str) -> Path:
-        # Written as flux.dat in the work dir; the jobcard's FileNameFlux
-        # references it CWD-relatively ('./flux.dat'), and GiBUU always runs
-        # with the work dir as CWD in every pathway.
-        flux_path = work_dir / "flux.dat"
-        flux_path.write_text(flux_table, encoding="utf-8")
-        return flux_path
+        Every pass runs with its own directory as CWD, since GiBUU writes its
+        ROOT output under a fixed name (``EventOutput.Pert.<run>.root``) into the
+        CWD: a second pass sharing the directory would overwrite the first. The
+        jobcard's ``FileNameFlux`` is CWD-relative ('./flux.dat'), so each pass
+        gets its own copy of the same table.
+        """
+        pass_dir.mkdir(parents=True, exist_ok=True)
+        (pass_dir / "job.job").write_text(jobcard, encoding="utf-8")
+        if flux_table:
+            (pass_dir / "flux.dat").write_text(flux_table, encoding="utf-8")
 
     def build_run_command(self, translated_config: dict, work_dir: Path) -> list[str]:
         code_version = translated_config.get("code_version")
         work_dir.mkdir(parents=True, exist_ok=True)
-        jobcard = translated_config["gibuu_jobcard"].replace(
-            self._BUUINPUT_PLACEHOLDER, self._buuinput_dir(code_version)
-        )
-        self._write_jobcard(work_dir, jobcard)
         flux_table = translated_config.get("gibuu_flux_table")
-        if flux_table:
-            self._write_flux_file(work_dir, flux_table)
+
+        # One subdirectory per weak current: exactly one for a cc/nc run, two for
+        # an inclusive one (GiBUU's process_ID selects a single current, see
+        # translators.gibuu.CURRENT_PASSES). Uniform for both cases so there is a
+        # single layout for the normalizer to read.
+        pass_dirs = []
+        for gibuu_pass in translated_config["gibuu_passes"]:
+            pass_dir = work_dir / str(gibuu_pass["current"])
+            jobcard = gibuu_pass["jobcard"].replace(
+                self._BUUINPUT_PLACEHOLDER, self._buuinput_dir(code_version)
+            )
+            self._write_pass_inputs(pass_dir, jobcard, flux_table)
+            pass_dirs.append(pass_dir.name)
+
         (work_dir / "translated_config.json").write_text(
             json.dumps(translated_config), encoding="utf-8"
         )
+
+        def script(binary: str, root: str) -> str:
+            # `set -e` so a failing pass fails the task instead of being masked
+            # by the exit status of the last one.
+            passes = " && ".join(
+                f"(cd {root}/{name} && {binary} < job.job)" for name in pass_dirs
+            )
+            return f"set -e; {passes}"
 
         # GiBUU reads its jobcard from stdin and writes ROOT output into the CWD.
         # Native binary first: on the cluster the Slurm task already runs inside
@@ -90,7 +106,7 @@ class GiBUUAdapter(GeneratorAdapter):
             launcher = containers.apptainer_dispatch_prefix(
                 self.name, code_version, self.binary_name()
             )
-            return ["bash", "-c", f"{launcher} < job.job"]
+            return ["bash", "-c", script(launcher, ".")]
 
         if self.container_available(code_version):
             self.ensure_container_wrappable()
@@ -98,12 +114,12 @@ class GiBUUAdapter(GeneratorAdapter):
             assert image is not None
             return containers.docker_wrap(
                 image,
-                ["bash", "-c", f"{self.binary_name()} < /work/job.job"],
+                ["bash", "-c", script(self.binary_name(), "/work")],
                 [(work_dir, "/work")],
                 "/work",
             )
 
-        return ["bash", "-c", f"{self.binary_name()} < job.job"]
+        return ["bash", "-c", script(self.binary_name(), ".")]
 
     def normalize_output(
         self,
@@ -112,12 +128,13 @@ class GiBUUAdapter(GeneratorAdapter):
         task: dict,
         execution_mode: str,
     ) -> str:
-        # GiBUU writes its RootTuple output into the run CWD, not to
+        # GiBUU writes its RootTuple output into each pass's CWD, not to
         # raw_output_path, and produces one file per run (num_runs_SameEnergy).
-        # Hand the normalizer the first part; it reads every part in that
-        # directory (see normalizers.gibuu.pert_output_parts).
-        parts = pert_output_parts(Path(raw_output_path).parent)
-        actual_path = parts[0] if parts else Path(raw_output_path)
+        # Hand the normalizer the work directory: it discovers the per-current
+        # pass directories underneath it (see normalizers.gibuu). With no pass
+        # output at all the run was a stub, whose JSON lives at raw_output_path.
+        work_dir = Path(raw_output_path).parent
+        source = work_dir if pass_output_dirs(work_dir) else Path(raw_output_path)
         return GiBUUNormalizer().normalize(
-            actual_path, normalized_output_path, task, execution_mode
+            source, normalized_output_path, task, execution_mode
         )

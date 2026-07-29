@@ -30,6 +30,12 @@ NUMERIC_FIELD_SPECS: dict[str, tuple[type, Any]] = {
     "energy_gev": (np.float64, None),
     "weight": (np.float64, 1.0),
     "xsec_weight": (np.float64, 1.0),
+    # Charged current (True) vs neutral current (False). Required, with no
+    # default: the `interaction` label merges the two currents by construction
+    # (GENIE's `qel` flag and NEUT's modes 1 and 51/52 all map to "qel"), so a
+    # silently defaulted value here would be indistinguishable from a real one
+    # and would misclassify half the events of an inclusive run.
+    "is_cc": (np.bool_, None),
     **{name: (np.float64, default) for name, default in kinematics.FIELD_DEFAULTS.items()},
 }
 
@@ -124,8 +130,9 @@ def _read_event_columns(handle: h5py.File) -> dict[str, np.ndarray]:
 
 def _rows_from_event_columns(columns: dict[str, np.ndarray]) -> list[dict[str, Any]]:
     count = len(columns["event_id"])
+    numeric_casts: dict[type, Any] = {np.int64: int, np.bool_: bool}
     casts: list[tuple[str, Any]] = [
-        (key, int if NUMERIC_FIELD_SPECS[key][0] is np.int64 else float)
+        (key, numeric_casts.get(NUMERIC_FIELD_SPECS[key][0], float))
         for key in EVENT_NUMERIC_FIELDS
     ]
     casts += [(key, str) for key in EVENT_STRING_FIELDS]
@@ -157,6 +164,13 @@ def write_common_hdf5(output_path: str | Path, metadata: dict[str, Any], events:
     numeric_columns: dict[str, np.ndarray] = {}
     for key, (dtype, default) in NUMERIC_FIELD_SPECS.items():
         if default is None:
+            missing = next((index for index, e in enumerate(events) if key not in e), None)
+            if missing is not None:
+                raise KeyError(
+                    f"Event {missing} is missing the required column '{key}'. It has "
+                    "no default: writing a placeholder would put an unphysical value "
+                    "into the output where a real one is expected."
+                )
             values = [dtype(event[key]) for event in events]
         else:
             values = [dtype(event.get(key, default)) for event in events]

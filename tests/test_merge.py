@@ -31,6 +31,7 @@ def _write_chunk(path: Path, generator: str, code_version: str, config_version: 
             "seed": 1,
             "energy_gev": 1.0 + i,
             "weight": 1.0,
+            "is_cc": True,
             "xsec_weight": 1.0,
             "interaction": "qel",
             "probe": "numu",
@@ -40,6 +41,70 @@ def _write_chunk(path: Path, generator: str, code_version: str, config_version: 
         for i in range(n)
     ]
     return write_common_hdf5(path, metadata, events)
+
+
+class IsCcRoundTripTests(unittest.TestCase):
+    def test_mixed_currents_survive_write_read_and_merge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            metadata = {
+                "generator": "genie",
+                "code_version": "R-3_06_00",
+                "config_version": "G18_10a_02_11a",
+                "generator_version_id": "R-3_06_00+G18_10a_02_11a",
+                "run_name": "test_run",
+                "chunk_id": 0,
+                "seed": 1,
+            }
+
+            def chunk(path: Path, flags: list[bool]) -> str:
+                events = [
+                    {
+                        "event_id": i,
+                        "seed": 1,
+                        "energy_gev": 1.0 + i,
+                        "weight": 1.0,
+                        "xsec_weight": 1.0,
+                        "is_cc": flag,
+                        "interaction": "qel",
+                        "probe": "numu",
+                        "target": "Ar40",
+                        "generator": "genie",
+                    }
+                    for i, flag in enumerate(flags)
+                ]
+                return write_common_hdf5(path, metadata, events)
+
+            a = chunk(d / "a.h5", [True, False])
+            b = chunk(d / "b.h5", [False, True])
+            out = d / "merged.h5"
+
+            merge_hdf5_files([a, b], out)
+
+            _, events = read_events(out)
+            flags = [event["is_cc"] for event in events]
+            self.assertEqual(flags, [True, False, False, True])
+            # Read back as real booleans, not numpy scalars or 0/1 floats.
+            self.assertIsInstance(flags[0], bool)
+
+    def test_event_missing_is_cc_is_rejected(self) -> None:
+        # No default: writing one would put a fabricated current into output
+        # that is indistinguishable from a measured one.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            event = {
+                "event_id": 0,
+                "seed": 1,
+                "energy_gev": 1.0,
+                "weight": 1.0,
+                "xsec_weight": 1.0,
+                "interaction": "qel",
+                "probe": "numu",
+                "target": "Ar40",
+                "generator": "genie",
+            }
+            with self.assertRaises(KeyError) as ctx:
+                write_common_hdf5(Path(tmpdir) / "bad.h5", {"generator": "genie"}, [event])
+            self.assertIn("is_cc", str(ctx.exception))
 
 
 class MergeValidationTests(unittest.TestCase):
@@ -93,6 +158,7 @@ class LegacyFileCompatibilityTests(unittest.TestCase):
                 "seed": 1,
                 "energy_gev": 1.0 + i,
                 "weight": 1.0,
+                "is_cc": True,
                 "xsec_weight": 1.0,
                 "interaction": "qel",
                 "probe": "numu",
@@ -175,6 +241,7 @@ def _write_normalized_chunk(
             "seed": 1,
             "energy_gev": energy,
             "weight": 1.0,
+            "is_cc": True,
             "xsec_weight": xsec_weight,
             "interaction": "qel",
             "probe": "numu",

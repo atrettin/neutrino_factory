@@ -109,6 +109,14 @@ class NuWroNormalizer(OutputNormalizer):
                     f"Cannot read event weight from branch 'e/weight': {exc}"
                 ) from exc
             try:
+                # The current is its own flag in the same struct; the class
+                # flags below (qel/res/...) span both currents.
+                flag_cc = tree["e/flag/flag.cc"].array(library="np")
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Cannot read the current flag from 'e/flag/flag.cc': {exc}"
+                ) from exc
+            try:
                 flag_qel = tree["e/flag/flag.qel"].array(library="np")
                 flag_res = tree["e/flag/flag.res"].array(library="np")
                 flag_dis = tree["e/flag/flag.dis"].array(library="np")
@@ -145,8 +153,8 @@ class NuWroNormalizer(OutputNormalizer):
         )
 
         events = []
-        for i, (e_gev, w, xw, itype) in enumerate(
-            zip(energies_gev, weights, xsec_weights, interactions)
+        for i, (e_gev, w, xw, itype, is_cc) in enumerate(
+            zip(energies_gev, weights, xsec_weights, interactions, flag_cc)
         ):
             event = {
                 "event_id": start_event + i,
@@ -154,6 +162,7 @@ class NuWroNormalizer(OutputNormalizer):
                 "energy_gev": float(e_gev),
                 "weight": float(w),
                 "xsec_weight": float(xw),
+                "is_cc": bool(is_cc),
                 "interaction": itype,
                 "probe": probe,
                 "target": target,
