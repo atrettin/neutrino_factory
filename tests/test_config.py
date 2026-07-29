@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from neutrino_factory.config import ConfigError, resolve_config
+from neutrino_factory.config import LOG_LEVELS, ConfigError, resolve_config
 
 
 def _write_root_histogram(path: Path, name: str, edges, contents) -> None:
@@ -157,6 +157,27 @@ class ConfigTests(unittest.TestCase):
     def test_invalid_config_raises(self) -> None:
         with self.assertRaises(ConfigError):
             resolve_config({"run": {"events": 0}, "generators": {}})
+
+    def test_log_level_defaults_to_generator_stock_logging(self) -> None:
+        config = resolve_config({"generators": self._genie_generators()})
+        self.assertEqual(config["run"]["log_level"], "default")
+
+    def test_known_log_levels_are_accepted(self) -> None:
+        for log_level in LOG_LEVELS:
+            with self.subTest(log_level=log_level):
+                config = resolve_config(
+                    {
+                        "run": {"log_level": log_level},
+                        "generators": self._genie_generators(),
+                    }
+                )
+                self.assertEqual(config["run"]["log_level"], log_level)
+
+    def test_unknown_log_level_raises(self) -> None:
+        with self.assertRaises(ConfigError):
+            resolve_config(
+                {"run": {"log_level": "bogus"}, "generators": self._genie_generators()}
+            )
 
     def _genie_generators(self) -> dict:
         return {

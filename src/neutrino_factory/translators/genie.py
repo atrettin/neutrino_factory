@@ -80,6 +80,7 @@ class GenieTranslator(ConfigTranslator):
             "genie_flux": self._genie_flux_descriptor(flux),
             "event_generator_list": config["physics"].get("event_generator_list"),
             "physics_mode": config["physics"].get("mode", "inclusive"),
+            "log_level": config["run"].get("log_level", "default"),
             # For GENIE, config_version is the tune and code_version is the git tag.
             "code_version": task["code_version"],
             "config_version": task["config_version"],

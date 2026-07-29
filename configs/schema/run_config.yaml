@@ -6,6 +6,10 @@ run:
   seed: 12345
   executor: local         # local | slurm
   stub_mode: true         # keep true for local smoke tests without generator installs
+  # How chatty the generator's own logs are (GENIE only, for now).
+  # default | essential | quiet | verbose
+  # essential = initial job configuration + output-file writes + warnings/errors
+  log_level: default
 
 flux:
   type: power_law

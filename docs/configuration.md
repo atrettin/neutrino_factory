@@ -4,7 +4,7 @@ The common YAML config is the source of truth for both the local and Slurm execu
 
 ## Top-level sections
 
-- `run`: run name, total event count, seed, executor mode, and stub-mode toggle
+- `run`: run name, total event count, seed, executor mode, stub-mode toggle, and generator log verbosity
 - `flux`: neutrino flux model and energy range
 - `target`: nuclear target description
 - `physics`: generic interaction settings
@@ -12,6 +12,44 @@ The common YAML config is the source of truth for both the local and Slurm execu
 - `splitting`: how the total event count is chunked into jobs
 - `storage`: roots for software, outputs, working files, and container images
 - `slurm`: job resources for MPP submission (default partition: `alma` — required by the new MPP Slurm cluster)
+
+## Generator log verbosity: `run.log_level`
+
+Generators are extremely chatty by default. `run.log_level` controls how much of
+their own output reaches stdout (and hence `work/logs/*.out` under Slurm):
+
+| `run.log_level` | What you get |
+|---|---|
+| `default` | The generator's stock logging (unchanged behaviour). |
+| `verbose` | Debug-level logging, for chasing a generator-internal problem. |
+| `essential` | The initial job configuration, the output-file writes, and warnings/errors. |
+| `quiet` | The initial job configuration plus warnings/errors only — constant-size output. |
+
+Measured on a 5-event GENIE run (`configs/smoke/genie_c12.yaml`): 32928 lines at
+`default`, 270 at `essential`.
+
+**Picking between `essential` and `quiet`:** GENIE emits the output-file writes
+and a one-line-per-event `Adding event N to output tree` on the *same* stream at
+the same priority, so `essential` keeps one short line per generated event —
+still ~200x less than `default`, but it grows with the event count. For large
+production arrays where even that is too much, use `quiet`, whose output size
+does not depend on the event count.
+
+The names are generator-agnostic, but **only the GENIE adapter acts on them so
+far**; NuWro, NEUT and GiBUU currently ignore the setting.
+
+For GENIE the level is mapped onto `gevgen`/`gntpc`'s `--message-thresholds`
+option, using the messenger presets shipped inside the GENIE image
+(`Messenger_rambling.xml`, `Messenger_laconic.xml`). `essential` adds a small
+generated overlay (`nf_messenger_essential.xml`, written into the task's work
+directory) that re-raises GENIE's `Ntp` stream so the output ROOT file is still
+named as it is opened and saved.
+
+The job-configuration banner survives `essential` and `quiet` because GENIE
+applies `--message-thresholds` in `Initialize()`, *after* `GetCommandLineArgs()`
+has already printed it. Everything from cross-section spline loading onwards —
+the `XSecSplLst` spline-by-spline `NOTICE`s, the `GMCJDriver` chatter about flux
+rays that did not interact, and the per-event GHEP record dumps — is silenced.
 
 ## Environment: `.env` and precedence
 
