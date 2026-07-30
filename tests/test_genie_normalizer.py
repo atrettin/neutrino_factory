@@ -9,27 +9,42 @@ from unittest.mock import patch
 
 import numpy as np
 
+from tests.final_state_reference import reference_awkward_branches, reference_final_state
 from tests.kinematics_reference import reference_kinematics, reference_lepton_p4
 from neutrino_factory.common_output import read_events
+from neutrino_factory.final_state import FINAL_STATE_FIELDS, NATIVE_CODE_FIELD
 from neutrino_factory.kinematics import KINEMATIC_FIELDS, MISSING
 from neutrino_factory.normalizers.genie import GenieNormalizer
 from neutrino_factory.translators.genie import GENIE_UNITS_CM2, XSEC_SCALE
 
 
 def _write_gst_root(
-    path: Path, energies_gev, weights, qel, res, dis, coh, mec, lepton_p4=None, cc=None
+    path: Path,
+    energies_gev,
+    weights,
+    qel,
+    res,
+    dis,
+    coh,
+    mec,
+    lepton_p4=None,
+    cc=None,
+    neut_code=None,
 ) -> None:
     """Write a synthetic ``gst`` tree.
 
     Unless ``lepton_p4`` is given, each event gets the reference scatter defined
     by :func:`kinematics_reference.reference_lepton_p4`: a beam neutrino along +z
     with |p| = E, and an outgoing lepton at E_l = E/2 with (px, pz) = (0.3E, 0.4E).
+    The final state is the shared reference list from
+    :mod:`tests.final_state_reference`.
     """
     import uproot
 
     energies = np.array(energies_gev, dtype=np.float64)
     lepton = np.asarray(reference_lepton_p4(energies) if lepton_p4 is None else lepton_p4,
                         dtype=np.float64)
+    fs_pdg, fs_e, fs_px, fs_py, fs_pz = reference_awkward_branches(len(energies))
 
     with uproot.recreate(path) as f:
         f["gst"] = {
@@ -50,6 +65,14 @@ def _write_gst_root(
             "dis": np.array(dis, dtype=np.bool_),
             "coh": np.array(coh, dtype=np.bool_),
             "mec": np.array(mec, dtype=np.bool_),
+            "pdgf": fs_pdg,
+            "Ef": fs_e,
+            "pxf": fs_px,
+            "pyf": fs_py,
+            "pzf": fs_pz,
+            "neut_code": np.array(
+                np.ones(len(energies)) if neut_code is None else neut_code, dtype=np.int32
+            ),
         }
 
 
@@ -392,6 +415,35 @@ class GenieNormalizerRootTests(unittest.TestCase):
                 expected = reference_kinematics(energy)
                 for field in KINEMATIC_FIELDS:
                     self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+
+    def test_normalize_gst_root_summarizes_the_final_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, self._software_root)
+            gst_path = work_dir / "events.gst.root"
+            _write_gst_root(
+                gst_path,
+                energies_gev=[1.0, 2.5, 4.0],
+                weights=[1.0] * 3,
+                qel=[True, False, False],
+                res=[False, True, False],
+                dis=[False, False, True],
+                coh=[False] * 3,
+                mec=[False] * 3,
+                neut_code=[1, 11, 26],
+            )
+            out_path = work_dir / "out.h5"
+
+            GenieNormalizer().normalize(gst_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            expected = reference_final_state()
+            for event in events:
+                for field in FINAL_STATE_FIELDS:
+                    self.assertAlmostEqual(
+                        event[field], expected[field], places=9, msg=field
+                    )
+            self.assertEqual([e[NATIVE_CODE_FIELD] for e in events], [1, 11, 26])
 
     def test_derived_kinematics_agree_with_genie_native_branches(self) -> None:
         """Pin our definitions to GENIE's own.

@@ -33,13 +33,16 @@ from typing import Any, Sequence
 import numpy as np
 
 from .common_output import read_events
+from .final_state import FIELD_DEFAULTS as FINAL_STATE_DEFAULTS
 from .kinematics import FIELD_DEFAULTS, KINEMATIC_FIELDS
 from .plots import INTERACTION_ORDER
 from .validate_output import expected_outputs
 
 # Variables reported in the per-interaction tables, with the unit shown in the
 # heading. energy_gev leads: it is the one kinematic column that predates the
-# derived ones and has no placeholder.
+# derived ones and has no placeholder. The final-state multiplicities are left
+# out: a mean pion count says little next to the exclusive-topology fractions
+# an analysis would actually cut on, and the table would double in length.
 REPORT_VARIABLES: tuple[tuple[str, str], ...] = (
     ("energy_gev", "GeV"),
     ("q2_gev2", "GeV^2"),
@@ -50,7 +53,12 @@ REPORT_VARIABLES: tuple[tuple[str, str], ...] = (
     ("lepton_p_parallel_gev", "GeV"),
     ("lepton_p_transverse_gev", "GeV"),
     ("lepton_costheta", ""),
+    ("hadronic_energy_gev", "GeV"),
+    ("hadronic_kinetic_energy_gev", "GeV"),
 )
+
+# The placeholder to strip per column, across both column families.
+PLACEHOLDERS: dict[str, float] = {**FIELD_DEFAULTS, **FINAL_STATE_DEFAULTS}
 
 ALL_LABEL = "all"
 
@@ -110,7 +118,7 @@ def _variable_stats(
     Returns ``None`` when no event has a real value (e.g. ``bjorken_x`` for a
     coherent-only selection), which the formatter renders as a dash.
     """
-    placeholder = FIELD_DEFAULTS.get(field)
+    placeholder = PLACEHOLDERS.get(field)
     if placeholder is None:
         usable = np.isfinite(values)
     else:

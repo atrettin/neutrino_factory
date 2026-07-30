@@ -8,21 +8,35 @@ from unittest.mock import patch
 
 import numpy as np
 
+from tests.final_state_reference import reference_awkward_branches, reference_final_state
 from tests.kinematics_reference import reference_kinematics, reference_lepton_p4
 from neutrino_factory.common_output import read_events
+from neutrino_factory.final_state import FINAL_STATE_FIELDS, NATIVE_CODE_FIELD
 from neutrino_factory.kinematics import FIELD_DEFAULTS, KINEMATIC_FIELDS, MISSING
-from neutrino_factory.normalizers.nuwro import NuWroNormalizer
+from neutrino_factory.normalizers.nuwro import MEV_PER_GEV, NuWroNormalizer
 
 
 def _write_root_tree(
-    path: Path, energies_mev, weights, qel, res, dis, coh, mec, out_counts=None, cc=None
+    path: Path,
+    energies_mev,
+    weights,
+    qel,
+    res,
+    dis,
+    coh,
+    mec,
+    out_counts=None,
+    cc=None,
+    dyn=None,
 ) -> None:
     """Write a synthetic ``treeout`` tree, all momenta in MeV as NuWro does.
 
     ``e/in`` holds [beam neutrino, struck nucleon]; ``e/out`` holds the primary
     outgoing lepton at index 0 and is jagged, so ``out_counts`` can be used to
     give an event no outgoing particles at all. The lepton follows the reference
-    scatter from :func:`kinematics_reference.reference_lepton_p4`.
+    scatter from :func:`kinematics_reference.reference_lepton_p4`. ``e/post`` is
+    the post-FSI list the final-state summary is derived from, and is
+    independent of ``e/out``.
     """
     import awkward as ak
     import uproot
@@ -33,6 +47,9 @@ def _write_root_tree(
     if out_counts is None:
         out_counts = np.ones(count, dtype=np.int64)
     zeros = np.zeros(count, dtype=np.float64)
+    post_pdg, post_e, post_px, post_py, post_pz = reference_awkward_branches(
+        count, momentum_scale=MEV_PER_GEV
+    )
 
     def jagged(component: int):
         return ak.Array([
@@ -63,6 +80,12 @@ def _write_root_tree(
             "e/flag/flag.dis": np.array(dis, dtype=np.bool_),
             "e/flag/flag.coh": np.array(coh, dtype=np.bool_),
             "e/flag/flag.mec": np.array(mec, dtype=np.bool_),
+            "e/post/post.pdg": post_pdg,
+            "e/post/post.t": post_e,
+            "e/post/post.x": post_px,
+            "e/post/post.y": post_py,
+            "e/post/post.z": post_pz,
+            "e/dyn": np.array(np.zeros(count) if dyn is None else dyn, dtype=np.int32),
         }
 
 
@@ -209,6 +232,36 @@ class NuWroNormalizerRootTests(unittest.TestCase):
             for event in events:
                 self.assertGreater(event["xsec_weight"], 0.0)
                 self.assertTrue(np.isfinite(event["xsec_weight"]))
+
+    def test_normalize_root_summarizes_the_final_state_in_gev(self) -> None:
+        """The post-FSI list is in MeV too; the summary must come out in GeV."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.root"
+            _write_root_tree(
+                root_path,
+                energies_mev=[1000.0, 2500.0, 4000.0],
+                weights=[1e-38] * 3,
+                qel=[True, False, False],
+                res=[False, True, False],
+                dis=[False, False, True],
+                coh=[False] * 3,
+                mec=[False] * 3,
+                dyn=[0, 2, 4],
+            )
+            out_path = work_dir / "out.h5"
+
+            NuWroNormalizer().normalize(root_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            expected = reference_final_state()
+            for event in events:
+                for field in FINAL_STATE_FIELDS:
+                    self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+            # dyn = 0 is CC quasi-elastic, which is why the missing-value
+            # placeholder for this column cannot be 0.
+            self.assertEqual([e[NATIVE_CODE_FIELD] for e in events], [0, 2, 4])
 
     def test_normalize_root_derives_kinematics_in_gev(self) -> None:
         """NuWro stores MeV; the common format must come out in GeV."""

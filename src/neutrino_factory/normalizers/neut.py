@@ -6,6 +6,12 @@ from pathlib import Path
 import numpy as np
 
 from ..common_output import version_metadata, write_common_hdf5
+from ..final_state import (
+    NATIVE_CODE_FIELD,
+    event_fields,
+    flatten_particle_arrays,
+    summarize_final_state,
+)
 from ..flux import Flux, HistogramFlux
 from ..kinematics import KINEMATIC_FIELDS, derive_kinematics
 from ..translators.neut import NeutTranslator
@@ -117,10 +123,11 @@ class NeutNormalizer(OutputNormalizer):
     def _normalize_root(self, root_path: Path, out_path, task: dict, mode: str) -> str:
         try:
             import uproot
+            import awkward as ak
         except ImportError as exc:
             raise RuntimeError(
-                "uproot is required to read NEUT ROOT output. "
-                "Install it with: pip install uproot"
+                "uproot and awkward are required to read NEUT ROOT output. "
+                "Install them with: pip install uproot awkward"
             ) from exc
 
         sidecar = root_path.parent / "translated_config.json"
@@ -176,6 +183,24 @@ class NeutNormalizer(OutputNormalizer):
                     "The flattened file predates these branches; regenerate it with "
                     f"the current setup/neut/nf_flatten.C: {exc}"
                 ) from exc
+            try:
+                # The post-FSI particle list nf_flatten.C selects on NEUT's own
+                # fIsAlive/fStatus flags, already in GeV. It includes the
+                # outgoing lepton, which summarize_final_state filters out.
+                final_state_arrays = flatten_particle_arrays(
+                    ak,
+                    tree["fs_pdg"].array(library="ak"),
+                    *(
+                        tree[b].array(library="ak")
+                        for b in ("fs_e_gev", "fs_px_gev", "fs_py_gev", "fs_pz_gev")
+                    ),
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    "Cannot read the final-state particle list from 'fs_pdg' / "
+                    "'fs_*_gev'. The flattened file predates these branches; "
+                    f"regenerate it with the current setup/neut/nf_flatten.C: {exc}"
+                ) from exc
             flux_hist = _find_histogram(
                 f, FLUX_HIST_PREFIX, FLUX_HIST_FALLBACK, root_path
             )
@@ -206,6 +231,7 @@ class NeutNormalizer(OutputNormalizer):
         kinematics = derive_kinematics(
             nu_p4, lepton_p4, interactions, valid=np.asarray(lepton_pdg) != 0
         )
+        final_state = summarize_final_state(*final_state_arrays)
 
         # Declare how much this chunk's estimate is worth, so merging averages
         # the chunks instead of summing them (see ConfigTranslator.xsec_norm_count
@@ -230,8 +256,13 @@ class NeutNormalizer(OutputNormalizer):
                 "probe": probe,
                 "target": target,
                 "generator": self.name,
+                # NEUT's own mode, carried verbatim and *signed*: the sign
+                # distinguishes antineutrino channels, which the common
+                # interaction label folds together.
+                NATIVE_CODE_FIELD: int(neut_mode),
             }
             event.update({field: float(kinematics[field][i]) for field in KINEMATIC_FIELDS})
+            event.update(event_fields(final_state, i))
             events.append(event)
 
         return write_common_hdf5(out_path, metadata, events)
