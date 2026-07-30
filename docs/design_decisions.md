@@ -161,6 +161,10 @@ via `containers.apptainer_dispatch`.
 
 2026-07 — moved to [physics.md](physics.md#derived-kinematic-variables).
 
+## Final-state content in the common output (2026-07-30)
+
+2026-10 — moved to [physics.md](physics.md#final-state-content).
+
 ## `analyze-kinematics`: weighted by default, with the weight efficiency in view
 
 2026-07 — moved to [physics.md](physics.md#weighted-statistics-and-weight-efficiency).
@@ -239,28 +243,9 @@ would generate identical events and inflate the sample's statistics.
 
 ## GiBUU runs without FSI transport, because the output is inclusive (2026-08)
 
-**Decision.** GiBUU jobcards are rendered with `numTimeSteps = 0`, which
-disables the final-state-interaction transport loop. Confirmed as correct rather
-than changed; the code comment that described it as "sufficient for the
-ROOT-output smoke test" was rewritten, since it framed a deliberate physics
-setting as a provisional shortcut.
-
-**Why.** The common output records only initial-vertex quantities — the weight,
-the interaction label, and the two lepton four-vectors — and GiBUU fixes all of
-them before transport begins. GiBUU's own shipped neutrino jobcards document
-`numTimeSteps = 0` as the setting for inclusive cross sections. Measured both
-ways on one jobcard and seed: the hadron multiplicity rose from 1.867 to 3.077
-per event while `sum(weight)`, `evType` and both lepton four-vectors came back
-bit-identical. Full mechanism and numbers in
-[generators/gibuu.md](generators/gibuu.md#final-state-interactions-are-switched-off-deliberately).
-
-**Caveat, and the condition that reverses this.** The equivalence is a property
-of *what we record*, not of the physics: FSI reshapes every hadronic observable.
-Adding one — pion multiplicity, knocked-out nucleons, visible/calorimetric
-energy, or a "CCQE-like" topology classification — requires enabling transport,
-and at that point `write_pert`'s documented habit of omitting events with no
-surviving particles has to be checked, since it would silently remove those
-events' weight from the cross-section sum.
+2026-10 — superseded: the final-state columns are hadronic observables, the
+condition this entry named for reversing it. See the FSI entry below and
+[generators/gibuu.md](generators/gibuu.md#final-state-interactions-are-switched-on).
 
 ## Plots are grouped by the configuration, not by the events
 
@@ -411,3 +396,22 @@ Subtracting the binding energy ourselves: it depends on the local Fermi momentum
 at the vertex, which would mean reimplementing NuWro's density profile. Details
 and measurements are in
 [generators/nuwro.md](generators/nuwro.md#w_true_gev-is-nuwros-own-w-taken-from-the-outgoing-hadrons).
+
+## FSI is on in every generator, set by the framework or the GENIE tune (2026-10)
+
+**Decision.** The final-state columns (multiplicities, hadronic energy; see
+[physics.md](physics.md#final-state-content)) are read from post-FSI particle
+lists, so every generator runs its intranuclear cascade. GiBUU's jobcard moved
+from `numTimeSteps = 0` to 150 × 0.2 fm, the only change of behaviour. NuWro
+(`FSI_on = 1`) and NEUT (`NEUT-NEFF 0`, `NUCRES-RESCAT 1`) already defaulted to
+FSI on; the framework now pins those values, as it already pins NuWro's `dyn_*`
+switches, so the columns do not depend on a generator's built-in defaults.
+GENIE is the exception: hadron transport is part of the tune
+(`HadronTransp-Enable` / `HadronTransp-Model` in each tune's
+`ModelConfiguration.xml`), so the framework leaves it to the tune.
+
+**What it costs.** GiBUU's runtime grows with transport; the figures in
+[performance.md](performance.md) predate it. The inclusive cross section does not
+change — `weight` is fixed at the vertex and inherited through transport, and
+a same-seed C12 run gave bit-identical weights both ways.
+

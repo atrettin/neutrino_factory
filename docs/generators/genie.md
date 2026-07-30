@@ -106,6 +106,12 @@ production arrays. The overlay XML is written into the work directory and
 resolves through `GetXMLFilePath`'s bare-basename fallback from the CWD — no bind
 mount or path remapping needed.
 
+**FSI is the tune's.** Hadron transport is part of each tune's model
+configuration (`HadronTransp-Enable` and `HadronTransp-Model`, e.g.
+`genie::HAIntranuke2018/Default`, in `config/<tune>/ModelConfiguration.xml`),
+and the framework passes no override, so the cascade model is whatever `--tune`
+selects. All 33 tunes in the R-3_06_00 source tree set it on.
+
 **Native binary first.** `build_run_command` checks `shutil.which(gevgen)` before
 considering a container. On the cluster the Slurm task already runs inside the
 Apptainer image (which cannot nest), so the binary must be executed directly
@@ -241,7 +247,9 @@ reconstruct and must say so.
 Tree `gst`, produced by `gntpc`. Branches read: `Ev`, `wght`, `cc`, the mode flags
 `qel`/`res`/`dis`/`coh`/`mec`, the neutrino momentum `(pxv, pyv, pzv)`, the
 lepton four-vector `(El, pxl, pyl, pzl)` and the struck nucleon
-`(En, pxn, pyn, pzn)` with its PDG code `hitnuc` — **all in GeV**, so no unit
+`(En, pxn, pyn, pzn)` with its PDG code `hitnuc`, the post-FSI particle list
+`pdgf`/`Ef`/`pxf`/`pyf`/`pzf` (jagged; it includes the residual nucleus) and
+`neut_code` — **all in GeV**, so no unit
 conversion is applied. For NC events the "outgoing lepton" branches hold the
 scattered neutrino.
 

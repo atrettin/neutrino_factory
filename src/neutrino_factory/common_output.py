@@ -8,7 +8,7 @@ from typing import Any, Iterable
 import h5py
 import numpy as np
 
-from . import kinematics
+from . import final_state, kinematics
 
 LOGGER = logging.getLogger(__name__)
 
@@ -62,6 +62,10 @@ NUMERIC_FIELD_SPECS: dict[str, tuple[type, Any]] = {
     # this one does have a default where `is_cc` does not.
     "resonant_primary": (np.int8, RESONANT_PRIMARY_UNKNOWN),
     **{name: (np.float64, default) for name, default in kinematics.FIELD_DEFAULTS.items()},
+    # Final-state multiplicities, hadronic energy sums, and the generator's own
+    # channel code. All default to placeholders: stub output has no particle
+    # list, and files written before these columns existed must stay readable.
+    **final_state.NUMERIC_FIELD_SPECS,
 }
 
 EVENT_NUMERIC_FIELDS = tuple(NUMERIC_FIELD_SPECS)

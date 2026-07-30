@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import numpy as np
 
+from tests.final_state_reference import reference_awkward_branches, reference_final_state
 from tests.kinematics_reference import (
     reference_kinematics,
     reference_lepton_p4,
@@ -19,6 +20,7 @@ from neutrino_factory.common_output import (
     RESONANT_PRIMARY_YES,
     read_events,
 )
+from neutrino_factory.final_state import FINAL_STATE_FIELDS, NATIVE_CODE_FIELD
 from neutrino_factory.kinematics import KINEMATIC_FIELDS, MISSING
 from neutrino_factory.normalizers.gibuu import GiBUUNormalizer
 
@@ -32,6 +34,7 @@ def _write_roottuple(
     by :func:`reference_lepton_p4`: a beam neutrino along +z with |p| = E, and an
     outgoing lepton at E_l = E/2 with (px, pz) = (0.3E, 0.4E). ``with_nucleon``
     off stands in for a file written before the ``nuc_*`` branches were read.
+    The outgoing particle list is the shared reference final state.
     """
     import uproot
 
@@ -39,6 +42,7 @@ def _write_roottuple(
     lepton = np.asarray(reference_lepton_p4(energies) if lepton_p4 is None else lepton_p4,
                         dtype=np.float64)
     nucleon = reference_nucleon_p4(energies)
+    fs_pdg, fs_e, fs_px, fs_py, fs_pz = reference_awkward_branches(len(energies))
 
     with uproot.recreate(path) as f:
         nucleon_branches = {
@@ -59,6 +63,11 @@ def _write_roottuple(
             "lepOut_Pz": lepton[:, 3],
             "weight": np.array(weight, dtype=np.float64),
             "evType": np.array(evType, dtype=np.int32),
+            "barcode": fs_pdg,
+            "E": fs_e,
+            "Px": fs_px,
+            "Py": fs_py,
+            "Pz": fs_pz,
         }
 
 
@@ -301,6 +310,25 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
                 self.assertAlmostEqual(
                     event["w_true_gev"], reference_kinematics(energy)["w_true_gev"], places=9
                 )
+
+    def test_normalize_root_summarizes_the_final_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            _write_roottuple(
+                _part(work_dir), lepIn_E=[1.0, 2.5, 4.0], weight=[1.0] * 3, evType=[1, 2, 34]
+            )
+            out_path = work_dir / "out.h5"
+
+            GiBUUNormalizer().normalize(work_dir, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            expected = reference_final_state()
+            for event in events:
+                for field in FINAL_STATE_FIELDS:
+                    self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+            # evType is carried through verbatim as the native code.
+            self.assertEqual([e[NATIVE_CODE_FIELD] for e in events], [1, 2, 34])
 
     def test_normalize_root_xsec_weight_matches_hand_derivation_for_flat_flux(self) -> None:
         # Flat power-law flux (gamma=0) over [0.5, 5.0] GeV: the unit-normalized

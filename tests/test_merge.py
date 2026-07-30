@@ -12,6 +12,12 @@ from neutrino_factory.common_output import (
     read_events,
     write_common_hdf5,
 )
+from neutrino_factory.final_state import (
+    FINAL_STATE_FIELDS,
+    MISSING_NATIVE_CODE,
+    NATIVE_CODE_FIELD,
+)
+from neutrino_factory.final_state import FIELD_DEFAULTS as FINAL_STATE_DEFAULTS
 from neutrino_factory.kinematics import FIELD_DEFAULTS, KINEMATIC_FIELDS
 
 
@@ -149,7 +155,7 @@ class MergeValidationTests(unittest.TestCase):
 
 
 class LegacyFileCompatibilityTests(unittest.TestCase):
-    """Files written before the kinematic columns existed must stay usable."""
+    """Files written before the kinematic and final-state columns must stay usable."""
 
     def _write_legacy_chunk(self, path: Path, n: int) -> str:
         events = [
@@ -168,9 +174,10 @@ class LegacyFileCompatibilityTests(unittest.TestCase):
             for i in range(n)
         ]
         write_common_hdf5(path, {"generator": "genie"}, events)
-        # Strip the kinematic datasets to emulate a file from the older schema.
+        # Strip the kinematic and final-state datasets to emulate a file from
+        # the older schema.
         with h5py.File(path, "a") as handle:
-            for field in KINEMATIC_FIELDS:
+            for field in (*KINEMATIC_FIELDS, *FINAL_STATE_FIELDS, NATIVE_CODE_FIELD):
                 del handle["events"][field]
         return str(path)
 
@@ -185,6 +192,9 @@ class LegacyFileCompatibilityTests(unittest.TestCase):
                 self.assertAlmostEqual(event["energy_gev"], 1.0 + event["event_id"])
                 for field in KINEMATIC_FIELDS:
                     self.assertEqual(event[field], FIELD_DEFAULTS[field], msg=field)
+                for field in FINAL_STATE_FIELDS:
+                    self.assertEqual(event[field], FINAL_STATE_DEFAULTS[field], msg=field)
+                self.assertEqual(event[NATIVE_CODE_FIELD], MISSING_NATIVE_CODE)
 
     def test_merging_legacy_and_current_files_succeeds(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -199,6 +209,8 @@ class LegacyFileCompatibilityTests(unittest.TestCase):
             for event in events:
                 for field in KINEMATIC_FIELDS:
                     self.assertEqual(event[field], FIELD_DEFAULTS[field], msg=field)
+                for field in FINAL_STATE_FIELDS:
+                    self.assertEqual(event[field], FINAL_STATE_DEFAULTS[field], msg=field)
 
     def test_a_missing_required_column_still_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

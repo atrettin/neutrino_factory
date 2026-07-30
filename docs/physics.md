@@ -287,7 +287,10 @@ Two properties to be clear about before treating it as a topology label:
   and **30** (NC) for the 1π background — neither is a NEUT mode — and maps NC
   2p2h to **42**, which in NEUT means NC 1η. It is not a faithful round trip.
 
-Adding the column is tracked in `.claude/TODOS.md`.
+The common output carries each generator's own code verbatim in
+`native_interaction_code` (see [final-state content](#final-state-content)): the
+NEUT code itself for NEUT and GENIE, but `e/dyn` and `evType` for NuWro and
+GiBUU, so it is not yet a cross-generator axis.
 
 ### The `resonant_primary` column
 
@@ -534,6 +537,87 @@ above — `w_true_gev` is not commensurable across generators at better than
 *NEUT's `n_nuc`* came out 1 for 18 365 events, **2 for 1531 — all of them mode 2**,
 and 0 for 104. The 2p2h layout the flattener assumes is therefore confirmed per
 event rather than asserted.
+
+## Final-state content
+
+Seven columns summarize the particles that leave the nucleus, derived by one
+shared function, `final_state.summarize_final_state`, from each generator's
+post-FSI particle list: `n_proton`, `n_neutron`, `n_pi_plus`, `n_pi_minus`,
+`n_pi_zero`, `hadronic_energy_gev` (Σ E) and `hadronic_kinetic_energy_gev`
+(Σ (E − m)). An eighth, `native_interaction_code`, carries the generator's own
+channel code.
+
+**Summaries, not particle lists.** The common format is strictly rectangular —
+one 1-D dataset per column (see `common_output.py`). Multiplicities and energy
+sums are what selections such as CC0π, CC1π⁺ or a hadronic-energy threshold are
+made on, and they fit the format as it stands.
+
+### The particle list is post-FSI, and FSI is on in every generator
+
+| Generator | List read | FSI switch |
+|---|---|---|
+| GENIE | `gst` `pdgf`/`Ef`/`pxf`/`pyf`/`pzf` (the `f` family; `i` is pre-FSI) | the tune's `HadronTransp-Enable` / `HadronTransp-Model` in `config/<tune>/ModelConfiguration.xml`; the framework does not override it, and all 33 tunes in the R-3_06_00 source tree set it `true` |
+| NuWro | `e/post` ("particles leaving the nucleus"), not `e/out` | `FSI_on = 1`, pinned in `params.txt`; also NuWro's default (`params_all.h`, nuwro_25.11). With it off, NuWro copies `e/out` into `e/post` |
+| NEUT | the `NeutVect` particles with `fIsAlive && fStatus == 0`, selected in `nf_flatten.C` | `NEUT-NEFF 0` (pion FSI) and `NUCRES-RESCAT 1` (nucleon rescattering), pinned in the card; both are NEUT's defaults per `necard.h` and the shipped `neut_5.4.0_*` cards |
+| GiBUU | the perturbative particles `write_pert` writes after transport | `numTimeSteps = 150`, `delta_T = 0.2` fm (30 fm) — see [generators/gibuu.md](generators/gibuu.md#final-state-interactions-are-switched-on) |
+
+NEUT's array is filtered on its own flags rather than by index because it also
+holds the initial-state nucleons (status −1) and particles killed or replaced
+during the cascade.
+
+### Conventions
+
+All enforced in `summarize_final_state`, so a pion count from GENIE means what
+one from NuWro means:
+
+* **Counts are by exact, signed PDG code**: π⁺ and π⁻ are separate columns, and
+  `n_proton` does not count antiprotons.
+* **"Hadronic" means non-leptonic**: every particle except `|pdg|` in 11..16.
+  Photons and kaons therefore count toward the energy sums — a slight abuse of
+  the name, chosen over silently dropping species that carry energy out of the
+  interaction. Any outgoing lepton in a generator's list is excluded by this
+  rule; it has its own columns.
+* **Nuclear remnants are excluded** (`|pdg| > 1e9`, the `10LZZZAAAI` ion codes).
+  GENIE's list carries the residual nucleus, whose rest mass (~37 GeV for argon)
+  would otherwise dominate `hadronic_energy_gev`.
+* **Mass from the four-vector**, `m = sqrt(E² − |p|²)`, never a lookup table.
+  All four generators supply full four-vectors, so a table would only add a way
+  to disagree with the generator about what it produced.
+* `hadronic_kinetic_energy_gev` is **not** the energy transfer ν. It runs ~85% of
+  ν on average and exceeds it for a minority of events, because FSI-ejected
+  nucleons carry Fermi motion that did not come from the neutrino. Nor is it
+  GENIE's `sumKEf`.
+
+**Placeholders.** The counts default to `-1` and the energies to `-1.0`, both
+unmistakably "not available"; an event with nothing hadronic out is a real zero.
+Stub mode leaves them at their placeholders.
+
+### `native_interaction_code` is the one non-universal column
+
+Its meaning depends on `generator`. It exists so the exact channel split can be
+recovered without the raw files, and nothing in the framework interprets it.
+
+| Generator | Source | Notes |
+| --- | --- | --- |
+| `genie` | `gst` branch `neut_code` | GENIE has no native integer of its own in `gst`; `gntpc` re-encodes its scattering type into NEUT's mode scheme |
+| `neut` | `mode` | signed — negative for antineutrino channels |
+| `gibuu` | `evType` | 1 = QE, 2..31 resonances, 32/33/37 background, 34 = DIS, 35/36 = 2p2h |
+| `nuwro` | `e/dyn` | distinguishes the CC and NC variant of each dynamics |
+
+Its placeholder is `-2**31`: not `0`, because NuWro's `dyn = 0` is CC
+quasi-elastic, and not a small negative number, because NEUT negates its mode
+for antineutrinos.
+
+### Verification
+
+300-event Docker runs of all four generators (2026-07-30; GiBUU then still ran
+without transport). The GENIE multiplicities and `native_interaction_code`
+agree *exactly*, event by event, with `gst`'s own independently filled `nfp`,
+`nfn`, `nfpip`, `nfpim`, `nfpi0` and `neut_code`. In every generator
+`hadronic_kinetic_energy_gev ≤ hadronic_energy_gev` holds for every event;
+quasi-elastic events are 97–100% zero-pion with at least one outgoing nucleon;
+GiBUU's 2p2h events come out with exactly two nucleons; and NuWro's `dyn` maps
+one-to-one onto the common labels (0→qel, 2→res, 4→dis, 6→coh, 8→mec).
 
 ## Weighted statistics and weight efficiency
 
