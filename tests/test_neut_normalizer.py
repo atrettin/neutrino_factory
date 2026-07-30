@@ -23,13 +23,18 @@ def _write_flat_root(
     flux_hist: str = "flux_numu",
     rate_hist: str = "evtrt_numu",
     rate_edges=None,
+    edges=None,
+    flux_contents=None,
     lepton_pdgs=None,
     drop_lepton_branches: bool = False,
 ) -> None:
     """Write the file nf_flatten.C produces: an nf_neut tree + the two TH1Ds.
 
-    The histograms are flat with a known integral ratio, so the flux-averaged
-    cross section the normalizer derives from them is exactly ``sigma_avg``.
+    ``evtrt`` is ``sigma_avg`` times ``flux`` bin by bin, so the flux-averaged
+    cross section the normalizer derives from the two integrals is exactly
+    ``sigma_avg`` whatever the binning. ``edges``/``flux_contents`` override the
+    default flat spectrum on a uniform grid; ``flux_contents`` are per-bin
+    integrals, the convention NeutAdapter writes and the normalizer undoes.
 
     Four-vectors follow the reference scatter from
     :func:`kinematics_reference.reference_lepton_p4` and, like nf_flatten.C's
@@ -38,9 +43,13 @@ def _write_flat_root(
     """
     import uproot
 
-    edges = np.linspace(0.5, 5.0, 11)
-    flux = np.ones(10, dtype=np.float64)
-    rate = np.full(10, sigma_avg, dtype=np.float64)
+    edges = np.linspace(0.5, 5.0, 11) if edges is None else np.asarray(edges, np.float64)
+    flux = (
+        np.ones(len(edges) - 1, dtype=np.float64)
+        if flux_contents is None
+        else np.asarray(flux_contents, dtype=np.float64)
+    )
+    rate = sigma_avg * flux
     energies = np.array(energies_gev, dtype=np.float64)
     lepton = reference_lepton_p4(energies)
     if lepton_pdgs is None:
@@ -301,13 +310,59 @@ class NeutNormalizerRootTests(unittest.TestCase):
             _, events = read_events(out_path)
             self.assertEqual([e["interaction"] for e in events], ["qel", "coh"])
 
+    def test_xsec_weight_follows_the_stamped_flux_not_the_config(self) -> None:
+        """The divisor is NEUT's own flux_numu histogram, on its native binning.
+
+        The config flux here is *flat* while the histogram NEUT stamped out
+        falls steeply on an unequal-width (log) grid. If the normalizer rebuilt
+        the flux from the config — as it used to — every event would come back
+        with the same weight. It must instead divide by the piecewise-constant
+        density NEUT actually sampled: contents are per-bin integrals, so the
+        density in bin b is content_b / width_b, and two events in different
+        bins must have weights in inverse ratio to those densities.
+        """
+        edges = np.geomspace(0.5, 5.0, 5)
+        widths = np.diff(edges)
+        # Per-bin integrals of a steeply falling density.
+        density = np.array([80.0, 8.0, 0.8, 0.08])
+        contents = density * widths
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, gamma=0.0)
+            root_path = work_dir / "events.flat.root"
+            # One event near the middle of the first and of the last bin.
+            centers = np.sqrt(edges[:-1] * edges[1:])
+            _write_flat_root(
+                root_path,
+                [centers[0], centers[-1]],
+                [1, 1],
+                sigma_avg=0.75,
+                edges=edges,
+                flux_contents=contents,
+            )
+            out_path = work_dir / "out.h5"
+
+            NeutNormalizer().normalize(root_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            ratio = events[1]["xsec_weight"] / events[0]["xsec_weight"]
+            self.assertAlmostEqual(ratio, density[0] / density[-1], places=6)
+            # And the absolute scale: sigma_avg / (N * phi_hat) with phi_hat the
+            # unit-normalized density of the bin the event fell in.
+            integral = float(np.sum(density * widths))
+            self.assertAlmostEqual(
+                events[0]["xsec_weight"], 0.75 * integral / (2 * density[0]), places=9
+            )
+
     def test_xsec_weight_matches_hand_derivation_for_flat_flux(self) -> None:
         """Flat flux and flat histograms make every weight the same number.
 
-        With gamma = 0 the normalized flux density is 1 / (emax - emin)
-        everywhere, so xsec_weight reduces to sigma_avg * (emax - emin) / N.
-        sigma_avg itself is fixed by the flux/evtrt histograms written above:
-        their bin contents are 1.0 and 0.75, so the ratio of integrals is 0.75.
+        The stamped flux_numu here is flat on ten equal-width bins over
+        [0.5, 5.0], so the normalized density is 1 / (emax - emin) everywhere and
+        xsec_weight reduces to sigma_avg * (emax - emin) / N. sigma_avg itself is
+        fixed by the flux/evtrt histograms written above: their bin contents are
+        1.0 and 0.75, so the ratio of integrals is 0.75.
         """
         sigma_avg = 0.75
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
+
 from neutrino_factory.config import resolve_config
 from neutrino_factory.generators.neut import NeutAdapter
 from neutrino_factory.translators.neut import NeutTranslator
@@ -84,9 +86,18 @@ class NeutAdapterArtifactTests(unittest.TestCase):
             self.assertEqual(values[0], 4242)
             self.assertEqual(values[1:], [0] * 24)
 
-    def test_flux_file_holds_the_translator_binning(self) -> None:
+    def test_flux_file_holds_log_bins_of_per_bin_integrals(self) -> None:
+        """The two conventions NEUT's histogram driver depends on.
+
+        Log spacing, because the flux bins are also the resolution of the
+        reconstructed sigma(E); and per-bin *integrals* rather than densities,
+        because NEUT picks a bin in proportion to its raw content and ignores
+        the bin widths. Densities on an unequal-width grid would generate a
+        spectrum tilted by one power of the bin width.
+        """
         import uproot
 
+        from neutrino_factory.flux import build_flux
         from neutrino_factory.translators.neut import FLUX_NBINS
 
         config = _config()
@@ -98,11 +109,19 @@ class NeutAdapterArtifactTests(unittest.TestCase):
 
             with uproot.open(work_dir / "flux.root") as f:
                 contents, edges = f["nf_flux"].to_numpy()
-            self.assertEqual(len(contents), FLUX_NBINS)
-            self.assertAlmostEqual(edges[0], 0.5)
-            self.assertAlmostEqual(edges[-1], 5.0)
-            # Falling E^-2 spectrum.
-            self.assertTrue(all(b < a for a, b in zip(contents, contents[1:])))
+
+        self.assertEqual(len(contents), FLUX_NBINS)
+        self.assertAlmostEqual(edges[0], 0.5)
+        self.assertAlmostEqual(edges[-1], 5.0)
+        # Log spacing: a constant ratio between successive edges.
+        ratios = edges[1:] / edges[:-1]
+        np.testing.assert_allclose(ratios, ratios[0], rtol=1e-9)
+        # Contents are density(bin center) * bin width.
+        flux = build_flux(config["flux"])
+        widths = np.diff(edges)
+        centers = 0.5 * (edges[:-1] + edges[1:])
+        expected = np.array([flux(float(c)) for c in centers]) * widths
+        np.testing.assert_allclose(contents, expected, rtol=1e-12)
 
 
 class NeutAdapterCommandBranchTests(unittest.TestCase):

@@ -7,11 +7,19 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from .base import GeneratorAdapter
 from .. import containers
 from ..flux import build_flux
 from ..normalizers.neut import NeutNormalizer
-from ..translators.neut import FLUX_FILE, FLUX_HIST, FLUX_NBINS, NeutTranslator
+from ..translators.neut import (
+    FLUX_FILE,
+    FLUX_HIST,
+    FLUX_NBINS,
+    FLUX_SPACING,
+    NeutTranslator,
+)
 
 # Fixed artifact names inside the task work directory.
 CARD_FILE = "neut.card"
@@ -86,10 +94,21 @@ class NeutAdapter(GeneratorAdapter):
         """Write the flux as a TH1D for NEUT's EVCT-MPV 3 histogram driver.
 
         NEUT has no function-flux driver, so power-law and histogram fluxes both
-        go through ``Flux.to_histogram``. Writing the histogram here (rather
-        than handing NEUT the user's original ROOT file, as GENIE does) keeps the
-        binning used to generate identical to the binning
-        ``NeutTranslator.compute_xsec_weight`` reweights with.
+        go through ``Flux.to_histogram``, and NEUT is handed a histogram we wrote
+        rather than the user's original ROOT file as GENIE is. The reweighting
+        does not rely on reproducing this call: it reads back the copy NEUT
+        stamps into its own output (``NeutNormalizer._generated_flux``).
+
+        Bin contents are per-bin *integrals* (density x width), not densities.
+        NEUT picks a bin in proportion to its raw content and ignores the widths
+        (``TH1::ComputeIntegral`` semantics, measured — see
+        ``NeutTranslator.compute_xsec_weight``), so on the log-spaced grid used
+        here densities would sample a spectrum tilted by one power of the bin
+        width. This is the same convention as GENIE's ``WIDTH`` flux field, only
+        applied ahead of time because NEUT has no equivalent switch. It also
+        makes the ``evtrt``/``flux`` integral ratio NEUT stamps out a correctly
+        flux-weighted cross-section average on any binning
+        (``NeutNormalizer._flux_averaged_xsec``).
         """
         try:
             import uproot
@@ -99,10 +118,12 @@ class NeutAdapter(GeneratorAdapter):
                 "Install it with: pip install uproot"
             ) from exc
 
-        edges, contents = self._flux().to_histogram(nbins=FLUX_NBINS)
+        edges, contents = self._flux().to_histogram(
+            nbins=FLUX_NBINS, spacing=FLUX_SPACING
+        )
         flux_path = work_dir / FLUX_FILE
         with uproot.recreate(flux_path) as handle:
-            handle[FLUX_HIST] = (contents, edges)
+            handle[FLUX_HIST] = (contents * np.diff(edges), edges)
         return flux_path
 
     @staticmethod
