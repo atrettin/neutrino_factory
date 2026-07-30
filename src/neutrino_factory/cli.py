@@ -16,7 +16,7 @@ from .kinematics_report import (
 )
 from .local import run_local, run_task_from_manifest
 from .merge import merge_outputs
-from .plots import DEFAULT_BINS, make_plots
+from .plots import DEFAULT_BINS, make_config_plots, make_plots
 from .slurm import write_manifest, write_sbatch_script
 from .validate_output import (
     expected_outputs,
@@ -234,6 +234,17 @@ def cmd_merge(args: argparse.Namespace) -> int:
 
 
 def cmd_plot_output(args: argparse.Namespace) -> int:
+    if args.config:
+        config = load_config(args.config)
+        if not config.get("enabled_generator_instances"):
+            raise RuntimeError(
+                f"{args.config} declares no enabled generator versions, so there "
+                "are no merged outputs to plot."
+            )
+        written = make_config_plots(config, args.output_dir, bins=args.bins)
+        _print_json({"config": args.config, "plots": written})
+        return 0
+
     written = make_plots(args.input, args.output_dir, args.prefix, bins=args.bins)
     _print_json({"input": args.input, "plots": written})
     return 0
@@ -610,29 +621,48 @@ def build_parser() -> argparse.ArgumentParser:
 
     plot_parser = subparsers.add_parser(
         "plot-output",
-        help="Plot a normalized HDF5 output file",
+        help="Plot normalized HDF5 output",
         description=(
-            "Render five diagnostic plots from a single common-output HDF5 file: "
-            "a stacked horizontal bar of event counts by interaction type (with the "
-            "expected event count indicated), the simulated flux vs. energy, a "
-            "histogram of the simulated event energies (raw and weighted), and the "
-            "cross section vs. energy broken down by interaction type. Writes five "
-            "separate PNG files (<prefix>_interactions.png, <prefix>_flux.png, "
-            "<prefix>_energy.png, <prefix>_energy_weighted.png, "
-            "<prefix>_xsec_by_type.png)."
+            "Render four diagnostic plots per common-output HDF5 file: a stacked "
+            "horizontal bar of event counts by interaction type (with the expected "
+            "event count indicated), a histogram of the simulated event energies "
+            "(raw and weighted), and the cross section vs. energy broken down by "
+            "interaction type — split into a CC and an NC panel when the dataset "
+            "contains both currents. Writes four PNG files per dataset "
+            "(<prefix>_interactions.png, <prefix>_energy.png, "
+            "<prefix>_energy_weighted.png, <prefix>_xsec_by_type.png). Give either "
+            "a single --input file or a --config, in which case every merged output "
+            "the run is expected to produce is plotted separately (into "
+            "<output_root>/plots by default), plus a six-panel figure comparing the "
+            "datasets channel by channel — one per weak current "
+            "(<run_name>_comparison_cc.png / _nc.png)."
         ),
         epilog=(
-            "Example:\n"
-            "  neutrino-factory plot-output --input output/merged/run_genie_ver.h5"
+            "Examples:\n"
+            "  neutrino-factory plot-output --input output/merged/run_genie_ver.h5\n"
+            "  neutrino-factory plot-output --config configs/smoke/genie_c12.yaml"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    plot_parser.add_argument("--input", required=True, help="HDF5 file to plot")
-    plot_parser.add_argument(
-        "--output-dir", help="Directory to write PNGs into (default: alongside the input)"
+    plot_source = plot_parser.add_mutually_exclusive_group(required=True)
+    plot_source.add_argument("--input", help="A single common-output HDF5 file to plot")
+    plot_source.add_argument(
+        "--config",
+        help="Run configuration whose merged outputs are discovered and plotted",
     )
     plot_parser.add_argument(
-        "--prefix", help="Filename prefix for the PNGs (default: the input file stem)"
+        "--output-dir",
+        help=(
+            "Directory to write PNGs into (default: alongside the input, or "
+            "<output_root>/plots with --config)"
+        ),
+    )
+    plot_parser.add_argument(
+        "--prefix",
+        help=(
+            "Filename prefix for the PNGs (default: the input file stem). "
+            "--input mode only; --config mode derives one prefix per file"
+        ),
     )
     plot_parser.add_argument(
         "--bins",

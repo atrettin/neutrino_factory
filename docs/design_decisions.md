@@ -607,3 +607,25 @@ follow the `NEUT-CRS` mask, so a masked run is normalized to its own current and
 not the inclusive total; and the two ambiguous "coherent" slots resolve as
 CC-then-NC, since the CC-masked run produced mode 16 (CC coherent) and no mode
 36, and the NC-masked run the reverse.
+
+## Plots decide CC vs. NC from the data, not from `physics.current`
+
+`plot-output` splits the cross-section figure into a CC and an NC panel when a
+dataset is *inclusive*, and it decides that from the `is_cc` column of the file
+it is plotting — a panel is drawn for a current only if the file actually holds
+events of that current — rather than from the run configuration's
+`physics.current`.
+
+Two reasons. First, `--input` mode is handed a bare HDF5 file with no config in
+sight, and the file is the authority on its own contents in any case; keying off
+the data means the single-file and `--config` paths cannot disagree. Second, a
+configured-inclusive run that produced no NC events (a small run, or a generator
+whose NC channels were all masked out) would otherwise get an empty NC panel
+that looks like a physics result of zero. One panel labelled CC is the honest
+rendering of a file that contains only CC events.
+
+The consequence to be aware of: the panel layout of a figure describes the
+sample, not the request. An inclusive run whose NC events are simply missing
+produces a one-panel figure, which is a signal worth investigating rather than a
+plotting artefact — `check-status` and `analyze-kinematics` are the tools for
+confirming the run itself is complete.
