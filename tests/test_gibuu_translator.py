@@ -57,6 +57,25 @@ class GiBUUTranslatorFluxTests(unittest.TestCase):
         spacings = [b - a for a, b in zip(energies, energies[1:])]
         self.assertTrue(all(abs(s - spacings[0]) < 1e-9 for s in spacings))
 
+    def test_jobcard_enables_every_available_reaction_channel(self) -> None:
+        # All of these default to .false. in GiBUU except includeQE, and the
+        # output is meant to be inclusive. include2pi in particular was missing
+        # and biased the total cross section low.
+        jobcard = _only_jobcard(GiBUUTranslator().translate(self._config(), _task()))
+        for switch in (
+            "includeQE",
+            "includeDELTA",
+            "includeRES",
+            "includeDIS",
+            "include1pi",
+            "include2pi",
+            "include2p2hQE",
+        ):
+            with self.subTest(switch=switch):
+                self.assertRegex(jobcard, rf"{switch}\s*=\s*\.true\.")
+        # 2p2h Delta is unpublished: release2025 aborts the run if it is on.
+        self.assertRegex(jobcard, r"include2p2hDelta\s*=\s*\.false\.")
+
     def test_monoenergetic_fallback_when_range_degenerate(self) -> None:
         translated = GiBUUTranslator().translate(
             self._config(emin_gev=2.0, emax_gev=2.0), _task()

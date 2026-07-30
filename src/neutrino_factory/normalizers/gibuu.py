@@ -39,23 +39,52 @@ def pass_output_dirs(work_dir: Path) -> list[tuple[str, Path]]:
     ]
 
 
+# Highest GiBUU final-state code (``max_finalstate_ID`` in
+# code/init/neutrino/initNeutrino.f90). The code space is closed and fully
+# documented there, so an out-of-range value means our reading of the output is
+# wrong, not that GiBUU produced an exotic event -- hence the hard error below.
+MAX_GIBUU_EVTYPE = 37
+
+
 def _interaction_from_evtype(ev_type: int) -> str:
     """Map GiBUU's ``evType`` event-class code to the common interaction label.
 
-    GiBUU's neutrino event classification (see the ``EventInfo``/``K2Hist``
-    convention): 1 = QE, 2..31 = resonances (2 = Delta), 32/33 = non-resonant
-    1-pion background, 34 = DIS, 35/36 = 2p2h (MEC). Everything else is bucketed
-    as ``other``. Confirmed against a real release2025 numu-CC carbon run.
+    ``evType`` in the RootTuple output is GiBUU's ``prod_id``
+    (code/inputOutput/EventOutput.f90), whose authoritative table is
+    code/init/neutrino/initNeutrino.f90 (``max_finalstate_ID = 37``):
+
+    * 1: nucleon (QE)
+    * 2-31: non-strange baryon resonance (2 = Delta)
+    * 32: pi neutron-background (e.g. nu + n -> mu + pi+ + n)
+    * 33: pi proton-background  (e.g. nu + n -> mu + pi0 + p)
+    * 34: DIS
+    * 35: 2p2h QE
+    * 36: 2p2h Delta
+    * 37: two pion background
+
+    The 1-pion and 2-pion backgrounds (32, 33, 37) are GiBUU's *non-resonant*
+    shallow-inelastic contribution, generated for 1.2 < W < ``REScutW`` from a
+    MAID-like amplitude with the resonances subtracted (or the Bosted-Christy
+    background fit) and switched off exactly where the PYTHIA/DIS piece switches
+    on. They are labelled ``dis`` to match GENIE, which has no separate shallow
+    category: GENIE's non-resonant background comes from its DIS generator with
+    the KNO multiplicity tune applied below ``Wcut``, and so carries the gst
+    ``dis`` flag. GiBUU's own NuHepMC exporter instead calls them SIS -- see
+    docs/design_decisions.md for why we follow GENIE here.
     """
     if ev_type == 1:
         return "qel"
     if 2 <= ev_type <= 31:
         return "res"
-    if ev_type == 34:
+    if ev_type in (32, 33, 34, 37):
         return "dis"
     if ev_type in (35, 36):
         return "mec"
-    return "other"
+    raise ValueError(
+        f"Unknown GiBUU evType {ev_type}: outside the documented code range "
+        f"1..{MAX_GIBUU_EVTYPE} (max_finalstate_ID in initNeutrino.f90). "
+        "Refusing to guess an interaction category for it."
+    )
 
 
 class GiBUUNormalizer(OutputNormalizer):

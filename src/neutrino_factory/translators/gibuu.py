@@ -302,6 +302,18 @@ class GiBUUTranslator(ConfigTranslator):
         # output. numTimeSteps=0 skips FSI transport for a fast, valid event
         # file (sufficient for the ROOT-output smoke test).
         #
+        # Every reaction channel GiBUU makes available is switched on, because
+        # the output is meant as an inclusive cross-section estimate; all but
+        # includeQE default to .false. include2pi is easy to forget and biases
+        # the total low: with new_eN=.true. (the default) GiBUU scales the
+        # 1-pion background *down* above W=1.267 "to allow for 2pi contribution"
+        # (neutrinoXsection.f90), and leaving 2pi off never adds that strength
+        # back. include2p2hDelta is the one switch left off, and not by choice:
+        # release2025 aborts on it via notInRelease("2p2p Delta")
+        # (initNeutrino.f90:689) because the feature is unpublished. MEC is
+        # therefore 2p2h-QE only, and evType 36 cannot occur; revisit when a
+        # release enables it.
+        #
         # Flux mode (enu_gev is None): nuExp=99 (user flux) + nuXsectionMode=16
         # (EXP_dSigmaMC) reads the equidistant (energy, flux) table at
         # FileNameFlux. Monoenergetic fallback (enu_gev set): nuExp=0 +
@@ -345,12 +357,14 @@ class GiBUUTranslator(ConfigTranslator):
       process_ID     = {process_id}   ! CC=2, NC=3 (negative = antineutrino)
       flavor_ID      = {flavor_id}    ! 1=e, 2=mu, 3=tau
 {xsection_block}
-      includeQE      = .true.
-      includeDELTA   = .true.
-      includeRES     = .true.
-      includeDIS     = .true.
-      include1pi     = .true.
-      include2p2hQE  = .true.
+      includeQE        = .true.
+      includeDELTA     = .true.
+      includeRES       = .true.
+      includeDIS       = .true.
+      include1pi       = .true.    ! non-resonant 1pi background
+      include2pi       = .true.    ! non-resonant 2pi background
+      include2p2hQE    = .true.
+      include2p2hDelta = .false.   ! not released yet (see comment above)
 /
 {sigma_mc_block}&neutrinoAnalysis
       outputEvents = .false.

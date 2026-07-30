@@ -231,20 +231,43 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
             work_dir = Path(tmpdir)
             _write_sidecar(work_dir)
             root_path = _part(work_dir)
+            # Every code GiBUU documents (initNeutrino.f90, max_finalstate_ID=37).
+            # 32/33/37 are the non-resonant 1pi/2pi backgrounds, which GENIE would
+            # have produced with its DIS model and flagged dis.
+            ev_types = [1, 2, 31, 32, 33, 34, 35, 36, 37]
             _write_roottuple(
                 root_path,
-                lepIn_E=[1.0] * 6,
-                weight=[1.0] * 6,
-                evType=[1, 2, 31, 34, 35, 100],
+                lepIn_E=[1.0] * len(ev_types),
+                weight=[1.0] * len(ev_types),
+                evType=ev_types,
             )
             out_path = work_dir / "out.h5"
-            task = {**_base_task(), "event_count": 6}
+            task = {**_base_task(), "event_count": len(ev_types)}
 
             GiBUUNormalizer().normalize(work_dir, out_path, task, "local")
 
             _, events = read_events(out_path)
             interactions = [e["interaction"] for e in events]
-            self.assertEqual(interactions, ["qel", "res", "res", "dis", "mec", "other"])
+            self.assertEqual(
+                interactions,
+                ["qel", "res", "res", "dis", "dis", "dis", "mec", "mec", "dis"],
+            )
+
+    def test_normalize_root_raises_on_undocumented_evtype(self) -> None:
+        for bad in (0, 38, 100):
+            with self.subTest(ev_type=bad), tempfile.TemporaryDirectory() as tmpdir:
+                work_dir = Path(tmpdir)
+                _write_sidecar(work_dir)
+                root_path = _part(work_dir)
+                _write_roottuple(
+                    root_path, lepIn_E=[1.0, 1.0], weight=[1.0, 1.0], evType=[1, bad]
+                )
+                out_path = work_dir / "out.h5"
+                task = {**_base_task(), "event_count": 2}
+
+                with self.assertRaises(ValueError) as ctx:
+                    GiBUUNormalizer().normalize(work_dir, out_path, task, "local")
+                self.assertIn(str(bad), str(ctx.exception))
 
     def test_normalize_root_raises_without_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
