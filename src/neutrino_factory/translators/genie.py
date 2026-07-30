@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 from typing import Any
@@ -132,6 +131,11 @@ class GenieTranslator(ConfigTranslator):
             # For GENIE, config_version is the tune and code_version is the git tag.
             "code_version": task["code_version"],
             "config_version": task["config_version"],
+            # Resolved here (same process and cwd as generation) so the sidecar's
+            # spline root does not depend on where normalization happens to run.
+            "software_root": str(
+                Path(config["storage"]["software_root"]).expanduser().resolve()
+            ),
             "generator_version_id": task.get("generator_version_id"),
         }
 
@@ -292,7 +296,16 @@ class GenieTranslator(ConfigTranslator):
 
         code_version = str(translated_config.get("code_version") or "")
         tune = str(translated_config.get("config_version") or "")
-        software_root = os.environ.get("NF_SOFTWARE_ROOT", "./software")
+        # The root must be the one generation used (storage.software_root, carried
+        # in the sidecar) - falling back to NF_SOFTWARE_ROOT could silently point
+        # at a different tune's splines and produce a wrong xsec_weight.
+        software_root = translated_config.get("software_root")
+        if not software_root:
+            raise RuntimeError(
+                "translated_config carries no 'software_root'; it is required to "
+                "locate the GENIE cross-section splines for xsec_weight. Re-run "
+                "generation with the current GenieTranslator."
+            )
         xml_path = GenieAdapter.genie_xsecs_xml(software_root, code_version, tune)
         if xml_path is None:
             raise RuntimeError(
