@@ -232,6 +232,76 @@ Files: `translators/gibuu.py` (`NUM_RUNS_SAME_ENERGY`, `compute_xsec_weight`),
 `normalizers/gibuu.py` (`_normalize_root` wires it in via the sidecar
 `flux_config`). Monoenergetic runs skip the flux division (`raw / num_runs`).
 
+## GiBUU non-resonant background events are `dis`, and every channel is enabled (2026-07)
+
+**Context.** A high-statistics GiBUU run put ~10% of its events (31 885 of
+313 389) into the `other` interaction bucket — more than the entire `res`
+category. `_interaction_from_evtype` in `normalizers/gibuu.py` mapped only
+1 → `qel`, 2–31 → `res`, 34 → `dis`, 35/36 → `mec`, and let everything else fall
+through to `other`.
+
+**What the codes are.** `evType` in the RootTuple output is GiBUU's `prod_id`
+(`code/inputOutput/EventOutput.f90:1138`), whose authoritative and *closed* table
+is `code/init/neutrino/initNeutrino.f90:296-307` (`max_finalstate_ID = 37`):
+1 = nucleon (QE); 2–31 = non-strange baryon resonance (2 = Delta);
+**32 = pi neutron-background**, **33 = pi proton-background**; 34 = DIS;
+35 = 2p2h QE; 36 = 2p2h Delta; **37 = two pion background**. The missing 32/33
+account for the `other` bucket.
+
+**Should they be counted at all? Yes.** 32/33/37 are GiBUU's *non-resonant*
+shallow-inelastic contribution, generated only for 1.2 < W < `REScutW`
+(default 2.0 GeV) either from a MAID-like amplitude with the resonance
+contributions subtracted or from the Bosted–Christy background fit
+(`neutrinoXsection.f90:564-700`). They do not double-count anything: GiBUU damps
+them with `Sigmoid(W, REScutW, -0.05)` exactly where the PYTHIA/DIS piece turns
+on (`case (chDIS)` returns unless `W > REScutW - 0.1`). Dropping them would
+understate the inclusive cross section.
+
+**Decision: label them `dis`.** The categorization is pinned to GENIE — an event
+gets the category it would have had if GENIE had produced it. GENIE has no
+shallow-inelastic category: its non-resonant background is produced by the DIS
+generator (`DISInteractionListGenerator.cxx:77` creates `kScDeepInelastic` for all
+W) with the KNO multiplicity tune applied below `Wcut`
+(`KNOTunedQPMDISPXSec.cxx:195-237`), and `gNtpConv.cxx:646-649` fills the gst
+`dis` flag straight from `ProcInfo().IsDeepInelastic()`. So a GiBUU 1π/2π
+background event is `dis` under GENIE's conventions. `res` would be wrong:
+GENIE's `res` is purely Rein–Sehgal resonant and GiBUU's background has the
+resonances subtracted.
+
+**Caveat.** GiBUU disagrees with this grouping internally: its own NuHepMC
+exporter (`EventOutput.f90:1447-1499`) assigns 32/33 → `SIS_ID` 500/501 and
+37 → 502, distinct from `DIS_ID` 600. We accept the coarser merge because
+cross-generator comparability with GENIE/NEUT/NuWro — none of which expose a
+shallow category either — is worth more here than preserving a distinction only
+one generator can make. A future `sis` label would have to be introduced for all
+four generators at once, and for GENIE it is not recoverable from the gst output.
+
+**Fail loudly instead of bucketing.** Since the code space is closed, an
+`evType` outside 1–37 means our reading of the output is wrong, not that GiBUU
+invented a channel. `_interaction_from_evtype` now raises `ValueError` naming the
+code rather than silently producing `other` — the catch-all is what hid this bug.
+GiBUU consequently never emits `other` (nor `coh`, as before).
+
+**The 2π background channel was also switched off.** All GiBUU channel switches
+except `includeQE` default to `.false.`, and the jobcard was missing
+`include2pi`. That biases the total low rather than merely omitting a category:
+with `new_eN = .true.` (the default, `neutrinoParms.f90:260`) GiBUU scales the 1π
+background *down* above W = 1.267 "to allow for 2pi contribution"
+(`neutrinoXsection.f90:652-656`), and with 2π off that strength is never added
+back. It is now enabled, and its events land in `dis` with the rest of the
+non-resonant background.
+
+`include2p2hDelta` is the one switch left off, and not by choice: release2025
+aborts the run outright via `notInRelease("2p2p Delta")`
+(`initNeutrino.f90:689`) because the feature is unpublished. MEC is therefore
+2p2h-QE only and `evType` 36 cannot occur in this release — the mapping keeps it
+for a future one.
+
+Files: `normalizers/gibuu.py` (`_interaction_from_evtype`, `MAX_GIBUU_EVTYPE`),
+`translators/gibuu.py` (jobcard `&neutrino_induced` block). Source line numbers
+above refer to GiBUU release2025 and GENIE R-3_06_00 as staged in the local
+`gibuu:release2025` / `genie:R-3_06_00` images.
+
 ## NEUT: a payload extracted from a published image, not built from source
 
 **Context.** Every other generator is built from a git ref by a Dockerfile plus a
