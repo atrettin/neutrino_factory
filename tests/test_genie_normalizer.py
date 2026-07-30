@@ -82,7 +82,12 @@ def _write_input_flux(
     return path
 
 
-def _write_sidecar(work_dir: Path, emin_gev: float = 0.5, emax_gev: float = 10.0) -> None:
+def _write_sidecar(
+    work_dir: Path,
+    software_root: Path,
+    emin_gev: float = 0.5,
+    emax_gev: float = 10.0,
+) -> None:
     sidecar = {
         "probe": "numu",
         "probe_pdg": 14,
@@ -101,6 +106,9 @@ def _write_sidecar(work_dir: Path, emin_gev: float = 0.5, emax_gev: float = 10.0
         },
         "code_version": "R-3_06_00",
         "config_version": "G18_10a_02_11a",
+        # Written by GenieTranslator.translate from storage.software_root; the
+        # spline lookup for xsec_weight uses this, not NF_SOFTWARE_ROOT.
+        "software_root": str(software_root),
     }
     (work_dir / "translated_config.json").write_text(json.dumps(sidecar), encoding="utf-8")
     # The normalizer divides events by the flux gevgen actually sampled, read
@@ -194,8 +202,13 @@ class GenieNormalizerJsonTests(unittest.TestCase):
 class GenieNormalizerRootTests(unittest.TestCase):
     def setUp(self) -> None:
         self._software_root_dir = tempfile.TemporaryDirectory()
-        _write_fake_xsecs_xml(Path(self._software_root_dir.name), xsec_internal=1.0e-15)
-        self._env_patch = patch.dict(os.environ, {"NF_SOFTWARE_ROOT": self._software_root_dir.name})
+        self._software_root = Path(self._software_root_dir.name)
+        _write_fake_xsecs_xml(self._software_root, xsec_internal=1.0e-15)
+        # Point NF_SOFTWARE_ROOT somewhere with no splines: the spline lookup must
+        # succeed purely from the config-derived root carried in the sidecar.
+        self._env_patch = patch.dict(
+            os.environ, {"NF_SOFTWARE_ROOT": str(self._software_root / "not-the-config-root")}
+        )
         self._env_patch.start()
 
     def tearDown(self) -> None:
@@ -205,7 +218,7 @@ class GenieNormalizerRootTests(unittest.TestCase):
     def test_normalize_gst_root_reads_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
-            _write_sidecar(work_dir)
+            _write_sidecar(work_dir, self._software_root)
             gst_path = work_dir / "events.gst.root"
             _write_gst_root(
                 gst_path,
@@ -241,7 +254,7 @@ class GenieNormalizerRootTests(unittest.TestCase):
     def test_normalize_gst_root_event_ids_start_at_start_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
-            _write_sidecar(work_dir)
+            _write_sidecar(work_dir, self._software_root)
             gst_path = work_dir / "events.gst.root"
             _write_gst_root(
                 gst_path,
@@ -284,7 +297,7 @@ class GenieNormalizerRootTests(unittest.TestCase):
     def test_normalize_dispatches_root_on_root_suffix(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
-            _write_sidecar(work_dir)
+            _write_sidecar(work_dir, self._software_root)
             gst_path = work_dir / "events.gst.root"
             _write_gst_root(
                 gst_path,
@@ -305,7 +318,7 @@ class GenieNormalizerRootTests(unittest.TestCase):
     def test_normalize_gst_root_all_interaction_types(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
-            _write_sidecar(work_dir)
+            _write_sidecar(work_dir, self._software_root)
             gst_path = work_dir / "events.gst.root"
             _write_gst_root(
                 gst_path,
@@ -331,7 +344,7 @@ class GenieNormalizerRootTests(unittest.TestCase):
         # alike: only the cc branch separates them.
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
-            _write_sidecar(work_dir)
+            _write_sidecar(work_dir, self._software_root)
             gst_path = work_dir / "events.gst.root"
             _write_gst_root(
                 gst_path,
@@ -355,7 +368,7 @@ class GenieNormalizerRootTests(unittest.TestCase):
     def test_normalize_gst_root_derives_kinematics(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
-            _write_sidecar(work_dir)
+            _write_sidecar(work_dir, self._software_root)
             gst_path = work_dir / "events.gst.root"
             energies = [1.0, 2.5, 4.0]
             _write_gst_root(
@@ -389,7 +402,7 @@ class GenieNormalizerRootTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
-            _write_sidecar(work_dir)
+            _write_sidecar(work_dir, self._software_root)
             gst_path = work_dir / "events.gst.root"
             energies = np.array([1.0, 2.5, 4.0])
             _write_gst_root(
@@ -422,7 +435,7 @@ class GenieNormalizerRootTests(unittest.TestCase):
     def test_normalize_gst_root_blanks_bjorken_x_for_coherent(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
-            _write_sidecar(work_dir)
+            _write_sidecar(work_dir, self._software_root)
             gst_path = work_dir / "events.gst.root"
             _write_gst_root(
                 gst_path,
@@ -458,7 +471,7 @@ class GenieNormalizerRootTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
             emin, emax = 0.5, 5.0
-            _write_sidecar(work_dir, emin_gev=emin, emax_gev=emax)
+            _write_sidecar(work_dir, self._software_root, emin_gev=emin, emax_gev=emax)
             gst_path = work_dir / "events.gst.root"
             _write_gst_root(
                 gst_path,
@@ -492,7 +505,7 @@ class GenieNormalizerRootTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
-            _write_sidecar(work_dir)
+            _write_sidecar(work_dir, self._software_root)
             (work_dir / "input-flux.root").unlink()
             gst_path = work_dir / "events.gst.root"
             _write_gst_root(
@@ -511,6 +524,39 @@ class GenieNormalizerRootTests(unittest.TestCase):
                     gst_path, work_dir / "out.h5", _base_task(), "local"
                 )
             self.assertIn("input-flux.root", str(ctx.exception))
+
+    def test_normalize_gst_root_raises_without_software_root_in_sidecar(self) -> None:
+        """A sidecar with no software_root must fail loudly.
+
+        Falling back to NF_SOFTWARE_ROOT could resolve a *different* staged tune
+        than the events were generated with and silently yield a wrong
+        xsec_weight, so the missing key is an error.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, self._software_root)
+            sidecar_path = work_dir / "translated_config.json"
+            sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+            del sidecar["software_root"]
+            sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+
+            gst_path = work_dir / "events.gst.root"
+            _write_gst_root(
+                gst_path,
+                energies_gev=[1.0],
+                weights=[1.0],
+                qel=[True],
+                res=[False],
+                dis=[False],
+                coh=[False],
+                mec=[False],
+            )
+
+            with self.assertRaises(RuntimeError) as ctx:
+                GenieNormalizer().normalize(
+                    gst_path, work_dir / "out.h5", _base_task(), "local"
+                )
+            self.assertIn("software_root", str(ctx.exception))
 
     def test_xsec_weight_uses_generated_flux_binning_not_the_config_flux(self) -> None:
         """Closure test against an independently computed flux-averaged xsec.
@@ -532,7 +578,7 @@ class GenieNormalizerRootTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
             emin, emax = 0.5, 5.0
-            _write_sidecar(work_dir, emin_gev=emin, emax_gev=emax)
+            _write_sidecar(work_dir, self._software_root, emin_gev=emin, emax_gev=emax)
 
             # A stepped, variable-width generated flux with nothing in common with
             # the sidecar's flat 100-bin config flux.
