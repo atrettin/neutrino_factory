@@ -10,9 +10,15 @@ from __future__ import annotations
 
 import unittest
 
+from neutrino_factory.config import resolve_config
+from neutrino_factory.particles import PARTICLE_PDG
 from neutrino_factory.translators.base import ConfigTranslator
 from neutrino_factory.translators.genie import GenieTranslator
-from neutrino_factory.translators.gibuu import GiBUUTranslator, NUM_RUNS_SAME_ENERGY
+from neutrino_factory.translators.gibuu import (
+    FLAVOR_ID,
+    GiBUUTranslator,
+    NUM_RUNS_SAME_ENERGY,
+)
 from neutrino_factory.translators.neut import NeutTranslator
 from neutrino_factory.translators.nuwro import NuWroTranslator
 
@@ -59,6 +65,89 @@ class TranslatorContractTests(unittest.TestCase):
         # compute_xsec_weight's own guard, so the two can never disagree.
         self.assertEqual(GiBUUTranslator().xsec_norm_count({}, 100), 1.0)
         self.assertEqual(GiBUUTranslator().xsec_norm_count({"num_runs": 0}, 100), 1.0)
+
+
+class TranslatorFlavourTests(unittest.TestCase):
+    """Every generator must be runnable for every probe the framework accepts."""
+
+    def _task(self, generator: str) -> dict:
+        code_version, config_version = {
+            "genie": ("R-3_06_00", "G18_10a_02_11a"),
+            "gibuu": ("release2025", "default"),
+            "neut": ("5.7.0-nuint2024", "default"),
+            "nuwro": ("nuwro_25.11", "default"),
+        }[generator]
+        return {
+            "event_count": 10,
+            "seed": 42,
+            "code_version": code_version,
+            "config_version": config_version,
+            "generator_version_id": f"{code_version}+{config_version}",
+        }
+
+    def _config(self, particle: str) -> dict:
+        return resolve_config(
+            {
+                "flux": {
+                    "type": "power_law",
+                    "particle": particle,
+                    "emin_gev": 0.5,
+                    "emax_gev": 5.0,
+                    "gamma": -2.0,
+                },
+                "target": {"nucleus": "C12", "pdg": 1000060120},
+            }
+        )
+
+    def test_every_translator_accepts_every_flavour(self) -> None:
+        for translator_class in TRANSLATORS:
+            for particle, pdg in PARTICLE_PDG.items():
+                with self.subTest(
+                    translator=translator_class.__name__, particle=particle
+                ):
+                    translator = translator_class()
+                    config = self._config(particle)
+                    translated = translator.translate(
+                        config, self._task(translator.name)
+                    )
+                    # Each generator takes the probe in its own form: GENIE and
+                    # NEUT as a PDG code, NuWro as beam_particle, GiBUU as a
+                    # flavour ID plus the sign of process_ID.
+                    if translator.name == "nuwro":
+                        self.assertEqual(
+                            translated["nuwro_params"]["beam_particle"], pdg
+                        )
+                    elif translator.name == "gibuu":
+                        for gibuu_pass in translated["gibuu_passes"]:
+                            jobcard = gibuu_pass["jobcard"]
+                            self.assertIn(
+                                f"flavor_ID      = {FLAVOR_ID[particle]}", jobcard
+                            )
+                            magnitude = 2 if gibuu_pass["current"] == "cc" else 3
+                            sign = -1 if pdg < 0 else 1
+                            self.assertIn(
+                                f"process_ID     = {sign * magnitude}", jobcard
+                            )
+                    else:
+                        self.assertEqual(translated["probe_pdg"], pdg)
+
+    def test_gibuu_flavour_table_covers_exactly_the_supported_probes(self) -> None:
+        # GiBUU keeps its own flavour_ID table because the IDs are its own; it
+        # must not drift out of step with the framework's probe table.
+        self.assertEqual(set(FLAVOR_ID), set(PARTICLE_PDG))
+
+    def test_every_translator_rejects_an_unknown_flavour(self) -> None:
+        # validate_config rejects this first, so a translator only ever sees an
+        # unknown name if it is called directly — it must still say which name
+        # it could not use rather than raise a bare lookup error.
+        for translator_class in TRANSLATORS:
+            with self.subTest(translator=translator_class.__name__):
+                translator = translator_class()
+                config = self._config("numu")
+                config["flux"]["particle"] = "nu_mu"
+                with self.assertRaises(KeyError) as ctx:
+                    translator.translate(config, self._task(translator.name))
+                self.assertIn("nu_mu", str(ctx.exception))
 
 
 if __name__ == "__main__":

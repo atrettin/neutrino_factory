@@ -96,15 +96,15 @@ def _base_task(**overrides) -> dict:
     return task
 
 
-def _write_sidecar(work_dir: Path, gamma: float = 0.0) -> None:
+def _write_sidecar(work_dir: Path, gamma: float = 0.0, probe: str = "numu") -> None:
     sidecar = {
-        "probe": "numu",
+        "probe": probe,
         "target": "C12",
         "energy_range_gev": [0.5, 5.0],
         "seed": 42,
         "flux_config": {
             "type": "power_law",
-            "particle": "numu",
+            "particle": probe,
             "emin_gev": 0.5,
             "emax_gev": 5.0,
             "gamma": gamma,
@@ -311,7 +311,7 @@ class NeutNormalizerRootTests(unittest.TestCase):
             self.assertEqual([e["interaction"] for e in events], ["qel", "coh"])
 
     def test_xsec_weight_follows_the_stamped_flux_not_the_config(self) -> None:
-        """The divisor is NEUT's own flux_numu histogram, on its native binning.
+        """The divisor is NEUT's own flux histogram, on its native binning.
 
         The config flux here is *flat* while the histogram NEUT stamped out
         falls steeply on an unequal-width (log) grid. If the normalizer rebuilt
@@ -358,7 +358,7 @@ class NeutNormalizerRootTests(unittest.TestCase):
     def test_xsec_weight_matches_hand_derivation_for_flat_flux(self) -> None:
         """Flat flux and flat histograms make every weight the same number.
 
-        The stamped flux_numu here is flat on ten equal-width bins over
+        The stamped flux histogram here is flat on ten equal-width bins over
         [0.5, 5.0], so the normalized density is 1 / (emax - emin) everywhere and
         xsec_weight reduces to sigma_avg * (emax - emin) / N. sigma_avg itself is
         fixed by the flux/evtrt histograms written above: their bin contents are
@@ -416,7 +416,112 @@ class NeutNormalizerRootTests(unittest.TestCase):
 
             with self.assertRaises(RuntimeError) as ctx:
                 NeutNormalizer().normalize(root_path, out_path, _base_task(), "local")
-            self.assertIn("evtrt_numu", str(ctx.exception))
+            message = str(ctx.exception)
+            self.assertIn("evtrt_", message)
+            # The error names what the file does hold, so the mismatch is visible.
+            self.assertIn("something_else", message)
+
+    def test_normalization_histograms_are_found_for_any_flavour(self) -> None:
+        """NEUT names flux/evtrt after the beam, so the pair is found by prefix.
+
+        neutroot2 formats them as "flux_%s"/"evtrt_%s" with its own flavour
+        token ("numub" for a numubar beam, not "numubar"), and writes only the
+        generic "fluxhisto"/"ratehisto" pair for a beam it has no token for.
+        None of those spellings may change the normalization: the same events
+        with the same histograms must give the same xsec_weight whatever the
+        pair is called.
+        """
+        sigma_avg = 0.75
+        expected = sigma_avg * (5.0 - 0.5) / 2
+        naming = [
+            ("numu", "flux_numu", "evtrt_numu"),
+            ("numubar", "flux_numub", "evtrt_numub"),
+            ("nue", "flux_nue", "evtrt_nue"),
+            ("nuebar", "flux_nueb", "evtrt_nueb"),
+            ("nutau", "fluxhisto", "ratehisto"),
+        ]
+        for probe, flux_hist, rate_hist in naming:
+            with self.subTest(probe=probe):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    work_dir = Path(tmpdir)
+                    _write_sidecar(work_dir, probe=probe)
+                    root_path = work_dir / "events.flat.root"
+                    _write_flat_root(
+                        root_path,
+                        [1.0, 2.0],
+                        [1, 1],
+                        sigma_avg=sigma_avg,
+                        flux_hist=flux_hist,
+                        rate_hist=rate_hist,
+                    )
+                    out_path = work_dir / "out.h5"
+
+                    NeutNormalizer().normalize(
+                        root_path, out_path, _base_task(event_count=2), "local"
+                    )
+
+                    _, events = read_events(out_path)
+                    self.assertEqual([e["probe"] for e in events], [probe, probe])
+                    for event in events:
+                        self.assertAlmostEqual(event["xsec_weight"], expected, places=9)
+
+    def test_generic_histograms_do_not_shadow_the_flavour_named_pair(self) -> None:
+        """A real NEUT run writes both pairs; the flavour-named one is used.
+
+        Verified against a real nuebar run in the NEUT 5.7.0 image: the output
+        holds flux_nueb/evtrt_nueb *and* an identical fluxhisto/ratehisto copy.
+        The generic pair must therefore not read as a second, ambiguous
+        candidate.
+        """
+        import uproot
+
+        sigma_avg = 0.75
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, probe="nuebar")
+            root_path = work_dir / "events.flat.root"
+            _write_flat_root(
+                root_path,
+                [1.0, 2.0],
+                [1, 1],
+                sigma_avg=sigma_avg,
+                flux_hist="flux_nueb",
+                rate_hist="evtrt_nueb",
+            )
+            edges = np.linspace(0.5, 5.0, 11)
+            with uproot.update(root_path) as f:
+                f["fluxhisto"] = (np.ones(len(edges) - 1), edges)
+                f["ratehisto"] = (sigma_avg * np.ones(len(edges) - 1), edges)
+            out_path = work_dir / "out.h5"
+
+            NeutNormalizer().normalize(
+                root_path, out_path, _base_task(event_count=2), "local"
+            )
+
+            _, events = read_events(out_path)
+            expected = sigma_avg * (5.0 - 0.5) / 2
+            for event in events:
+                self.assertAlmostEqual(event["xsec_weight"], expected, places=9)
+
+    def test_normalize_root_raises_on_ambiguous_normalization_histograms(self) -> None:
+        # Two flux histograms leave the choice of normalization to a guess.
+        import uproot
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.flat.root"
+            _write_flat_root(root_path, [1.0], [1])
+            edges = np.linspace(0.5, 5.0, 11)
+            with uproot.update(root_path) as f:
+                f["flux_nue"] = (np.ones(len(edges) - 1), edges)
+            out_path = work_dir / "out.h5"
+
+            with self.assertRaises(RuntimeError) as ctx:
+                NeutNormalizer().normalize(root_path, out_path, _base_task(), "local")
+            message = str(ctx.exception)
+            self.assertIn("flux_numu", message)
+            self.assertIn("flux_nue", message)
 
     def test_normalize_root_raises_on_mismatched_histogram_binning(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -46,11 +46,51 @@ def _is_cc_mode(mode: int) -> bool:
     return abs(int(mode)) <= MAX_CC_MODE
 
 
-# Histogram pair NEUT writes into its output when sampling a flux histogram;
-# nf_flatten.C carries them into the flattened file. Their integral ratio is the
-# flux-averaged total cross section in 1e-38 cm^2 per nucleon.
-FLUX_HIST = "flux_numu"
-EVENT_RATE_HIST = "evtrt_numu"
+# Names of the histogram pair NEUT writes into its output when sampling a flux
+# histogram; nf_flatten.C carries every histogram across verbatim. Their integral
+# ratio is the flux-averaged total cross section in 1e-38 cm^2 per nucleon.
+#
+# The primary names carry the beam flavour: neutroot2 formats them as "flux_%s" /
+# "evtrt_%s" with its own short token — "numu", "numub", "nue", "nueb" (read off
+# the NEUT 5.7.0 binary; note "numub", not "numubar"). Alongside them it writes a
+# generic "fluxhisto" / "ratehisto" copy, which is the only pair present for a
+# beam it has no token for. Matching on the prefix covers every flavour without
+# encoding NEUT's spelling, which is not a documented contract.
+FLUX_HIST_PREFIX = "flux_"
+FLUX_HIST_FALLBACK = "fluxhisto"
+EVENT_RATE_HIST_PREFIX = "evtrt_"
+EVENT_RATE_HIST_FALLBACK = "ratehisto"
+
+
+def _find_histogram(handle, prefix: str, fallback: str, root_path: Path) -> str:
+    """Name of the histogram in ``handle`` carrying the flux or the event rate.
+
+    The flavour-named histogram wins; ``fallback`` is NEUT's generic copy of the
+    same spectrum, used when the beam has no flavour token. Raises if neither is
+    there — NEUT writes the pair only when it samples a flux histogram
+    (``EVCT-MPV 3``), and without it the run cannot be normalized — or if
+    several flavour-named ones are, which would leave the choice of
+    normalization to a guess.
+    """
+    names = sorted({key.split(";")[0] for key in handle.keys()})
+    matches = [name for name in names if name.startswith(prefix)]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches and fallback in names:
+        return fallback
+
+    present = ", ".join(names) or "nothing"
+    if not matches:
+        raise RuntimeError(
+            f"No histogram named {prefix}* or {fallback} in {root_path} "
+            f"(found: {present}). NEUT writes it only when sampling a flux "
+            "histogram (EVCT-MPV 3); without it the run cannot be normalized."
+        )
+    raise RuntimeError(
+        f"Several histograms in {root_path} match {prefix}*: "
+        f"{', '.join(matches)}. Exactly one flux/event-rate pair is expected; "
+        "which one carries the normalization cannot be guessed."
+    )
 
 
 class NeutNormalizer(OutputNormalizer):
@@ -136,7 +176,15 @@ class NeutNormalizer(OutputNormalizer):
                     "The flattened file predates these branches; regenerate it with "
                     f"the current setup/neut/nf_flatten.C: {exc}"
                 ) from exc
-            flux_averaged_xsec = self._flux_averaged_xsec(f, root_path)
+            flux_hist = _find_histogram(
+                f, FLUX_HIST_PREFIX, FLUX_HIST_FALLBACK, root_path
+            )
+            rate_hist = _find_histogram(
+                f, EVENT_RATE_HIST_PREFIX, EVENT_RATE_HIST_FALLBACK, root_path
+            )
+            flux_averaged_xsec = self._flux_averaged_xsec(
+                f, root_path, flux_hist, rate_hist
+            )
 
         energies_gev = np.asarray(energies_gev, dtype=np.float64)
         # NEUT is unweighted: there is no per-event raw weight to preserve, so the
@@ -147,7 +195,7 @@ class NeutNormalizer(OutputNormalizer):
         translated_with_xsec = dict(translated)
         translated_with_xsec["flux_averaged_xsec_1e38"] = flux_averaged_xsec
 
-        flux = self._generated_flux(root_path, translated)
+        flux = self._generated_flux(root_path, translated, flux_hist)
         xsec_weights = NeutTranslator().compute_xsec_weight(
             energies_gev, weights, translated_with_xsec, flux
         )
@@ -189,11 +237,12 @@ class NeutNormalizer(OutputNormalizer):
         return write_common_hdf5(out_path, metadata, events)
 
     @staticmethod
-    def _generated_flux(root_path: Path, translated: dict) -> Flux:
+    def _generated_flux(root_path: Path, translated: dict, flux_hist: str) -> Flux:
         """Load the spectrum NEUT actually sampled from.
 
-        NEUT copies the TH1 it was handed into its own output as ``flux_numu``
-        (edges and contents verbatim, verified against NEUT 5.7.0), and
+        NEUT copies the TH1 it was handed into its own output as
+        ``flux_<flavour>`` (edges and contents verbatim, verified against NEUT
+        5.7.0; ``flux_hist`` is the name :func:`_find_histogram` resolved), and
         nf_flatten.C carries it into the flattened file. That histogram — not the
         run config — is the authoritative generated flux: NEUT draws a bin from
         it in proportion to the raw bin content and then an energy uniformly
@@ -211,13 +260,15 @@ class NeutNormalizer(OutputNormalizer):
         configured flux, which would silently restore the bug and still produce
         physical-looking numbers (CLAUDE.md, development posture).
         """
-        particle = str(translated.get("probe") or "numu")
+        particle = str(translated["probe"])
         return HistogramFlux.from_root_file(
-            root_path, FLUX_HIST, particle, contents_are_counts=True
+            root_path, flux_hist, particle, contents_are_counts=True
         )
 
     @staticmethod
-    def _flux_averaged_xsec(handle, root_path: Path) -> float:
+    def _flux_averaged_xsec(
+        handle, root_path: Path, flux_hist: str, rate_hist: str
+    ) -> float:
         """Flux-averaged total cross section, in 1e-38 cm^2 per target nucleon.
 
         NEUT writes the flux histogram it sampled and the corresponding event
@@ -227,26 +278,19 @@ class NeutNormalizer(OutputNormalizer):
         ``NeutTranslator.compute_xsec_weight`` — see that method for the checks
         establishing the units and the per-nucleon convention.
         """
-        for name in (FLUX_HIST, EVENT_RATE_HIST):
-            if name not in handle:
-                raise RuntimeError(
-                    f"Histogram '{name}' not found in {root_path}. NEUT writes it "
-                    "only when sampling a flux histogram (EVCT-MPV 3); without it "
-                    "the run cannot be normalized."
-                )
-        flux_contents, flux_edges = handle[FLUX_HIST].to_numpy()
-        rate_contents, rate_edges = handle[EVENT_RATE_HIST].to_numpy()
+        flux_contents, flux_edges = handle[flux_hist].to_numpy()
+        rate_contents, rate_edges = handle[rate_hist].to_numpy()
 
         if not np.array_equal(flux_edges, rate_edges):
             raise RuntimeError(
-                f"'{FLUX_HIST}' and '{EVENT_RATE_HIST}' in {root_path} have different "
+                f"'{flux_hist}' and '{rate_hist}' in {root_path} have different "
                 "binning; their integral ratio would not be a flux average."
             )
 
         flux_integral = float(np.sum(flux_contents))
         if flux_integral <= 0.0:
             raise RuntimeError(
-                f"'{FLUX_HIST}' in {root_path} integrates to {flux_integral}; cannot "
+                f"'{flux_hist}' in {root_path} integrates to {flux_integral}; cannot "
                 "compute a flux-averaged cross section."
             )
         # No bin-width factor is needed, on any binning: NEUT copies the input

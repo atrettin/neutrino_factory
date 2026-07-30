@@ -13,6 +13,7 @@ run:
 
 flux:
   type: power_law
+  # nue | nuebar | numu | numubar | nutau | nutaubar
   particle: numu
   emin_gev: 0.5
   emax_gev: 10.0

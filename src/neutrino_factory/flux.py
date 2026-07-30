@@ -26,6 +26,8 @@ from typing import Any
 
 import numpy as np
 
+from .particles import PARTICLE_PDG
+
 
 class FluxError(ValueError):
     """Raised when a flux configuration cannot be built or is invalid."""
@@ -235,6 +237,15 @@ def validate_flux(flux_config: dict[str, Any], base_dir: str | Path | None = Non
     """Return a list of validation error strings (empty if valid)."""
     errors: list[str] = []
     flux_type = str(flux_config.get("type", "power_law"))
+
+    # The probe is flux metadata here, but it selects the generator-native beam
+    # setting in every translator; catching an unsupported flavour at
+    # validate-config time beats a KeyError once tasks are already running.
+    particle = str(flux_config.get("particle", "numu"))
+    if particle not in PARTICLE_PDG:
+        errors.append(
+            f"Unknown flux.particle '{particle}'. Supported: {', '.join(PARTICLE_PDG)}"
+        )
 
     if flux_type == "power_law":
         try:

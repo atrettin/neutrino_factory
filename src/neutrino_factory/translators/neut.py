@@ -6,8 +6,9 @@ from typing import Any
 import numpy as np
 
 from .base import ConfigTranslator, physics_current
-from .nuwro import NUCLEUS_COMPOSITION, PARTICLE_PDG
+from .nuwro import NUCLEUS_COMPOSITION
 from ..flux import Flux, HistogramFlux, build_flux
+from ..particles import probe_pdg
 
 # Binning of the TH1 flux handed to NEUT. NEUT draws energies uniformly *within*
 # whichever bin it picks, so this histogram is the finest structure the
@@ -79,8 +80,8 @@ def _flux_grid(flux: Flux) -> tuple[np.ndarray, np.ndarray]:
     """Return the ``(bin_edges, bin_contents)`` grid to divide the flux out on.
 
     For a :class:`HistogramFlux` this is the histogram's *native* binning — for
-    NEUT that means the ``flux_numu`` histogram NEUT stamped into its own output,
-    which is the input TH1 copied verbatim. Re-binning it onto any other grid
+    NEUT that means the ``flux_<flavour>`` histogram NEUT stamped into its own
+    output, which is the input TH1 copied verbatim. Re-binning it onto any other grid
     would divide the events by a flux they were never drawn from. The same
     helper, and the same reasoning, as ``translators/genie.py::_flux_grid``.
 
@@ -103,11 +104,7 @@ class NeutTranslator(ConfigTranslator):
         flux = build_flux(flux_config, base_dir=base_dir)
 
         particle = flux_config["particle"]
-        if particle not in PARTICLE_PDG:
-            raise KeyError(
-                f"Unknown neutrino particle '{particle}' for NEUT probe. "
-                f"Known: {', '.join(PARTICLE_PDG)}"
-            )
+        particle_pdg = probe_pdg(particle, "NEUT")
         nucleus = target["nucleus"]
         if nucleus not in NUCLEUS_COMPOSITION:
             raise KeyError(
@@ -129,7 +126,7 @@ class NeutTranslator(ConfigTranslator):
             "generator": self.name,
             "command": "neutroot2",
             "probe": particle,
-            "probe_pdg": PARTICLE_PDG[particle],
+            "probe_pdg": particle_pdg,
             "target": nucleus,
             "energy_range_gev": [flux.emin_gev, flux.emax_gev],
             "events": int(task["event_count"]),
@@ -193,7 +190,7 @@ class NeutTranslator(ConfigTranslator):
         """
         card: dict[str, Any] = {
             "EVCT-NEVT": int(task["event_count"]),
-            "EVCT-IDPT": PARTICLE_PDG[particle],
+            "EVCT-IDPT": probe_pdg(particle, "NEUT"),
             # Vertex position and beam direction are irrelevant to the common
             # output, so pin them rather than leaving them to NEUT's defaults.
             "EVCT-MPOS": 1,
@@ -240,7 +237,7 @@ class NeutTranslator(ConfigTranslator):
         divide the run's flux-averaged total cross section by the number of
         events and by the unit-normalized flux density at each event's energy.
 
-        ``flux`` must be the spectrum NEUT *actually sampled* — the ``flux_numu``
+        ``flux`` must be the spectrum NEUT *actually sampled* — the ``flux_<flavour>``
         histogram it stamps into its own output, loaded on its native binning by
         ``NeutNormalizer._generated_flux`` — not a flux rebuilt from the run
         config. ``_flux_grid`` keeps that binning intact.

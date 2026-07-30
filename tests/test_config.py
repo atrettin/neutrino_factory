@@ -236,6 +236,29 @@ class ConfigTests(unittest.TestCase):
             )
         self.assertEqual(config["flux"]["type"], "histogram")
 
+    def test_every_supported_flavour_validates(self) -> None:
+        for particle in ("nue", "nuebar", "numu", "numubar", "nutau", "nutaubar"):
+            with self.subTest(particle=particle):
+                config = resolve_config(
+                    {
+                        "flux": {"type": "power_law", "particle": particle},
+                        "generators": self._genie_generators(),
+                    }
+                )
+                self.assertEqual(config["flux"]["particle"], particle)
+
+    def test_unknown_flux_particle_raises(self) -> None:
+        # Caught at config time rather than as a KeyError inside a translator
+        # once tasks are already running.
+        with self.assertRaises(ConfigError) as ctx:
+            resolve_config(
+                {
+                    "flux": {"type": "power_law", "particle": "nu_mu"},
+                    "generators": self._genie_generators(),
+                }
+            )
+        self.assertIn("nu_mu", str(ctx.exception))
+
     def test_histogram_flux_missing_file_raises(self) -> None:
         with self.assertRaises(ConfigError):
             resolve_config(

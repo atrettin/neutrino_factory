@@ -8,17 +8,7 @@ import numpy as np
 
 from .base import ConfigTranslator, physics_current
 from ..flux import Flux, HistogramFlux, PowerLawFlux, build_flux
-
-# PDG codes for gevgen's -p (probe) flag. gevgen expects a numeric PDG code,
-# not a flavour name. Mirrors the mapping used by the NuWro translator.
-PARTICLE_PDG = {
-    "numu": 14,
-    "nue": 12,
-    "numubar": -14,
-    "nuebar": -12,
-    "nutau": 16,
-    "nutaubar": -16,
-}
+from ..particles import probe_pdg
 
 # Fallback number of grid points used to flux-average the reconstructed total
 # cross section (see compute_xsec_weight) when the flux has no native binning.
@@ -104,18 +94,14 @@ class GenieTranslator(ConfigTranslator):
         flux = build_flux(flux_config, base_dir=base_dir)
 
         particle = flux_config["particle"]
-        if particle not in PARTICLE_PDG:
-            raise KeyError(
-                f"Unknown neutrino particle '{particle}' for GENIE probe. "
-                f"Known: {', '.join(PARTICLE_PDG)}"
-            )
+        particle_pdg = probe_pdg(particle, "GENIE")
         current = physics_current(config)
 
         return {
             "generator": self.name,
             "command": "gevgen",
             "probe": particle,
-            "probe_pdg": PARTICLE_PDG[particle],
+            "probe_pdg": particle_pdg,
             "target": target["nucleus"],
             "target_pdg": target.get("pdg", target["nucleus"]),
             "energy_range_gev": [flux.emin_gev, flux.emax_gev],
@@ -244,7 +230,7 @@ class GenieTranslator(ConfigTranslator):
         to the shared "per nucleon" output convention.
         """
         xml_path = self._resolve_xsecs_xml(translated_config)
-        probe_pdg = int(translated_config["probe_pdg"])
+        probe_pdg_code = int(translated_config["probe_pdg"])
         target_pdg = int(translated_config["target_pdg"])
         mass_number = (target_pdg // 10) % 1000
 
@@ -260,10 +246,21 @@ class GenieTranslator(ConfigTranslator):
 
         current = str(translated_config.get("current", "cc")).lower()
         sigma_internal_sum = self._sum_matching_splines(
-            xml_path, probe_pdg, target_pdg, centers, SPLINE_PROCESS_TAGS.get(current)
+            xml_path, probe_pdg_code, target_pdg, centers, SPLINE_PROCESS_TAGS.get(current)
         )
         if sigma_internal_sum is None:
-            return xsec_weight
+            # No spline for this beam/target: the run cannot be normalized at
+            # all. Returning the zero-filled array instead would hand downstream
+            # analyses physical-looking events whose every cross-section weight
+            # is silently zero. gxspl-NUsmall.xml carries nue/nuebar/numu/numubar
+            # only, so a nutau run lands here.
+            raise RuntimeError(
+                f"No cross-section spline for probe PDG {probe_pdg_code} on target PDG "
+                f"{target_pdg} (current '{current}') in {xml_path}. xsec_weight "
+                "cannot be reconstructed; stage a spline set covering this probe "
+                "with setup/download_genie_xsec.sh, or generate a probe the "
+                "staged tune supports."
+            )
 
         sigma_per_nucleon = sigma_internal_sum * (XSEC_SCALE / GENIE_UNITS_CM2) / mass_number
 
