@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-from .base import ConfigTranslator
+from .base import ConfigTranslator, physics_current
 from ..flux import Flux, build_flux
 
 # Number of equal-width bins used to approximate a continuous spectrum as a
@@ -49,6 +49,21 @@ FLAVOR_ID = {
 # GiBUU process_ID magnitude: CC=2, NC=3. Antineutrinos use the negative value.
 PROCESS_ID = {"cc": 2, "nc": 3}
 
+# A GiBUU jobcard selects exactly one process_ID, so there is no inclusive run:
+# "inclusive" is generated as two passes, one per current, whose events are
+# concatenated. That is exact rather than an approximation because GiBUU is
+# cross-section-weighted: each event carries an absolute per-nucleon weight and
+# each pass's weights already sum to that current's cross section, so the union
+# sums to sigma_CC + sigma_NC. (A rejection-sampled generator could not be
+# combined this way without reweighting by the relative cross sections.)
+CURRENT_PASSES = {"cc": ("cc",), "nc": ("nc",), "inclusive": ("cc", "nc")}
+
+# Seed offset applied to the second (NC) pass of an inclusive run, so the two
+# passes do not draw the identical random sequence. Chosen far outside the
+# manifest's own seed layout (slurm.py spaces generators by 1000 and chunks by
+# 1), so it cannot collide with another chunk's seed.
+PASS_SEED_OFFSET = 1_000_000
+
 # (protons, neutrons) per nucleus; A = protons + neutrons. Mirrors the mapping
 # used by the NuWro translator.
 NUCLEUS_COMPOSITION = {
@@ -77,15 +92,13 @@ class GiBUUTranslator(ConfigTranslator):
         energy_range_gev = [flux.emin_gev, flux.emax_gev]
         seed = int(task["seed"])
         event_count = int(task["event_count"])
-        current = str(physics.get("current", "cc")).lower()
+        current = physics_current(config)
 
         protons, neutrons = NUCLEUS_COMPOSITION[nucleus]
         mass_number = protons + neutrons
 
         flavor_id = FLAVOR_ID[particle]
-        process_id = PROCESS_ID[current]
-        if particle.endswith("bar"):
-            process_id = -process_id
+        pass_currents = CURRENT_PASSES[current]
 
         # Each GiBUU ensemble simulates the whole nucleus but only a fraction of
         # its A nucleons yields an accepted (cross-section-weighted) interaction,
@@ -95,8 +108,15 @@ class GiBUUTranslator(ConfigTranslator):
         # approximate. GiBUU warns and aborts for numEnsembles < 100 unless the
         # value is given negative (its documented "enforce anyway" override for
         # small runs), so negate small ensemble counts.
+        #
+        # An inclusive run splits those ensembles evenly over its two passes, so
+        # the requested event count is the budget for the run as a whole rather
+        # than per current. The resulting CC:NC split is not 50:50: each pass
+        # yields whatever its own cross section produces from half the ensembles.
         events_per_ensemble = max(1.0, mass_number / 2.0)
-        num_ensembles = max(1, math.ceil(event_count / events_per_ensemble))
+        num_ensembles = max(
+            1, math.ceil(event_count / (events_per_ensemble * len(pass_currents)))
+        )
         if num_ensembles < 100:
             num_ensembles = -num_ensembles
 
@@ -116,16 +136,27 @@ class GiBUUTranslator(ConfigTranslator):
         # release (e.g. "release2025" -> version=2025).
         version_year = int("".join(c for c in str(task["code_version"]) if c.isdigit()))
 
-        gibuu_jobcard = self._render_jobcard(
-            version_year=version_year,
-            num_ensembles=num_ensembles,
-            proton_number=protons,
-            mass_number=mass_number,
-            process_id=process_id,
-            flavor_id=flavor_id,
-            enu_gev=enu_gev,
-            seed=seed,
-        )
+        # One rendered jobcard per pass; a single-current run has exactly one.
+        gibuu_passes = []
+        for index, pass_current in enumerate(pass_currents):
+            process_id = PROCESS_ID[pass_current]
+            if particle.endswith("bar"):
+                process_id = -process_id
+            gibuu_passes.append(
+                {
+                    "current": pass_current,
+                    "jobcard": self._render_jobcard(
+                        version_year=version_year,
+                        num_ensembles=num_ensembles,
+                        proton_number=protons,
+                        mass_number=mass_number,
+                        process_id=process_id,
+                        flavor_id=flavor_id,
+                        enu_gev=enu_gev,
+                        seed=seed + index * PASS_SEED_OFFSET,
+                    ),
+                }
+            )
 
         return {
             "generator": self.name,
@@ -139,10 +170,11 @@ class GiBUUTranslator(ConfigTranslator):
             "flux_config": flux_config,
             "num_runs": NUM_RUNS_SAME_ENERGY,
             "mode": physics.get("mode", "inclusive"),
+            "current": current,
             "code_version": task["code_version"],
             "config_version": task["config_version"],
             "generator_version_id": task.get("generator_version_id"),
-            "gibuu_jobcard": gibuu_jobcard,
+            "gibuu_passes": gibuu_passes,
             "gibuu_flux_table": gibuu_flux_table,
         }
 

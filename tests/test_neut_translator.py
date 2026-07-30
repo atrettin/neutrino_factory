@@ -54,8 +54,9 @@ class NeutTranslatorTests(unittest.TestCase):
         self.assertEqual(card["NEUT-NUMBNDN"], 6)
         self.assertEqual(card["NEUT-NUMFREP"], 0)
         self.assertEqual(card["NEUT-NUMATOM"], 12)
-        # All interaction channels, and a reproducible seed read from $RANFILE.
-        self.assertEqual(card["NEUT-MODE"], 0)
+        # The default config is CC, so the card runs in per-channel scaling mode
+        # (see the current tests below), with a reproducible seed from $RANFILE.
+        self.assertEqual(card["NEUT-MODE"], -1)
         self.assertEqual(card["NEUT-RAND"], 0)
         # Letting NEUT-CRSPATH default keeps $NEUT_CRSPATH authoritative.
         self.assertNotIn("NEUT-CRSPATH", card)

@@ -16,7 +16,9 @@ from neutrino_factory.normalizers.genie import GenieNormalizer
 from neutrino_factory.translators.genie import GENIE_UNITS_CM2, XSEC_SCALE
 
 
-def _write_gst_root(path: Path, energies_gev, weights, qel, res, dis, coh, mec, lepton_p4=None) -> None:
+def _write_gst_root(
+    path: Path, energies_gev, weights, qel, res, dis, coh, mec, lepton_p4=None, cc=None
+) -> None:
     """Write a synthetic ``gst`` tree.
 
     Unless ``lepton_p4`` is given, each event gets the reference scatter defined
@@ -40,6 +42,9 @@ def _write_gst_root(path: Path, energies_gev, weights, qel, res, dis, coh, mec, 
             "pyl": lepton[:, 2],
             "pzl": lepton[:, 3],
             "wght": np.array(weights, dtype=np.float64),
+            # Charged current unless the test says otherwise; gst carries the
+            # current independently of the interaction-class flags.
+            "cc": np.array(np.ones(len(energies)) if cc is None else cc, dtype=np.bool_),
             "qel": np.array(qel, dtype=np.bool_),
             "res": np.array(res, dtype=np.bool_),
             "dis": np.array(dis, dtype=np.bool_),
@@ -137,6 +142,7 @@ class GenieNormalizerJsonTests(unittest.TestCase):
                 "seed": 42,
                 "energy_gev": 1.0 + i * 0.5,
                 "weight": 1.0,
+                "is_cc": True,
                 "interaction": "qel",
                 "probe": "numu",
                 "target": "Ar40",
@@ -319,6 +325,32 @@ class GenieNormalizerRootTests(unittest.TestCase):
             _, events = read_events(out_path)
             interactions = [e["interaction"] for e in events]
             self.assertEqual(interactions, ["qel", "res", "dis", "coh", "mec", "other"])
+
+    def test_is_cc_comes_from_the_cc_branch_not_the_class_flags(self) -> None:
+        # Every event here is "qel", which in gst spans CCQE and NC elastic
+        # alike: only the cc branch separates them.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            gst_path = work_dir / "events.gst.root"
+            _write_gst_root(
+                gst_path,
+                energies_gev=[1.0, 2.0, 3.0],
+                weights=[1.0] * 3,
+                qel=[True] * 3,
+                res=[False] * 3,
+                dis=[False] * 3,
+                coh=[False] * 3,
+                mec=[False] * 3,
+                cc=[True, False, True],
+            )
+            out_path = work_dir / "out.h5"
+
+            GenieNormalizer().normalize(gst_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            self.assertEqual([e["is_cc"] for e in events], [True, False, True])
+            self.assertEqual([e["interaction"] for e in events], ["qel"] * 3)
 
     def test_normalize_gst_root_derives_kinematics(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

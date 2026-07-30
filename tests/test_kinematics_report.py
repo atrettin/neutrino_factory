@@ -23,6 +23,7 @@ def _event(index: int, interaction: str, *, xsec_weight: float = 1.0, **fields) 
         "seed": 1,
         "energy_gev": 1.0 + index,
         "weight": 1.0,
+        "is_cc": True,
         "xsec_weight": xsec_weight,
         "interaction": interaction,
         "probe": "numu",

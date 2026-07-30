@@ -154,7 +154,7 @@ class ApptainerDispatchAdapterTests(unittest.TestCase):
             adapter = GiBUUAdapter({})
             translated = {
                 "code_version": "release2025",
-                "gibuu_jobcard": "&input\n/\n",
+                "gibuu_passes": [{"current": "cc", "jobcard": "&input\n/\n"}],
             }
             env = {"NF_CONTAINER_RUNTIME": "apptainer"}
             with patch.dict(os.environ, env, clear=False):
@@ -165,12 +165,20 @@ class ApptainerDispatchAdapterTests(unittest.TestCase):
                     command = adapter.build_run_command(translated, Path(tmpdir))
 
         self.assertEqual(
-            command, ["bash", "-c", "nf-run gibuu release2025 GiBUU.x < job.job"]
+            command,
+            [
+                "bash",
+                "-c",
+                "set -e; (cd ./cc && nf-run gibuu release2025 GiBUU.x < job.job)",
+            ],
         )
 
     def test_gibuu_jobcard_buuinput_path_is_runtime_and_version_aware(self) -> None:
         jobcard = "&input\n    path_to_input   = '@NF_GIBUU_INPUT@'\n/\n"
-        translated = {"code_version": "release2025", "gibuu_jobcard": jobcard}
+        translated = {
+            "code_version": "release2025",
+            "gibuu_passes": [{"current": "cc", "jobcard": jobcard}],
+        }
 
         # Apptainer: version-namespaced payload tree.
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -181,7 +189,7 @@ class ApptainerDispatchAdapterTests(unittest.TestCase):
                     return_value="/usr/local/bin/GiBUU.x",
                 ):
                     adapter.build_run_command(dict(translated), Path(tmpdir))
-            written = (Path(tmpdir) / "job.job").read_text()
+            written = (Path(tmpdir) / "cc" / "job.job").read_text()
         self.assertIn(
             "path_to_input   = '/opt/nf/generators/gibuu/release2025/GiBUU/buuinput'",
             written,
@@ -197,7 +205,7 @@ class ApptainerDispatchAdapterTests(unittest.TestCase):
                     return_value="/usr/local/bin/GiBUU.x",
                 ):
                     adapter.build_run_command(dict(translated), Path(tmpdir))
-            written = (Path(tmpdir) / "job.job").read_text()
+            written = (Path(tmpdir) / "cc" / "job.job").read_text()
         self.assertIn("path_to_input   = '/opt/GiBUU/buuinput'", written)
 
     def test_docker_runtime_keeps_bare_binaries(self) -> None:
@@ -210,11 +218,18 @@ class ApptainerDispatchAdapterTests(unittest.TestCase):
                     return_value="/usr/local/bin/GiBUU.x",
                 ):
                     command = gibuu.build_run_command(
-                        {"code_version": "release2025", "gibuu_jobcard": "&input\n/\n"},
+                        {
+                            "code_version": "release2025",
+                            "gibuu_passes": [
+                                {"current": "cc", "jobcard": "&input\n/\n"}
+                            ],
+                        },
                         Path(tmpdir),
                     )
 
-        self.assertEqual(command, ["bash", "-c", "GiBUU.x < job.job"])
+        self.assertEqual(
+            command, ["bash", "-c", "set -e; (cd ./cc && GiBUU.x < job.job)"]
+        )
 
 
 if __name__ == "__main__":

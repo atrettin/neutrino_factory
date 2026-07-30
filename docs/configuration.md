@@ -7,11 +7,55 @@ The common YAML config is the source of truth for both the local and Slurm execu
 - `run`: run name, total event count, seed, executor mode, stub-mode toggle, and generator log verbosity
 - `flux`: neutrino flux model and energy range
 - `target`: nuclear target description
-- `physics`: generic interaction settings
+- `physics`: generic interaction settings, including the weak current to generate
 - `generators`: versioned generator entries (multiple entries per generator are supported)
 - `splitting`: how the total event count is chunked into jobs
 - `storage`: roots for software, outputs, working files, and container images
 - `slurm`: job resources for MPP submission (default partition: `alma` — required by the new MPP Slurm cluster)
+
+## Weak current: `physics.current`
+
+| Value | What is generated |
+|---|---|
+| `cc` (default) | Charged-current interactions only. |
+| `nc` | Neutral-current interactions only. |
+| `inclusive` | Both, in the generator's own cross-section proportion. |
+
+The restriction is applied in the generator's **own configuration**, not by
+filtering events afterwards, so the requested event count is met and the cross
+section reconstructed into `xsec_weight` is that of the selected current alone:
+
+| Generator | Native mechanism |
+|---|---|
+| GENIE | `--event-generator-list CC` / `NC`; omitted for `inclusive`. The cross-section spline sum used for `xsec_weight` is filtered on the matching `proc:Weak[CC]`/`proc:Weak[NC]` tag so it covers exactly the channels that could be generated. |
+| NuWro | The `dyn_*` switches in `params.txt` (all ten `dyn_<channel>_<current>`, plus `dyn_hyp_cc`). |
+| NEUT | `NEUT-MODE -1` with a `NEUT-CRS`/`NEUT-CRSB` mask that zeroes the other current's channels; `inclusive` uses NEUT's normal `NEUT-MODE 0`. |
+| GiBUU | `process_ID` (CC=2, NC=3, negated for antineutrinos). A jobcard selects a single current, so `inclusive` runs **two passes** (see below). |
+
+Every event in the common HDF5 output carries the resulting current as the
+boolean `is_cc` column. It is a required column with no default: the
+`interaction` label alone cannot recover it, since categories such as `qel`
+deliberately span both currents (GENIE's `qel` flag and NEUT's modes 1 and 51/52
+all map to it).
+
+**GiBUU `inclusive` is two runs.** GiBUU's jobcard admits exactly one
+`process_ID`, so an inclusive run generates a CC pass and an NC pass in separate
+subdirectories of the task work directory (`cc/`, `nc/`) and concatenates their
+events. This is exact rather than approximate because GiBUU weights each event
+by an absolute per-nucleon cross section, so the two passes' weights add to
+sigma_CC + sigma_NC. The requested event count is the budget for the run as a
+whole: the ensembles are split evenly over the passes.
+
+Note that GiBUU's *event counts* do not carry the CC:NC ratio the way the other
+generators' do — it samples phase space and weights by cross section, so an
+inclusive GiBUU run comes out near half CC by event count while the cross-section
+split lives in `xsec_weight` (measured: 45% of events CC, 69% of sigma CC, on a
+0.5–5 GeV numu carbon run). Always split GiBUU output by weight, not by counting.
+
+**NuWro's neutrino-electron channel is off** (`dyn_lep = 0`) for every current,
+including `inclusive`, although NuWro's own default enables it. Its target is an
+atomic electron rather than a nucleon, so its cross section is not commensurable
+with the per-nucleon normalization the common output's `xsec_weight` uses.
 
 ## Generator log verbosity: `run.log_level`
 

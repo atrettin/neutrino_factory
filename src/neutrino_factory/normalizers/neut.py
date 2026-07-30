@@ -35,6 +35,17 @@ INTERACTION_BY_MODE: dict[int, str] = {
     16: "coh", 36: "coh",                         # CC / NC coherent pi
 }
 
+# The weak current is encoded in the mode number itself: NEUT numbers charged
+# current channels 1..30 and neutral current channels 31 and up (the mode is
+# negated for antineutrinos, so compare on the absolute value). The
+# INTERACTION_BY_MODE comments above are the per-mode statement of the same rule.
+MAX_CC_MODE = 30
+
+
+def _is_cc_mode(mode: int) -> bool:
+    return abs(int(mode)) <= MAX_CC_MODE
+
+
 # Histogram pair NEUT writes into its output when sampling a flux histogram;
 # nf_flatten.C carries them into the flattened file. Their integral ratio is the
 # flux-averaged total cross section in 1e-38 cm^2 per nucleon.
@@ -157,8 +168,8 @@ class NeutNormalizer(OutputNormalizer):
         )
 
         events = []
-        for i, (e_gev, w, xw, itype) in enumerate(
-            zip(energies_gev, weights, xsec_weights, interactions)
+        for i, (e_gev, w, xw, itype, neut_mode) in enumerate(
+            zip(energies_gev, weights, xsec_weights, interactions, modes)
         ):
             event = {
                 "event_id": start_event + i,
@@ -166,6 +177,7 @@ class NeutNormalizer(OutputNormalizer):
                 "energy_gev": float(e_gev),
                 "weight": float(w),
                 "xsec_weight": float(xw),
+                "is_cc": _is_cc_mode(neut_mode),
                 "interaction": itype,
                 "probe": probe,
                 "target": target,

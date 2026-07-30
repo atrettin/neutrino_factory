@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from .base import ConfigTranslator
+from .base import ConfigTranslator, physics_current
 from ..flux import Flux, HistogramFlux, PowerLawFlux, build_flux
 
 # PDG codes for gevgen's -p (probe) flag. gevgen expects a numeric PDG code,
@@ -54,6 +54,19 @@ _GENIE_METER = 1.0 / _HBARC_GEV_M
 _GENIE_CM = 0.01 * _GENIE_METER
 GENIE_UNITS_CM2 = _GENIE_CM * _GENIE_CM
 
+# physics.current -> gevgen's --event-generator-list. The "CC" and "NC" lists are
+# defined in $GENIE/config/EventGeneratorListAssembler.xml (verified in the
+# R-3_06_00 image: CC covers QEL/RES/DIS/COH/MEC/DFR plus the charm and Lambda
+# channels, NC the corresponding six). There is no "Default" param_set in that
+# file — gevgen's own default already runs both currents — so "inclusive" omits
+# the option entirely rather than naming a list that does not exist.
+EVENT_GENERATOR_LISTS = {"cc": "CC", "nc": "NC", "inclusive": None}
+
+# The `proc:` tag a spline name carries for each current, used to restrict the
+# reconstructed total cross section to the channels gevgen was actually allowed
+# to generate (see compute_xsec_weight).
+SPLINE_PROCESS_TAGS = {"cc": "proc:Weak[CC]", "nc": "proc:Weak[NC]"}
+
 # Matches a <spline name="..."> opening tag, capturing the name attribute.
 _SPLINE_OPEN_RE = re.compile(r'<spline\s+name="([^"]*)"')
 # Matches a single <knot><E>..</E><xsec>..</xsec></knot> entry.
@@ -97,6 +110,7 @@ class GenieTranslator(ConfigTranslator):
                 f"Unknown neutrino particle '{particle}' for GENIE probe. "
                 f"Known: {', '.join(PARTICLE_PDG)}"
             )
+        current = physics_current(config)
 
         return {
             "generator": self.name,
@@ -111,7 +125,8 @@ class GenieTranslator(ConfigTranslator):
             "flux_model": flux_config["type"],
             "flux_config": flux_config,
             "genie_flux": self._genie_flux_descriptor(flux),
-            "event_generator_list": config["physics"].get("event_generator_list"),
+            "current": current,
+            "event_generator_list": EVENT_GENERATOR_LISTS[current],
             "physics_mode": config["physics"].get("mode", "inclusive"),
             "log_level": config["run"].get("log_level", "default"),
             # For GENIE, config_version is the tune and code_version is the git tag.
@@ -195,6 +210,14 @@ class GenieTranslator(ConfigTranslator):
         R-3_06_00/G18_10a_02_11a (103 matching splines for numu/Ar40, covering
         QEL/RES/DIS/COH/MEC including the dummy 2p2h pair codes).
 
+        **The sum must cover exactly the channels gevgen was allowed to
+        generate.** For ``physics.current: cc`` or ``nc`` the run is restricted
+        with ``--event-generator-list``, and ``xsec_sum`` is then the sum over
+        that current alone; the spline sum is therefore filtered on the matching
+        ``proc:Weak[CC]``/``proc:Weak[NC]`` tag in the spline name. Leaving the
+        filter out would fold the other current's cross section into ``C`` and
+        overstate the result (for numu on carbon, by roughly a third).
+
         Flux note: ``flux`` must be the spectrum GENIE *actually sampled*, i.e.
         the ``spectrum`` histogram gevgen writes to ``input-flux.root``, not the
         flux from the run config. gevgen never draws from a continuous function:
@@ -231,7 +254,10 @@ class GenieTranslator(ConfigTranslator):
         if integral <= 0.0:
             return xsec_weight
 
-        sigma_internal_sum = self._sum_matching_splines(xml_path, probe_pdg, target_pdg, centers)
+        current = str(translated_config.get("current", "cc")).lower()
+        sigma_internal_sum = self._sum_matching_splines(
+            xml_path, probe_pdg, target_pdg, centers, SPLINE_PROCESS_TAGS.get(current)
+        )
         if sigma_internal_sum is None:
             return xsec_weight
 
@@ -279,13 +305,21 @@ class GenieTranslator(ConfigTranslator):
 
     @staticmethod
     def _sum_matching_splines(
-        xml_path: Path, probe_pdg: int, target_pdg: int, query_energies_gev: np.ndarray
+        xml_path: Path,
+        probe_pdg: int,
+        target_pdg: int,
+        query_energies_gev: np.ndarray,
+        process_tag: str | None = None,
     ) -> np.ndarray | None:
         """Sum every spline for ``nu:<probe_pdg>;tgt:<target_pdg>;`` at each query energy.
 
         Streams the (potentially huge) spline XML line by line rather than
         parsing it as a DOM, since only a small fraction of its splines match a
         given (probe, target) pair.
+
+        ``process_tag`` (``proc:Weak[CC]`` / ``proc:Weak[NC]``) additionally
+        restricts the sum to one weak current; ``None`` sums both, which is what
+        an inclusive run generates.
         """
         needle = f"nu:{probe_pdg};tgt:{target_pdg};"
         total = np.zeros_like(query_energies_gev, dtype=np.float64)
@@ -299,7 +333,11 @@ class GenieTranslator(ConfigTranslator):
             for line in handle:
                 if not in_match:
                     open_match = _SPLINE_OPEN_RE.search(line)
-                    if open_match and needle in open_match.group(1):
+                    if (
+                        open_match
+                        and needle in open_match.group(1)
+                        and (process_tag is None or process_tag in open_match.group(1))
+                    ):
                         in_match = True
                         knot_e = []
                         knot_x = []

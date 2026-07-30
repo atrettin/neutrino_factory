@@ -19,6 +19,13 @@ def _task() -> dict:
     }
 
 
+def _only_jobcard(translated: dict) -> str:
+    """The jobcard of a single-current run (one pass)."""
+    passes = translated["gibuu_passes"]
+    assert len(passes) == 1, passes
+    return passes[0]["jobcard"]
+
+
 class GiBUUTranslatorFluxTests(unittest.TestCase):
     def _config(self, **flux_overrides) -> dict:
         flux = {
@@ -33,7 +40,7 @@ class GiBUUTranslatorFluxTests(unittest.TestCase):
 
     def test_power_law_uses_user_flux_jobcard_and_table(self) -> None:
         translated = GiBUUTranslator().translate(self._config(), _task())
-        jobcard = translated["gibuu_jobcard"]
+        jobcard = _only_jobcard(translated)
         self.assertIn("nuXsectionMode = 16", jobcard)
         self.assertIn("nuExp          = 99", jobcard)
         self.assertIn("FileNameFlux   = './flux.dat'", jobcard)
@@ -54,7 +61,7 @@ class GiBUUTranslatorFluxTests(unittest.TestCase):
         translated = GiBUUTranslator().translate(
             self._config(emin_gev=2.0, emax_gev=2.0), _task()
         )
-        jobcard = translated["gibuu_jobcard"]
+        jobcard = _only_jobcard(translated)
         self.assertIsNone(translated["gibuu_flux_table"])
         self.assertIn("nuXsectionMode = 6", jobcard)
         self.assertIn("nuExp          = 0", jobcard)
@@ -85,7 +92,7 @@ class GiBUUTranslatorXsecWeightTests(unittest.TestCase):
         self.assertEqual(translated["flux_config"]["type"], "power_law")
         self.assertEqual(translated["num_runs"], 1)
         # num_runs in the returned dict must match the jobcard so they can't drift.
-        self.assertIn("num_runs_SameEnergy = 1", translated["gibuu_jobcard"])
+        self.assertIn("num_runs_SameEnergy = 1", _only_jobcard(translated))
 
     def test_xsec_weight_flat_flux_hand_derivation(self) -> None:
         # Flat flux: flux_hat is constant at 1/(emax-emin), so

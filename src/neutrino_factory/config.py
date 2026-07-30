@@ -21,6 +21,31 @@ LOGGER = logging.getLogger(__name__)
 # writes, and warnings/errors — nothing per-event.
 LOG_LEVELS = ("default", "essential", "quiet", "verbose")
 
+# Which weak current the generators may produce. "inclusive" lets a generator
+# produce both, in its own relative proportion; "cc"/"nc" restrict generation at
+# the generator's own configuration level (not by filtering afterwards), so the
+# cross section reconstructed for the run is the cross section of that current
+# alone. Every event carries the resulting per-event ``is_cc`` flag in the
+# common output.
+PHYSICS_CURRENTS = ("cc", "nc", "inclusive")
+
+
+def physics_current(config: Dict[str, Any]) -> str:
+    """The run's weak current, normalized to one of ``PHYSICS_CURRENTS``.
+
+    ``validate_config`` already rejects unknown values, but translators and
+    adapters are also handed hand-built configs (tests, ``run_task`` from a
+    manifest), so the check is repeated here rather than trusting the caller:
+    silently falling back to "cc" for a typo would generate physically different
+    events than the config asks for.
+    """
+    current = str(config.get("physics", {}).get("current", "cc")).lower()
+    if current not in PHYSICS_CURRENTS:
+        raise ValueError(
+            f"Unknown physics.current '{current}'. Known: {', '.join(PHYSICS_CURRENTS)}"
+        )
+    return current
+
 DEFAULT_CONFIG: Dict[str, Any] = {
     "run": {
         "name": "neutrino_factory_run",
@@ -148,6 +173,7 @@ def validate_config(config: Dict[str, Any]) -> None:
 
     run = config.get("run", {})
     flux = config.get("flux", {})
+    physics = config.get("physics", {})
     splitting = config.get("splitting", {})
     generators = config.get("generators", {})
 
@@ -159,6 +185,11 @@ def validate_config(config: Dict[str, Any]) -> None:
     if log_level not in LOG_LEVELS:
         errors.append(
             f"run.log_level must be one of {', '.join(LOG_LEVELS)} (got '{log_level}')"
+        )
+    current = physics.get("current", "cc")
+    if not isinstance(current, str) or current.lower() not in PHYSICS_CURRENTS:
+        errors.append(
+            f"physics.current must be one of {', '.join(PHYSICS_CURRENTS)} (got '{current}')"
         )
 
     config_path = config.get("config_path")

@@ -5,6 +5,8 @@ from typing import Any
 
 import numpy as np
 
+# Re-exported so every translator reads the run's weak current the same way.
+from ..config import physics_current  # noqa: F401
 from ..flux import Flux
 
 

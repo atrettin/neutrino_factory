@@ -8,7 +8,12 @@ from unittest.mock import patch
 
 import numpy as np
 
-from neutrino_factory.config import LOG_LEVELS, ConfigError, resolve_config
+from neutrino_factory.config import (
+    LOG_LEVELS,
+    PHYSICS_CURRENTS,
+    ConfigError,
+    resolve_config,
+)
 
 
 def _write_root_histogram(path: Path, name: str, edges, contents) -> None:
@@ -177,6 +182,32 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             resolve_config(
                 {"run": {"log_level": "bogus"}, "generators": self._genie_generators()}
+            )
+
+    def test_current_defaults_to_cc(self) -> None:
+        config = resolve_config({"generators": self._genie_generators()})
+        self.assertEqual(config["physics"]["current"], "cc")
+
+    def test_known_currents_are_accepted(self) -> None:
+        for current in PHYSICS_CURRENTS:
+            with self.subTest(current=current):
+                config = resolve_config(
+                    {
+                        "physics": {"current": current},
+                        "generators": self._genie_generators(),
+                    }
+                )
+                self.assertEqual(config["physics"]["current"], current)
+
+    def test_unknown_current_raises(self) -> None:
+        # Silently falling back to "cc" would generate different physics than
+        # the config asks for.
+        with self.assertRaises(ConfigError):
+            resolve_config(
+                {
+                    "physics": {"current": "ccqe"},
+                    "generators": self._genie_generators(),
+                }
             )
 
     def _genie_generators(self) -> dict:

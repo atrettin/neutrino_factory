@@ -112,6 +112,7 @@ class NeutNormalizerJsonTests(unittest.TestCase):
                 "seed": 42,
                 "energy_gev": 1.0 + i * 0.5,
                 "weight": 1.0,
+                "is_cc": True,
                 "interaction": "inclusive",
                 "probe": "numu",
                 "target": "C12",
@@ -268,6 +269,23 @@ class NeutNormalizerRootTests(unittest.TestCase):
 
             _, events = read_events(out_path)
             self.assertEqual([e["interaction"] for e in events], expected)
+
+    def test_is_cc_follows_the_mode_number_not_the_category(self) -> None:
+        # CCQE (1) and NC elastic (51/52) share the "qel" category, and the mode
+        # is negated for antineutrinos: the current is |mode| <= 30.
+        modes = [1, 51, -1, -52, 16, 36]
+        expected = [True, False, True, False, True, False]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.flat.root"
+            _write_flat_root(root_path, [1.0] * len(modes), modes)
+            out_path = work_dir / "out.h5"
+
+            NeutNormalizer().normalize(root_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            self.assertEqual([e["is_cc"] for e in events], expected)
 
     def test_antineutrino_modes_are_negated(self) -> None:
         # NEUT negates the mode for antineutrinos; the mapping keys on |mode|.

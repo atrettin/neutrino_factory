@@ -530,3 +530,102 @@ The residual spread is Monte-Carlo noise, and GiBUU needs the larger sample for 
 meaningful comparison: its weights are heavy-tailed, and in a 1000-event run a
 single event carried 72% of one chunk's total. Before the fix the same NEUT
 comparison gave 2.06 at two chunks.
+
+## Weak current: enforced natively, recorded per event as `is_cc`
+
+`physics.current` (`cc` | `nc` | `inclusive`) is applied through each generator's
+**own** configuration rather than by filtering the normalized output. Filtering
+after the fact would waste the discarded events against the requested count and,
+worse, leave `xsec_weight` normalized to the inclusive cross section while the
+surviving sample covered only one current. The native switches are
+`--event-generator-list` (GENIE), the `dyn_*` parameters (NuWro), `NEUT-MODE -1`
+plus a `NEUT-CRS` mask (NEUT) and `process_ID` (GiBUU); `docs/configuration.md`
+tabulates them.
+
+**`is_cc` is a required column with no default.** The common output's
+`interaction` label cannot stand in for it: `qel` covers CCQE and NC elastic
+alike (GENIE's `qel` gst flag does, and NEUT modes 1 and 51/52 both map to it),
+so an inclusive run without this column is unusable for anything current-specific.
+Since a default would be indistinguishable from a measured value, `write_common_hdf5`
+raises instead — the fail-loud posture in `CLAUDE.md`. Files written before the
+column existed therefore no longer read; that is accepted (no active users yet).
+
+**GENIE's spline sum must track the generator list.** `xsec_weight` is
+reconstructed by summing the staged cross-section splines for the run's
+(probe, target) pair. That sum has to cover exactly the channels `gevgen` was
+allowed to generate, so it is filtered on `proc:Weak[CC]`/`proc:Weak[NC]` when a
+single current is requested. Without the filter a CC-restricted run would be
+normalized to the CC+NC total — for numu on carbon, an overstatement of roughly a
+third. The two settings are derived from the same `physics.current` value in the
+translator so they cannot drift apart.
+
+**GiBUU `inclusive` is two passes, not one run.** A GiBUU jobcard names a single
+`process_ID`, so an inclusive run generates CC and NC separately (in `cc/` and
+`nc/` subdirectories of the task work directory, with different seeds) and
+concatenates the events, tagging each from the pass it came from. This is exact,
+not an approximation, because GiBUU is cross-section-weighted rather than
+rejection-sampled: each pass's weights already sum to that current's cross
+section, so the union sums to sigma_CC + sigma_NC with no reweighting. The same
+trick would *not* work for the other three generators, whose per-event weights
+carry no absolute normalization of their own.
+
+**NEUT's CC/NC masks are slot tables, not mode numbers.** `NEUT-MODE -1` scales
+each channel by its slot in the 30-element `NEUT-CRS` (neutrino) / `NEUT-CRSB`
+(antineutrino) array, and the slot order is a fixed list documented in NEUT's
+shipped cards that does *not* match the mode numbering — the two arrays even
+differ from each other, since antineutrinos carry separate free and bound CCQE
+slots. Both rows are written on every card, each masked with its own table, so
+the run does not depend on which array NEUT consults for a given beam sign.
+
+**NuWro's `dyn_lep` (neutrino-electron scattering) is off for every current**,
+overriding NuWro's own default of on. Its target is an atomic electron, so its
+cross section is not on the per-nucleon normalization `xsec_weight` uses, and
+mixing it in would corrupt the column for a set of events that the `interaction`
+label would only mark as `other`.
+
+**Validation** (local Docker, numu on C12, power-law flux over 0.5–5 GeV;
+400 events for GENIE, 2000 for the rest):
+
+| Generator | CC fraction, `cc` run | `nc` run | `inclusive` run | NC share of sigma, inclusive |
+|---|---|---|---|---|
+| GENIE | 1.000 | 0.000 | 0.750 | 0.204 |
+| NuWro | 1.000 | 0.000 | 0.744 | 0.278 |
+| NEUT | 1.000 | 0.000 | 0.735 | 0.261 |
+| GiBUU | 1.000 | 0.000 | 0.449 | 0.308 |
+
+GiBUU's inclusive *event* fraction is near half because it samples phase space
+rather than the cross section; its CC:NC ratio lives in the weights, and the NC
+share of sigma above is the number to compare. The exact reference is GENIE's
+spline decomposition, which is deterministic: summing the staged splines for
+numu/C12 filtered on `Weak[CC]` and `Weak[NC]` gives 1.03736 and 0.39137, whose
+sum reproduces the unfiltered total to all six printed digits, i.e. an NC share
+of 0.274 — consistent with every generator's measured value above.
+
+Two things this run confirmed that were not certain from documentation alone:
+NEUT's `evtrt` histogram (the basis of its `xsec_weight` normalization) *does*
+follow the `NEUT-CRS` mask, so a masked run is normalized to its own current and
+not the inclusive total; and the two ambiguous "coherent" slots resolve as
+CC-then-NC, since the CC-masked run produced mode 16 (CC coherent) and no mode
+36, and the NC-masked run the reverse.
+
+## Plots decide CC vs. NC from the data, not from `physics.current`
+
+`plot-output` splits the cross-section figure into a CC and an NC panel when a
+dataset is *inclusive*, and it decides that from the `is_cc` column of the file
+it is plotting — a panel is drawn for a current only if the file actually holds
+events of that current — rather than from the run configuration's
+`physics.current`.
+
+Two reasons. First, `--input` mode is handed a bare HDF5 file with no config in
+sight, and the file is the authority on its own contents in any case; keying off
+the data means the single-file and `--config` paths cannot disagree. Second, a
+configured-inclusive run that produced no NC events (a small run, or a generator
+whose NC channels were all masked out) would otherwise get an empty NC panel
+that looks like a physics result of zero. One panel labelled CC is the honest
+rendering of a file that contains only CC events.
+
+The consequence to be aware of: the panel layout of a figure describes the
+sample, not the request. An inclusive run whose NC events are simply missing
+produces a one-panel figure, which is a signal worth investigating rather than a
+plotting artefact — `check-status` and `analyze-kinematics` are the tools for
+confirming the run itself is complete.

@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from .base import ConfigTranslator
+from .base import ConfigTranslator, physics_current
 from .nuwro import NUCLEUS_COMPOSITION, PARTICLE_PDG
 from ..flux import Flux, build_flux
 
@@ -30,6 +30,43 @@ DEFAULT_MAQE = 1.05
 # here plus a new config_versions entry on NeutAdapter.
 CONFIG_VERSION_CARDS: dict[str, dict[str, Any]] = {
     "default": {"NEUT-MDLQE": DEFAULT_MDLQE, "NEUT-MAQE": DEFAULT_MAQE},
+}
+
+# Which weak current each slot of NEUT's 30-element cross-section scale arrays
+# belongs to. ``NEUT-MODE -1`` ("input cross section by CRSNEUT") multiplies each
+# channel's cross section by its slot's factor, so zeroing every slot of the
+# unwanted current restricts generation to one current — NEUT has no CC/NC switch
+# of its own, and ``NEUT-MODE n > 0`` would pin a single channel.
+#
+# The slot order is *not* the mode number: it is the fixed list documented in the
+# NEUT-shipped cards (verified in the 5.7.0 image,
+# share/neut/Cards/neut_5.4.0_nd5_O.card), and it differs between neutrinos
+# (NEUT-CRS) and antineutrinos (NEUT-CRSB), which carry separate free/bound CCQE
+# slots. Both rows are written on every card, each masked with its own table, so
+# the run does not depend on which array NEUT consults for a given beam sign.
+#
+# The card labels slots 14/15 (nu) and 15/16 (nubar) only as "coherent"; they are
+# read as CC-then-NC, the CC-before-NC ordering every other pair in the list
+# follows (eta, K, 1 gamma, DIS, diffractive). Slot 22 for neutrinos is "N/A" and
+# is left at zero in both masks.
+_CC, _NC = "cc", "nc"
+CRS_SLOT_CURRENTS: dict[str, tuple[str | None, ...]] = {
+    # 1 CCQE | 2-4 CC 1pi | 5 CC DIS 1320 | 6-9 NC 1pi | 10 NC DIS 1320 |
+    # 11-13 NC elastic | 14/15 coherent | 16 CC eta | 17,18 NC eta | 19 CC K |
+    # 20,21 NC K | 22 N/A | 23 CC DIS | 24 NC DIS | 25 CC 1gamma | 26,27 NC
+    # 1gamma | 28 CC 2p2h | 29 CC diffractive | 30 NC diffractive
+    "nu": (
+        _CC, _CC, _CC, _CC, _CC, _NC, _NC, _NC, _NC, _NC,
+        _NC, _NC, _NC, _CC, _NC, _CC, _NC, _NC, _CC, _NC,
+        _NC, None, _CC, _NC, _CC, _NC, _NC, _CC, _CC, _NC,
+    ),
+    # As above, but 11 is CCQE (bound), pushing NC elastic to 12-14 and the
+    # coherent pair to 15/16.
+    "nubar": (
+        _CC, _CC, _CC, _CC, _CC, _NC, _NC, _NC, _NC, _NC,
+        _CC, _NC, _NC, _NC, _CC, _NC, _CC, _NC, _NC, _CC,
+        _NC, _NC, _CC, _NC, _CC, _NC, _NC, _CC, _CC, _NC,
+    ),
 }
 
 
@@ -58,6 +95,8 @@ class NeutTranslator(ConfigTranslator):
             )
         protons, neutrons = NUCLEUS_COMPOSITION[nucleus]
 
+        current = physics_current(config)
+
         config_version = str(task["config_version"])
         if config_version not in CONFIG_VERSION_CARDS:
             raise KeyError(
@@ -77,16 +116,22 @@ class NeutTranslator(ConfigTranslator):
             "flux_model": flux_config["type"],
             "flux_config": flux_config,
             "flux_nbins": FLUX_NBINS,
-            # NEUT's NEUT-MODE selects a *single* interaction channel, not a
-            # current, so there is no way to restrict a run to CC or NC. The
-            # setting is recorded but not honoured, as in the NuWro translator.
-            "current": config["physics"].get("current", "cc"),
+            "current": current,
             "physics_mode": config["physics"].get("mode", "inclusive"),
             "code_version": task["code_version"],
             "config_version": config_version,
             "generator_version_id": task.get("generator_version_id"),
-            "neut_card": self._card(task, particle, protons, neutrons, config_version),
+            "neut_card": self._card(
+                task, particle, protons, neutrons, config_version, current
+            ),
         }
+
+    @staticmethod
+    def _crs_row(slot_currents: tuple[str | None, ...], current: str) -> str:
+        """One ``NEUT-CRS``/``NEUT-CRSB`` row: 1. for wanted slots, 0. elsewhere."""
+        # Slots belonging to another current — and the one "N/A" slot, which is
+        # None — are switched off.
+        return " ".join("1." if slot == current else "0." for slot in slot_currents)
 
     @staticmethod
     def _card(
@@ -95,6 +140,7 @@ class NeutTranslator(ConfigTranslator):
         protons: int,
         neutrons: int,
         config_version: str,
+        current: str,
     ) -> dict[str, Any]:
         """Build NEUT's card as an ordered ``key -> value`` mapping.
 
@@ -116,6 +162,12 @@ class NeutTranslator(ConfigTranslator):
         seed from the clock and destroy chunk reproducibility. ``NEUT-CRSPATH``
         is deliberately omitted so the cross-section tables resolve from
         ``$NEUT_CRSPATH``, which the container images already set.
+
+        ``NEUT-MODE`` carries the weak current: ``0`` is NEUT's normal mode, in
+        which every channel is generated in proportion to its cross section
+        (``inclusive``), while ``-1`` scales each channel by its ``NEUT-CRS``
+        slot, which is how a single current is selected (see
+        ``CRS_SLOT_CURRENTS``).
         """
         card: dict[str, Any] = {
             "EVCT-NEVT": int(task["event_count"]),
@@ -139,6 +191,12 @@ class NeutTranslator(ConfigTranslator):
             "NEUT-MODE": 0,
             "NEUT-RAND": 0,
         }
+        if current != "inclusive":
+            card["NEUT-MODE"] = -1
+            card["NEUT-CRS"] = NeutTranslator._crs_row(CRS_SLOT_CURRENTS["nu"], current)
+            card["NEUT-CRSB"] = NeutTranslator._crs_row(
+                CRS_SLOT_CURRENTS["nubar"], current
+            )
         card.update(CONFIG_VERSION_CARDS[config_version])
         return card
 

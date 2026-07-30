@@ -55,13 +55,24 @@ def _base_task() -> dict:
     }
 
 
-def _write_sidecar(work_dir: Path, num_runs: int = 1) -> None:
+def _part(work_dir: Path, index: int = 1, current: str = "cc") -> Path:
+    """Path of one run's output inside its pass directory (created on demand)."""
+    pass_dir = work_dir / current
+    pass_dir.mkdir(parents=True, exist_ok=True)
+    return pass_dir / f"EventOutput.Pert.{index:08d}.root"
+
+
+def _write_sidecar(work_dir: Path, num_runs: int = 1, currents=("cc",)) -> None:
     sidecar = {
         "beam_particle": "numu",
         "nucleus": "C12",
         "energy_range_gev": [0.5, 5.0],
         "seed": 42,
         "num_runs": num_runs,
+        "current": "inclusive" if len(currents) > 1 else currents[0],
+        "gibuu_passes": [
+            {"current": current, "jobcard": "! jobcard"} for current in currents
+        ],
         "flux_config": {
             "type": "power_law",
             "particle": "numu",
@@ -81,6 +92,7 @@ class GiBUUNormalizerJsonTests(unittest.TestCase):
                 "seed": 42,
                 "energy_gev": 1.0 + i * 0.5,
                 "weight": 1.0,
+                "is_cc": True,
                 "interaction": "inclusive",
                 "probe": "numu",
                 "target": "C12",
@@ -131,7 +143,7 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
             _write_sidecar(work_dir)
-            root_path = work_dir / "EventOutput.Pert.00000001.root"
+            root_path = _part(work_dir)
             _write_roottuple(
                 root_path,
                 lepIn_E=[1.0, 2.5, 4.0],
@@ -140,7 +152,7 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
             )
             out_path = work_dir / "out.h5"
 
-            result = GiBUUNormalizer().normalize(root_path, out_path, _base_task(), "local")
+            result = GiBUUNormalizer().normalize(work_dir, out_path, _base_task(), "local")
 
             self.assertEqual(result, str(out_path))
             metadata, events = read_events(out_path)
@@ -160,13 +172,13 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
             _write_sidecar(work_dir)
-            root_path = work_dir / "EventOutput.Pert.00000001.root"
+            root_path = _part(work_dir)
             _write_roottuple(
                 root_path, lepIn_E=[1.0, 2.5, 4.0], weight=[1.0] * 3, evType=[1, 2, 34]
             )
             out_path = work_dir / "out.h5"
 
-            GiBUUNormalizer().normalize(root_path, out_path, _base_task(), "local")
+            GiBUUNormalizer().normalize(work_dir, out_path, _base_task(), "local")
 
             _, events = read_events(out_path)
             for event, energy in zip(events, [1.0, 2.5, 4.0]):
@@ -182,7 +194,7 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
             _write_sidecar(work_dir)
-            root_path = work_dir / "EventOutput.Pert.00000001.root"
+            root_path = _part(work_dir)
             raw = [1.0, 0.8, 1.2]
             _write_roottuple(
                 root_path,
@@ -192,7 +204,7 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
             )
             out_path = work_dir / "out.h5"
 
-            GiBUUNormalizer().normalize(root_path, out_path, _base_task(), "local")
+            GiBUUNormalizer().normalize(work_dir, out_path, _base_task(), "local")
 
             _, events = read_events(out_path)
             width = 5.0 - 0.5
@@ -203,12 +215,12 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
             _write_sidecar(work_dir)
-            root_path = work_dir / "EventOutput.Pert.00000001.root"
+            root_path = _part(work_dir)
             _write_roottuple(root_path, lepIn_E=[1.0, 2.0], weight=[1.0, 1.0], evType=[1, 2])
             task = {**_base_task(), "start_event": 100, "event_count": 2}
             out_path = work_dir / "out.h5"
 
-            GiBUUNormalizer().normalize(root_path, out_path, task, "local")
+            GiBUUNormalizer().normalize(work_dir, out_path, task, "local")
 
             _, events = read_events(out_path)
             self.assertEqual(events[0]["event_id"], 100)
@@ -218,7 +230,7 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
             _write_sidecar(work_dir)
-            root_path = work_dir / "EventOutput.Pert.00000001.root"
+            root_path = _part(work_dir)
             _write_roottuple(
                 root_path,
                 lepIn_E=[1.0] * 6,
@@ -228,7 +240,7 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
             out_path = work_dir / "out.h5"
             task = {**_base_task(), "event_count": 6}
 
-            GiBUUNormalizer().normalize(root_path, out_path, task, "local")
+            GiBUUNormalizer().normalize(work_dir, out_path, task, "local")
 
             _, events = read_events(out_path)
             interactions = [e["interaction"] for e in events]
@@ -237,28 +249,86 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
     def test_normalize_root_raises_without_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
-            root_path = work_dir / "EventOutput.Pert.00000001.root"
+            root_path = _part(work_dir)
             _write_roottuple(root_path, lepIn_E=[1.0], weight=[1.0], evType=[1])
             out_path = work_dir / "out.h5"
 
             with self.assertRaises(RuntimeError):
-                GiBUUNormalizer().normalize(root_path, out_path, _base_task(), "local")
+                GiBUUNormalizer().normalize(work_dir, out_path, _base_task(), "local")
 
-    def test_normalize_dispatches_root_on_root_suffix(self) -> None:
+    def test_normalize_dispatches_root_on_a_work_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
             _write_sidecar(work_dir)
-            root_path = work_dir / "EventOutput.Pert.00000001.root"
+            root_path = _part(work_dir)
             _write_roottuple(root_path, lepIn_E=[1.0], weight=[1.0], evType=[1])
             out_path = work_dir / "out.h5"
             normalizer = GiBUUNormalizer()
             with patch.object(normalizer, "_normalize_root", wraps=normalizer._normalize_root) as mock_root:
-                normalizer.normalize(root_path, out_path, _base_task(), "local")
+                normalizer.normalize(work_dir, out_path, _base_task(), "local")
             mock_root.assert_called_once()
 
 
-if __name__ == "__main__":
-    unittest.main()
+class GiBUUInclusivePassTests(unittest.TestCase):
+    """An inclusive GiBUU run is two passes, one per weak current.
+
+    GiBUU's RootTuple carries no per-event current, so the flag comes from the
+    pass directory an event was read from — which makes reading *both* passes,
+    in a known order, part of the correctness of the flag.
+    """
+
+    def test_both_passes_are_read_and_tagged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, currents=("cc", "nc"))
+            _write_roottuple(_part(work_dir, current="cc"), [1.0, 2.0], [0.1, 0.1], [1, 1])
+            _write_roottuple(_part(work_dir, current="nc"), [3.0], [0.1], [1])
+            out_path = work_dir / "out.h5"
+
+            GiBUUNormalizer().normalize(work_dir, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            self.assertEqual([e["energy_gev"] for e in events], [1.0, 2.0, 3.0])
+            self.assertEqual([e["is_cc"] for e in events], [True, True, False])
+            # event_id stays contiguous across the pass boundary.
+            self.assertEqual([e["event_id"] for e in events], [0, 1, 2])
+
+    def test_inclusive_total_is_the_sum_of_the_single_current_runs(self) -> None:
+        # The two passes are separate estimates of sigma_CC and sigma_NC, so
+        # concatenating them must give sigma_CC + sigma_NC exactly.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            totals = {}
+            for currents in (("cc",), ("nc",), ("cc", "nc")):
+                work_dir = root / "_".join(currents)
+                work_dir.mkdir()
+                _write_sidecar(work_dir, currents=currents)
+                for current in currents:
+                    _write_roottuple(
+                        _part(work_dir, current=current), [1.0, 2.0], [0.25, 0.25], [1, 1]
+                    )
+                out_path = work_dir / "out.h5"
+                GiBUUNormalizer().normalize(work_dir, out_path, _base_task(), "local")
+                _, events = read_events(out_path)
+                totals[currents] = sum(e["xsec_weight"] for e in events)
+
+            self.assertAlmostEqual(
+                totals[("cc", "nc")], totals[("cc",)] + totals[("nc",)]
+            )
+
+    def test_missing_pass_raises(self) -> None:
+        # Only the CC pass ran: reporting it as an inclusive sample would drop
+        # the NC cross section without any sign in the output.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, currents=("cc", "nc"))
+            _write_roottuple(_part(work_dir, current="cc"), [1.0], [0.1], [1])
+
+            with self.assertRaises(RuntimeError) as ctx:
+                GiBUUNormalizer().normalize(
+                    work_dir, work_dir / "out.h5", _base_task(), "local"
+                )
+            self.assertIn("nc", str(ctx.exception))
 
 
 class GiBUUMultiRunOutputTests(unittest.TestCase):
@@ -270,20 +340,16 @@ class GiBUUMultiRunOutputTests(unittest.TestCase):
     only the first part would report sigma/N and drop the other runs' events.
     """
 
-    @staticmethod
-    def _part(work_dir: Path, index: int) -> Path:
-        return work_dir / f"EventOutput.Pert.{index:08d}.root"
-
     def test_all_parts_are_read_and_concatenated(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
             _write_sidecar(work_dir, num_runs=2)
-            _write_roottuple(self._part(work_dir, 1), [1.0, 2.0], [0.1, 0.1], [1, 1])
-            _write_roottuple(self._part(work_dir, 2), [3.0, 4.0, 5.0], [0.1] * 3, [1] * 3)
+            _write_roottuple(_part(work_dir, 1), [1.0, 2.0], [0.1, 0.1], [1, 1])
+            _write_roottuple(_part(work_dir, 2), [3.0, 4.0, 5.0], [0.1] * 3, [1] * 3)
             out_path = work_dir / "out.h5"
 
             GiBUUNormalizer().normalize(
-                self._part(work_dir, 1), out_path, _base_task(), "local"
+                work_dir, out_path, _base_task(), "local"
             )
 
             _, events = read_events(out_path)
@@ -305,16 +371,16 @@ class GiBUUMultiRunOutputTests(unittest.TestCase):
 
             energies = [1.0, 2.0, 3.0, 4.0]
             _write_sidecar(one, num_runs=1)
-            _write_roottuple(self._part(one, 1), energies, [0.25] * 4, [1] * 4)
+            _write_roottuple(_part(one, 1), energies, [0.25] * 4, [1] * 4)
             GiBUUNormalizer().normalize(
-                self._part(one, 1), one / "out.h5", _base_task(), "local"
+                one, one / "out.h5", _base_task(), "local"
             )
 
             _write_sidecar(two, num_runs=2)
             for index in (1, 2):
-                _write_roottuple(self._part(two, index), energies, [0.25] * 4, [1] * 4)
+                _write_roottuple(_part(two, index), energies, [0.25] * 4, [1] * 4)
             GiBUUNormalizer().normalize(
-                self._part(two, 1), two / "out.h5", _base_task(), "local"
+                two, two / "out.h5", _base_task(), "local"
             )
 
             _, one_events = read_events(one / "out.h5")
@@ -331,11 +397,11 @@ class GiBUUMultiRunOutputTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
             _write_sidecar(work_dir, num_runs=2)
-            _write_roottuple(self._part(work_dir, 1), [1.0], [0.1], [1])
+            _write_roottuple(_part(work_dir, 1), [1.0], [0.1], [1])
 
             with self.assertRaises(RuntimeError) as ctx:
                 GiBUUNormalizer().normalize(
-                    self._part(work_dir, 1), work_dir / "out.h5", _base_task(), "local"
+                    work_dir, work_dir / "out.h5", _base_task(), "local"
                 )
             self.assertIn("num_runs=2", str(ctx.exception))
 
@@ -345,8 +411,8 @@ class GiBUUMultiRunOutputTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
             for index in (2, 1, 3):
-                self._part(work_dir, index).write_text("", encoding="utf-8")
-            parts = pert_output_parts(work_dir)
+                _part(work_dir, index).write_text("", encoding="utf-8")
+            parts = pert_output_parts(work_dir / "cc")
             self.assertEqual(
                 [p.name for p in parts],
                 [

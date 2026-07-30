@@ -15,7 +15,7 @@ from neutrino_factory.normalizers.nuwro import NuWroNormalizer
 
 
 def _write_root_tree(
-    path: Path, energies_mev, weights, qel, res, dis, coh, mec, out_counts=None
+    path: Path, energies_mev, weights, qel, res, dis, coh, mec, out_counts=None, cc=None
 ) -> None:
     """Write a synthetic ``treeout`` tree, all momenta in MeV as NuWro does.
 
@@ -53,6 +53,11 @@ def _write_root_tree(
             "e/out/out.y": jagged(2),
             "e/out/out.z": jagged(3),
             "e/weight": np.array(weights, dtype=np.float64),
+            # Charged current unless the test says otherwise; the current is its
+            # own flag, independent of the interaction-class flags.
+            "e/flag/flag.cc": np.array(
+                np.ones(count) if cc is None else cc, dtype=np.bool_
+            ),
             "e/flag/flag.qel": np.array(qel, dtype=np.bool_),
             "e/flag/flag.res": np.array(res, dtype=np.bool_),
             "e/flag/flag.dis": np.array(dis, dtype=np.bool_),
@@ -100,6 +105,7 @@ class NuWroNormalizerJsonTests(unittest.TestCase):
                 "seed": 42,
                 "energy_gev": 1.0 + i * 0.5,
                 "weight": 1.0,
+                "is_cc": True,
                 "interaction": "inclusive",
                 "probe": "numu",
                 "target": "C12",
@@ -141,6 +147,32 @@ class NuWroNormalizerJsonTests(unittest.TestCase):
 
 
 class NuWroNormalizerRootTests(unittest.TestCase):
+    def test_is_cc_comes_from_the_cc_flag_not_the_class_flags(self) -> None:
+        # All three events are quasi-elastic, a class NuWro fills for CC and NC
+        # alike; only flag.cc separates them.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.root"
+            _write_root_tree(
+                root_path,
+                energies_mev=[1000.0, 2500.0, 4000.0],
+                weights=[1e-38] * 3,
+                qel=[True] * 3,
+                res=[False] * 3,
+                dis=[False] * 3,
+                coh=[False] * 3,
+                mec=[False] * 3,
+                cc=[True, False, True],
+            )
+            out_path = work_dir / "out.h5"
+
+            NuWroNormalizer().normalize(root_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            self.assertEqual([e["is_cc"] for e in events], [True, False, True])
+            self.assertEqual([e["interaction"] for e in events], ["qel"] * 3)
+
     def test_normalize_root_reads_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)

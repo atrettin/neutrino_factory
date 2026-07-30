@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from .base import ConfigTranslator
+from .base import ConfigTranslator, physics_current
 from ..flux import Flux, build_flux
 
 # Number of equal-width bins used to approximate a continuous spectrum as a
@@ -26,6 +26,27 @@ PARTICLE_PDG = {
     "nutau": 16,
     "nutaubar": -16,
 }
+
+# The nuclear-target dynamics channels NuWro switches on and off individually,
+# as ``dyn_<channel>_<current>`` parameters. Every one of them exists in NuWro's
+# shipped data/params.txt (verified in the nuwro_25.11 image), whose own default
+# is CC-only: all ``_cc`` on, all ``_nc`` off.
+DYNAMICS_CHANNELS = ("qel", "res", "dis", "coh", "mec")
+
+# Channels outside the ``<channel>_<current>`` grid, pinned explicitly so that
+# what "cc"/"nc"/"inclusive" mean does not depend on NuWro's built-in defaults:
+#
+# * ``dyn_hyp_cc`` — quasi-elastic hyperon production, a genuine CC channel
+#   (antineutrinos only), so it follows the CC switch.
+# * ``dyn_lep`` — neutrino-electron scattering. It is *on* in NuWro's default
+#   params.txt, mixes both currents, and is not a nuclear-target process at all:
+#   its target is an atomic electron, while this framework's xsec_weight is
+#   normalized per target *nucleon*. Including it would put events with an
+#   incommensurable normalization into the same output, so it is switched off
+#   for every current.
+# * ``dyn_qel_el`` — (quasi-)elastic *electron* scattering, for electron beams;
+#   irrelevant to a neutrino run and off in NuWro's defaults too.
+EXTRA_DYNAMICS = {"hyp_cc": "cc", "lep": None, "qel_el": None}
 
 # (protons, neutrons) for NuWro's nucleus_p / nucleus_n parameters.
 NUCLEUS_COMPOSITION = {
@@ -54,6 +75,7 @@ class NuWroTranslator(ConfigTranslator):
         seed = int(task["seed"])
 
         protons, neutrons = NUCLEUS_COMPOSITION[nucleus]
+        current = physics_current(config)
 
         # NuWro (beam_type=0) reads the spectrum straight from `beam_energy`.
         # target_type=0 selects a single nucleus via nucleus_p / nucleus_n.
@@ -66,6 +88,7 @@ class NuWroTranslator(ConfigTranslator):
             "nucleus_p": protons,
             "nucleus_n": neutrons,
             "target_type": 0,
+            **self._dynamics(current),
         }
 
         return {
@@ -79,11 +102,39 @@ class NuWroTranslator(ConfigTranslator):
             "flux_model": flux_config["type"],
             "flux_config": flux_config,
             "mode": config["physics"].get("mode", "inclusive"),
+            "current": current,
             "code_version": task["code_version"],
             "config_version": task["config_version"],
             "generator_version_id": task.get("generator_version_id"),
             "nuwro_params": nuwro_params,
         }
+
+    @staticmethod
+    def _dynamics(current: str) -> dict[str, int]:
+        """NuWro's ``dyn_*`` switches for the requested weak current.
+
+        Written out in full for every current — including the channels that are
+        off — so the params file states the complete dynamics set rather than
+        inheriting half of it from NuWro's own defaults.
+
+        No ``compute_xsec_weight`` change is needed to go with this: NuWro's raw
+        per-event weight is ``chooser::total()``, the flux-averaged sum over the
+        *active* channels, so restricting the channels rescales the weight by
+        construction.
+        """
+        wanted = {"cc", "nc"} if current == "inclusive" else {current}
+        switches = {
+            f"dyn_{channel}_{channel_current}": int(channel_current in wanted)
+            for channel in DYNAMICS_CHANNELS
+            for channel_current in ("cc", "nc")
+        }
+        switches.update(
+            {
+                f"dyn_{name}": int(channel_current in wanted)
+                for name, channel_current in EXTRA_DYNAMICS.items()
+            }
+        )
+        return switches
 
     def compute_xsec_weight(
         self,

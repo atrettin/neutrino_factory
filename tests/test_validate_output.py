@@ -34,6 +34,7 @@ def _write_valid(path: Path, n: int) -> str:
             "seed": 1,
             "energy_gev": 1.0 + i,
             "weight": 1.0,
+            "is_cc": True,
             "interaction": "qel",
             "probe": "numu",
             "target": "Ar40",
