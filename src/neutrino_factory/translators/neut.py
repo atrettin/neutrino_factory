@@ -6,9 +6,8 @@ from typing import Any
 import numpy as np
 
 from .base import ConfigTranslator, physics_current
-from .nuwro import NUCLEUS_COMPOSITION
 from ..flux import Flux, HistogramFlux, build_flux
-from ..particles import probe_pdg
+from ..particles import nucleus_composition, probe_pdg
 
 # Binning of the TH1 flux handed to NEUT. NEUT draws energies uniformly *within*
 # whichever bin it picks, so this histogram is the finest structure the
@@ -106,12 +105,7 @@ class NeutTranslator(ConfigTranslator):
         particle = flux_config["particle"]
         particle_pdg = probe_pdg(particle, "NEUT")
         nucleus = target["nucleus"]
-        if nucleus not in NUCLEUS_COMPOSITION:
-            raise KeyError(
-                f"Unknown target nucleus '{nucleus}' for NEUT. "
-                f"Known: {', '.join(NUCLEUS_COMPOSITION)}"
-            )
-        protons, neutrons = NUCLEUS_COMPOSITION[nucleus]
+        protons, neutrons = nucleus_composition(nucleus)
 
         current = physics_current(config)
 

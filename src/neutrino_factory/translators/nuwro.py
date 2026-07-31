@@ -7,7 +7,7 @@ import numpy as np
 
 from .base import ConfigTranslator, physics_current
 from ..flux import Flux, build_flux
-from ..particles import probe_pdg
+from ..particles import nucleus_composition, probe_pdg
 
 # Number of equal-width bins used to approximate a continuous spectrum as a
 # NuWro `beam_energy` histogram. NuWro's parser caps at 5000 bins.
@@ -39,15 +39,6 @@ DYNAMICS_CHANNELS = ("qel", "res", "dis", "coh", "mec")
 #   irrelevant to a neutrino run and off in NuWro's defaults too.
 EXTRA_DYNAMICS = {"hyp_cc": "cc", "lep": None, "qel_el": None}
 
-# (protons, neutrons) for NuWro's nucleus_p / nucleus_n parameters.
-NUCLEUS_COMPOSITION = {
-    "Ar40": (18, 22),
-    "C12": (6, 6),
-    "O16": (8, 8),
-    "Fe56": (26, 30),
-    "Ca40": (20, 20),
-}
-
 
 class NuWroTranslator(ConfigTranslator):
     name = "nuwro"
@@ -65,7 +56,9 @@ class NuWroTranslator(ConfigTranslator):
         energy_range_gev = [flux.emin_gev, flux.emax_gev]
         seed = int(task["seed"])
 
-        protons, neutrons = NUCLEUS_COMPOSITION[nucleus]
+        # nucleus_p / nucleus_n derived from the name, so any isotope NuWro
+        # itself supports works without a table entry here.
+        protons, neutrons = nucleus_composition(nucleus)
         current = physics_current(config)
 
         # NuWro (beam_type=0) reads the spectrum straight from `beam_energy`.

@@ -8,15 +8,16 @@ from unittest.mock import patch
 
 import numpy as np
 
-from neutrino_factory.config import resolve_config
 from neutrino_factory.generators.neut import NeutAdapter
 from neutrino_factory.translators.neut import NeutTranslator
+
+from .helpers import view_config
 
 CODE_VERSION = "5.7.0-nuint2024"
 
 
 def _config() -> dict:
-    return resolve_config(
+    return view_config(
         {
             "flux": {
                 "type": "power_law",
@@ -26,6 +27,9 @@ def _config() -> dict:
                 "gamma": -2.0,
             },
             "target": {"nucleus": "C12"},
+            "generator": "neut",
+            "code_version": "5.7.0-nuint2024",
+            "config_version": "default",
         }
     )
 

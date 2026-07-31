@@ -9,16 +9,17 @@ from __future__ import annotations
 
 import unittest
 
-from neutrino_factory.config import resolve_config
 from neutrino_factory.translators.base import physics_current
 from neutrino_factory.translators.genie import GenieTranslator
 from neutrino_factory.translators.gibuu import GiBUUTranslator
 from neutrino_factory.translators.neut import CRS_SLOT_CURRENTS, NeutTranslator
 from neutrino_factory.translators.nuwro import NuWroTranslator
 
+from .helpers import view_config
+
 
 def _config(current: str, *, particle: str = "numu", nucleus: str = "C12") -> dict:
-    return resolve_config(
+    return view_config(
         {
             "flux": {
                 "type": "power_law",
@@ -28,7 +29,7 @@ def _config(current: str, *, particle: str = "numu", nucleus: str = "C12") -> di
                 "gamma": -2.0,
             },
             "target": {"nucleus": nucleus},
-            "physics": {"current": current},
+            "physics": {"mode": "inclusive", "current": current},
         }
     )
 

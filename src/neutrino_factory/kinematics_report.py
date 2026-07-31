@@ -148,6 +148,8 @@ def analyze_file(path: str | Path) -> dict[str, Any]:
         "generator": None,
         "code_version": None,
         "config_version": None,
+        "probe": None,
+        "target": None,
         "event_count": 0,
         "expected_events": None,
         "interactions": [],
@@ -173,6 +175,12 @@ def analyze_file(path: str | Path) -> dict[str, Any]:
     result["ok"] = True
     if not events:
         return result
+
+    # The initial state as the events themselves report it. "mixed" when a file
+    # disagrees with itself — worth seeing rather than silently picking one.
+    for field in ("probe", "target"):
+        values = {str(event[field]) for event in events}
+        result[field] = values.pop() if len(values) == 1 else "mixed"
 
     interactions = np.array([event["interaction"] for event in events])
     xsec_weights = np.array([event["xsec_weight"] for event in events], dtype=np.float64)
@@ -223,6 +231,8 @@ def analyze_config(config: dict[str, Any]) -> list[dict[str, Any]]:
 
     Falls back to the expected entry's generator/version for a file that cannot
     be read, so a missing output is still reported under a meaningful heading.
+    The probe and target always come from the configuration, which is what the
+    run was asked to produce.
     """
     analyses = []
     for entry in expected_outputs(config)["merged"]:
@@ -232,6 +242,8 @@ def analyze_config(config: dict[str, Any]) -> list[dict[str, Any]]:
             if analysis["expected_events"] is not None
             else int(entry["expected_events"])
         )
+        analysis["probe"] = entry["particle"]
+        analysis["target"] = entry["nucleus"]
         if not analysis["ok"]:
             analysis["generator"] = entry["generator"]
             version_id = str(entry["version_id"])
@@ -273,6 +285,9 @@ def format_report(analysis: dict[str, Any]) -> str:
     title = (
         f"{analysis['generator']}  {analysis['code_version']} + {analysis['config_version']}"
     )
+    probe, target = analysis.get("probe"), analysis.get("target")
+    if probe and target:
+        title = f"{probe} on {target} — {title}"
     lines = ["=" * 78, title, f"  file: {analysis['path']}", "=" * 78]
 
     if not analysis["ok"]:

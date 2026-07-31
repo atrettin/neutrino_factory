@@ -220,9 +220,12 @@ class GeneratorAdapter(ABC):
                     "energy_gev": round(energy, 6),
                     "weight": 1.0,
                     "is_cc": is_cc,
-                    "interaction": self.config.get("physics", {}).get("mode", "inclusive"),
-                    "probe": self.config.get("flux", {}).get("particle", "numu"),
-                    "target": self.config.get("target", {}).get("nucleus", "Ar40"),
+                    "interaction": self.config["physics"].get("mode", "inclusive"),
+                    # No fallbacks: the job view always supplies these, and
+                    # inventing a probe or target would put events labelled with
+                    # the wrong initial state into a physics sample.
+                    "probe": self.config["flux"]["particle"],
+                    "target": self.config["target"]["nucleus"],
                     "generator": self.name,
                 }
             )

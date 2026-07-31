@@ -1,48 +1,46 @@
+# Stub-mode development run: three generator versions on the same initial state.
+# Because every job here shares a flux and target, `plot-output` puts all three
+# into one comparison figure per weak current.
 run:
   name: power_law_numu_ar40
-  events: 24
   seed: 12345
   executor: local
   stub_mode: true
 
-flux:
-  type: power_law
-  particle: numu
-  emin_gev: 0.5
-  emax_gev: 10.0
-  gamma: -2.0
+macros:
+  # The initial state and event budget shared by every job below; only the
+  # generator and its versions vary.
+  numu_ar40:
+    params:
+      generator: null
+      code_version: null
+      config_version: null
+    job:
+      generator: "{{generator}}"
+      code_version: "{{code_version}}"
+      config_version: "{{config_version}}"
+      events: 24
+      chunks: 2
+      flux:
+        type: power_law
+        particle: numu
+        emin_gev: 0.5
+        emax_gev: 10.0
+        gamma: -2.0
+      target:
+        nucleus: Ar40
+      physics:
+        mode: inclusive
+        current: cc
 
-target:
-  nucleus: Ar40
-  pdg: 1000180400
-
-physics:
-  mode: inclusive
-  current: cc
-
-generators:
-  genie:
-    versions:
-      - enabled: true
-        code_version: "R-3_06_00"       # git tag / release
-        config_version: "G18_10a_02_11a" # GENIE tune
-      - enabled: true
-        code_version: "R-3_06_00"
-        config_version: "AR23_20i_00_000"
-  neut:
-    versions:
-      - enabled: false
-        code_version: "5.7.0-nuint2024"
-        config_version: "default"
-  nuwro:
-    versions:
-      - enabled: true
-        code_version: "nuwro_25.11"
-        config_version: "default"
-
-splitting:
-  strategy: events
-  chunks: 2
+jobs:
+  - use: numu_ar40
+    matrix:
+      include:
+        # code_version is the git tag / release; config_version is the GENIE tune.
+        - {generator: genie, code_version: "R-3_06_00", config_version: "G18_10a_02_11a"}
+        - {generator: genie, code_version: "R-3_06_00", config_version: "AR23_20i_00_000"}
+        - {generator: nuwro, code_version: "nuwro_25.11", config_version: "default"}
 
 storage:
   software_root: ${NF_SOFTWARE_ROOT:-./software}

@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from neutrino_factory.common_output import write_common_hdf5
+from neutrino_factory.config import resolve_config
 from neutrino_factory.kinematics import FIELD_DEFAULTS, MISSING
 from neutrino_factory.kinematics_report import (
     analyze_config,
@@ -233,30 +234,27 @@ class FormatReportTests(unittest.TestCase):
 
 class AnalyzeConfigTests(unittest.TestCase):
     def _config(self, output_root: Path) -> dict:
-        return {
-            "run": {"name": "unit_run", "events": 4, "seed": 1},
-            "flux": {
-                "type": "power_law", "particle": "numu",
-                "emin_gev": 0.5, "emax_gev": 5.0, "gamma": 0.0,
-            },
-            "target": {"nucleus": "C12", "pdg": 1000060120},
-            "physics": {"mode": "inclusive", "current": "cc"},
-            "generators": {
-                "genie": {
-                    "versions": [{
-                        "enabled": True,
-                        "code_version": "R-3_06_00",
-                        "config_version": "G18_10a_02_11a",
-                    }]
-                }
-            },
-            "splitting": {"strategy": "events", "chunks": 1},
+        return resolve_config({
+            "run": {"name": "unit_run", "seed": 1},
+            "jobs": [{
+                "generator": "genie",
+                "code_version": "R-3_06_00",
+                "config_version": "G18_10a_02_11a",
+                "events": 4,
+                "chunks": 1,
+                "flux": {
+                    "type": "power_law", "particle": "numu",
+                    "emin_gev": 0.5, "emax_gev": 5.0, "gamma": 0.0,
+                },
+                "target": {"nucleus": "C12"},
+                "physics": {"mode": "inclusive", "current": "cc"},
+            }],
             "storage": {
                 "software_root": str(output_root / "software"),
                 "output_root": str(output_root),
                 "work_root": str(output_root / "work"),
             },
-        }
+        })
 
     def test_discovers_and_analyzes_the_merged_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -286,7 +284,10 @@ class AnalyzeConfigTests(unittest.TestCase):
             self.assertEqual(analysis["code_version"], "R-3_06_00")
             self.assertEqual(analysis["config_version"], "G18_10a_02_11a")
             self.assertEqual(analysis["expected_events"], 4)
-            self.assertIn("genie", format_report(analysis))
+            self.assertEqual(analysis["probe"], "numu")
+            self.assertEqual(analysis["target"], "C12")
+            # The heading names the initial state, not just the generator.
+            self.assertIn("numu on C12 \u2014 genie", format_report(analysis))
 
 
 if __name__ == "__main__":

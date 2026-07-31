@@ -11,6 +11,9 @@ import yaml
 
 from . import catalog
 from . import flux as flux_module
+from . import jobs as jobs_module
+from . import particles
+from .jobs import JobExpansionError, deep_merge
 
 
 LOGGER = logging.getLogger(__name__)
@@ -49,60 +52,18 @@ def physics_current(config: Dict[str, Any]) -> str:
 DEFAULT_CONFIG: Dict[str, Any] = {
     "run": {
         "name": "neutrino_factory_run",
-        "events": 100,
         "seed": 12345,
         "executor": "local",
         "stub_mode": True,
         "log_level": "default",
     },
-    "flux": {
-        "type": "power_law",
-        "particle": "numu",
-        "emin_gev": 0.5,
-        "emax_gev": 10.0,
-        "gamma": -2.0,
-    },
-    "target": {
-        "nucleus": "Ar40",
-        "pdg": 1000180400,
-    },
-    "physics": {
-        "mode": "inclusive",
-        "current": "cc",
-    },
-    "generators": {
-        "genie": {
-            "versions": [
-                {
-                    "enabled": True,
-                    "code_version": "R-3_06_00",
-                    "config_version": "G18_10a_02_11a",
-                }
-            ]
-        },
-        "neut": {
-            "versions": [
-                {
-                    "enabled": False,
-                    "code_version": "5.7.0-nuint2024",
-                    "config_version": "default",
-                }
-            ]
-        },
-        "nuwro": {
-            "versions": [
-                {
-                    "enabled": False,
-                    "code_version": "nuwro_25.11",
-                    "config_version": "default",
-                }
-            ]
-        },
-    },
-    "splitting": {
-        "strategy": "events",
-        "chunks": 1,
-    },
+    # Reusable parameterized job templates; see neutrino_factory.jobs. Expanded
+    # away before validation, so no other module ever sees them.
+    "macros": {},
+    # The run itself: one entry per generator version x initial state. Per-job
+    # defaults live in jobs.JOB_DEFAULTS, not here, because they are filled in
+    # per job rather than once for the whole configuration.
+    "jobs": [],
     "storage": {
         "software_root": "${NF_SOFTWARE_ROOT:-./software}",
         "output_root": "${NF_OUTPUT_ROOT:-./output}",
@@ -127,16 +88,6 @@ _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 class ConfigError(ValueError):
     """Raised when the user configuration is invalid."""
-
-
-def _deep_merge(base: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
-    merged = copy.deepcopy(base)
-    for key, value in updates.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _deep_merge(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
 
 
 def _expand_env_string(value: str) -> str:
@@ -165,46 +116,117 @@ def _validate_required_sections(config: Dict[str, Any], required: Iterable[str])
     return errors
 
 
+def _validate_job(
+    job: Dict[str, Any],
+    where: str,
+    stub_mode: bool,
+    software_root: Any,
+    flux_base_dir: str | None,
+) -> list[str]:
+    """Everything that must hold for one expanded job, as a list of messages."""
+    errors: list[str] = []
+
+    generator = str(job.get("generator") or "").strip()
+    if not generator:
+        errors.append(f"{where}: missing required field 'generator'")
+    elif generator not in catalog.known_generators():
+        errors.append(
+            f"{where}: unknown generator '{generator}'. "
+            f"Known: {', '.join(catalog.known_generators())}"
+        )
+
+    code_version = str(job.get("code_version") or "").strip()
+    config_version = str(job.get("config_version") or "").strip()
+    if not code_version:
+        errors.append(f"{where}: missing required field 'code_version'")
+    if not config_version:
+        errors.append(f"{where}: missing required field 'config_version'")
+
+    if generator and code_version and config_version and not errors:
+        try:
+            catalog.ensure_compatible(
+                generator,
+                code_version,
+                config_version,
+                software_root,
+                require_available=not stub_mode,
+            )
+        except catalog.CatalogError as error:
+            errors.append(f"{where}: {error}")
+
+    try:
+        events = int(job.get("events", 0))
+    except (TypeError, ValueError):
+        events = 0
+        errors.append(f"{where}: events must be an integer")
+    try:
+        chunks = int(job.get("chunks", 0))
+    except (TypeError, ValueError):
+        chunks = 0
+        errors.append(f"{where}: chunks must be an integer")
+
+    if events < 1:
+        errors.append(f"{where}: events must be >= 1 (got {job.get('events')})")
+    if chunks < 1:
+        errors.append(f"{where}: chunks must be >= 1 (got {job.get('chunks')})")
+    if events >= 1 and chunks > events:
+        # Splitting into more chunks than events would silently produce fewer
+        # tasks than asked for, so say so instead.
+        errors.append(f"{where}: chunks ({chunks}) exceeds events ({events})")
+
+    for message in flux_module.validate_flux(job.get("flux", {}), base_dir=flux_base_dir):
+        errors.append(f"{where}: {message}")
+
+    current = job.get("physics", {}).get("current", "cc")
+    if not isinstance(current, str) or current.lower() not in PHYSICS_CURRENTS:
+        errors.append(
+            f"{where}: physics.current must be one of {', '.join(PHYSICS_CURRENTS)} "
+            f"(got '{current}')"
+        )
+
+    log_level = job.get("log_level")
+    if log_level is not None and log_level not in LOG_LEVELS:
+        errors.append(
+            f"{where}: log_level must be one of {', '.join(LOG_LEVELS)} (got '{log_level}')"
+        )
+
+    nucleus = str(job.get("target", {}).get("nucleus", ""))
+    try:
+        derived_pdg = particles.nucleus_pdg(nucleus)
+    except ValueError as error:
+        errors.append(f"{where}: {error}")
+    else:
+        configured_pdg = job.get("target", {}).get("pdg")
+        if configured_pdg is not None and int(configured_pdg) != derived_pdg:
+            LOGGER.warning(
+                "%s: target.pdg %s does not match the code derived from nucleus "
+                "'%s' (%d). The explicit pdg is used.",
+                where,
+                configured_pdg,
+                nucleus,
+                derived_pdg,
+            )
+
+    return errors
+
+
 def validate_config(config: Dict[str, Any]) -> None:
-    errors = _validate_required_sections(
-        config,
-        ["run", "flux", "target", "generators", "splitting", "storage", "slurm"],
-    )
+    errors = _validate_required_sections(config, ["run", "jobs", "storage", "slurm"])
 
     run = config.get("run", {})
-    flux = config.get("flux", {})
-    physics = config.get("physics", {})
-    splitting = config.get("splitting", {})
-    generators = config.get("generators", {})
+    job_list = config.get("jobs", [])
 
-    if int(run.get("events", 0)) < 1:
-        errors.append("run.events must be >= 1")
-    if int(splitting.get("chunks", 0)) < 1:
-        errors.append("splitting.chunks must be >= 1")
     log_level = run.get("log_level", "default")
     if log_level not in LOG_LEVELS:
         errors.append(
             f"run.log_level must be one of {', '.join(LOG_LEVELS)} (got '{log_level}')"
         )
-    current = physics.get("current", "cc")
-    if not isinstance(current, str) or current.lower() not in PHYSICS_CURRENTS:
-        errors.append(
-            f"physics.current must be one of {', '.join(PHYSICS_CURRENTS)} (got '{current}')"
-        )
-
-    config_path = config.get("config_path")
-    flux_base_dir = str(Path(config_path).parent) if config_path else None
-    errors.extend(flux_module.validate_flux(flux, base_dir=flux_base_dir))
-
-    if not isinstance(generators, dict):
-        errors.append("generators must be a mapping")
-        generators = {}
 
     # In stub mode we generate synthetic events, so config-version availability
     # (e.g. staged GENIE cross-section splines) is not required. Real runs must
     # validate strictly so a valid config is guaranteed to run.
     stub_mode = bool(run.get("stub_mode", True))
-    if stub_mode and generators:
+    if stub_mode and job_list:
         LOGGER.warning(
             "run.stub_mode is enabled: generator config_versions are NOT checked "
             "for availability (e.g. staged GENIE cross-section splines). Set "
@@ -212,58 +234,24 @@ def validate_config(config: Dict[str, Any]) -> None:
             "actually run."
         )
 
-    enabled_instance_count = 0
-    for generator_name, generator_block in generators.items():
-        if not isinstance(generator_block, dict):
-            errors.append(f"generators.{generator_name} must be a mapping")
+    if not isinstance(job_list, list):
+        errors.append("jobs must be a list of job entries")
+        job_list = []
+    elif not job_list:
+        errors.append("At least one job must be configured")
+
+    config_path = config.get("config_path")
+    flux_base_dir = str(Path(config_path).parent) if config_path else None
+    software_root = config.get("storage", {}).get("software_root")
+
+    for index, job in enumerate(job_list):
+        if not isinstance(job, dict):
+            errors.append(f"jobs[{index}] must be a mapping")
             continue
-
-        versions = generator_block.get("versions")
-        if not isinstance(versions, list):
-            errors.append(f"generators.{generator_name}.versions must be a list")
-            continue
-
-        seen_version_ids: set[str] = set()
-        for index, generator_config in enumerate(versions):
-            if not isinstance(generator_config, dict):
-                errors.append(f"generators.{generator_name}.versions[{index}] must be a mapping")
-                continue
-            if not bool(generator_config.get("enabled", False)):
-                continue
-            enabled_instance_count += 1
-
-            field_prefix = f"generators.{generator_name}.versions[{index}]"
-            code_version = str(generator_config.get("code_version") or "").strip()
-            config_version = str(generator_config.get("config_version") or "").strip()
-            if not code_version:
-                errors.append(f"Missing required generator field: {field_prefix}.code_version")
-            if not config_version:
-                errors.append(f"Missing required generator field: {field_prefix}.config_version")
-            if not code_version or not config_version:
-                continue
-
-            try:
-                software_root = config.get("storage", {}).get("software_root")
-                catalog.ensure_compatible(
-                    generator_name,
-                    code_version,
-                    config_version,
-                    software_root,
-                    require_available=not stub_mode,
-                )
-            except catalog.CatalogError as error:
-                errors.append(str(error))
-                continue
-
-            version_id = catalog.version_identifier(code_version, config_version)
-            if version_id in seen_version_ids:
-                errors.append(
-                    f"Duplicate version identifier for generator '{generator_name}': {version_id}"
-                )
-            seen_version_ids.add(version_id)
-
-    if enabled_instance_count == 0:
-        errors.append("At least one generator version entry must be enabled")
+        where = f"jobs[{index}] ({job.get('label', '?')})"
+        errors.extend(
+            _validate_job(job, where, stub_mode, software_root, flux_base_dir)
+        )
 
     if errors:
         raise ConfigError("; ".join(errors))
@@ -306,17 +294,27 @@ def load_env_file(start: str | Path | None = None) -> Path | None:
 
 
 def resolve_config(config: Dict[str, Any], source_path: str | Path | None = None) -> Dict[str, Any]:
-    merged = _deep_merge(DEFAULT_CONFIG, config)
+    merged = deep_merge(DEFAULT_CONFIG, config)
     merged = _expand_env_values(merged)
     merged["run"]["executor"] = os.environ.get(
         "NF_EXECUTION_MODE", merged["run"].get("executor", "local")
     )
 
+    # Set before expansion and validation: relative flux histogram paths in a
+    # job resolve against the configuration file's own directory.
     if source_path is not None:
         merged["config_path"] = str(Path(source_path).resolve())
 
+    # Macros and matrices are expanded away here, before validation, so every
+    # later consumer — validation included — only ever sees plain jobs. An
+    # expansion failure is a configuration error like any other, so it is
+    # re-raised as one rather than leaking a second exception type to callers.
+    try:
+        merged["jobs"] = jobs_module.expand_jobs(merged)
+    except JobExpansionError as error:
+        raise ConfigError(str(error)) from None
+
     validate_config(merged)
-    merged["enabled_generator_instances"] = enabled_generator_instances(merged)
     merged["enabled_generators"] = enabled_generators(merged)
     return merged
 
@@ -328,31 +326,10 @@ def load_config(path: str | Path) -> Dict[str, Any]:
 
 
 def enabled_generators(config: Dict[str, Any]) -> list[str]:
+    """The distinct generators the run's jobs use, in first-appearance order."""
     ordered: list[str] = []
-    for instance in enabled_generator_instances(config):
-        name = instance["name"]
-        if name not in ordered:
+    for job in config.get("jobs", []):
+        name = job.get("generator")
+        if name and name not in ordered:
             ordered.append(name)
     return ordered
-
-
-def enabled_generator_instances(config: Dict[str, Any]) -> list[Dict[str, Any]]:
-    instances: list[Dict[str, Any]] = []
-    for generator_name, generator_block in config.get("generators", {}).items():
-        versions = generator_block["versions"]
-        for generator_config in versions:
-            if not generator_config.get("enabled", False):
-                continue
-            code_version = str(generator_config["code_version"])
-            config_version = str(generator_config["config_version"])
-            instances.append(
-                {
-                    "name": generator_name,
-                    "config": dict(generator_config),
-                    "code_version": code_version,
-                    "config_version": config_version,
-                    "version_id": catalog.version_identifier(code_version, config_version),
-                    "image": catalog.image_for(generator_name, code_version),
-                }
-            )
-    return instances

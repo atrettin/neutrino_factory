@@ -4,9 +4,10 @@ import unittest
 
 import numpy as np
 
-from neutrino_factory.config import resolve_config
 from neutrino_factory.flux import HistogramFlux, build_flux
 from neutrino_factory.translators.neut import NeutTranslator
+
+from .helpers import view_config
 
 
 def _task(**overrides) -> dict:
@@ -30,7 +31,8 @@ def _config(nucleus: str = "C12", **flux_overrides) -> dict:
         "gamma": -2.0,
     }
     flux.update(flux_overrides)
-    return resolve_config({"flux": flux, "target": {"nucleus": nucleus}})
+    return view_config({"flux": flux, "target": {"nucleus": nucleus}, "generator": "neut",
+                       "code_version": "5.7.0-nuint2024", "config_version": "default"})
 
 
 class NeutTranslatorTests(unittest.TestCase):
@@ -76,9 +78,16 @@ class NeutTranslatorTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             NeutTranslator().translate(_config(), _task(config_version="nieves"))
 
-    def test_unknown_nucleus_raises(self) -> None:
-        with self.assertRaises(KeyError):
-            NeutTranslator().translate(_config(nucleus="Pb208"), _task())
+    def test_any_parsable_nucleus_is_accepted(self) -> None:
+        # Composition is derived from the name rather than looked up in a short
+        # table, so a nucleus NEUT itself supports needs no entry here.
+        translated = NeutTranslator().translate(_config(nucleus="Pb208"), _task())
+        self.assertEqual(translated["neut_card"]["NEUT-NUMBNDP"], 82)
+        self.assertEqual(translated["neut_card"]["NEUT-NUMBNDN"], 126)
+
+    def test_unparsable_nucleus_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            NeutTranslator().translate(_config(nucleus="lead208"), _task())
 
     def test_translate_carries_flux_config_for_the_normalizer(self) -> None:
         translated = NeutTranslator().translate(_config(), _task())

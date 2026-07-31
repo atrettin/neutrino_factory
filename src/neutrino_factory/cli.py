@@ -8,7 +8,8 @@ from pathlib import Path
 
 from . import catalog
 from .common_output import MergeError
-from .config import ConfigError, load_config, load_env_file
+from .config import ConfigError, enabled_generators, load_config, load_env_file
+from .jobs import job_summaries
 from .kinematics_report import (
     analyze_config,
     analyze_file,
@@ -17,7 +18,7 @@ from .kinematics_report import (
 from .local import run_local, run_task_from_manifest
 from .merge import merge_outputs
 from .plots import DEFAULT_BINS, make_config_plots, make_plots
-from .slurm import write_manifest, write_sbatch_script
+from .slurm import build_task_manifest, write_manifest, write_sbatch_script
 from .validate_output import (
     expected_outputs,
     format_report,
@@ -33,12 +34,78 @@ def _print_json(payload: dict) -> None:
 
 def cmd_validate_config(args: argparse.Namespace) -> int:
     config = load_config(args.config)
-    generator_instances = [
-        f"{entry['name']}[{entry['version_id']}]"
-        for entry in config.get("enabled_generator_instances", [])
-    ]
+    jobs = config["jobs"]
     print(
-        f"Config valid: run={config['run']['name']} executor={config['run']['executor']} generators={','.join(generator_instances)}"
+        f"Config valid: run={config['run']['name']} "
+        f"executor={config['run']['executor']} jobs={len(jobs)} "
+        f"generators={','.join(enabled_generators(config))}"
+    )
+    for job in jobs:
+        print(f"  [{job['index']}] {job['label']}  {job['events']} events / {job['chunks']} chunk(s)")
+    return 0
+
+
+def cmd_expand(args: argparse.Namespace) -> int:
+    """Print the jobs a configuration materializes to.
+
+    Macros and matrices make a configuration compact but indirect, and these
+    configurations are provenance records for physics samples: this is how a
+    user checks what they actually asked for, and how two revisions of a
+    configuration are diffed against each other.
+    """
+    config = load_config(args.config)
+    jobs = config["jobs"]
+    manifest = build_task_manifest(config)
+    summaries = job_summaries(jobs)
+
+    if args.json:
+        _print_json(
+            {
+                "run_name": config["run"]["name"],
+                "job_count": len(jobs),
+                "task_count": len(manifest["tasks"]),
+                "jobs": jobs,
+            }
+        )
+        return 0
+
+    tasks_per_job: dict[int, int] = {}
+    for task in manifest["tasks"]:
+        tasks_per_job[int(task["job_index"])] = tasks_per_job.get(int(task["job_index"]), 0) + 1
+
+    columns = (
+        ("IDX", "index"),
+        ("LABEL", "label"),
+        ("GENERATOR", "generator"),
+        ("CODE_VERSION", "code_version"),
+        ("CONFIG_VERSION", "config_version"),
+        ("PARTICLE", "particle"),
+        ("NUCLEUS", "nucleus"),
+        ("CURRENT", "current"),
+        ("EVENTS", "events"),
+        ("CHUNKS", "chunks"),
+        ("TASKS", None),
+    )
+    rows = [
+        [
+            str(tasks_per_job.get(int(summary["index"]), 0)) if key is None else str(summary[key])
+            for _, key in columns
+        ]
+        for summary in summaries
+    ]
+    headers = [header for header, _ in columns]
+    widths = [
+        max(len(headers[index]), *(len(row[index]) for row in rows)) if rows else len(headers[index])
+        for index in range(len(headers))
+    ]
+    print("  ".join(header.ljust(widths[index]) for index, header in enumerate(headers)))
+    for row in rows:
+        print("  ".join(cell.ljust(widths[index]) for index, cell in enumerate(row)))
+
+    total_events = sum(int(job["events"]) for job in jobs)
+    print(
+        f"\n{len(jobs)} job(s), {len(manifest['tasks'])} task(s), "
+        f"{total_events} event(s) total"
     )
     return 0
 
@@ -144,17 +211,18 @@ def cmd_merge(args: argparse.Namespace) -> int:
         config = load_config(args.config)
         outputs = expected_outputs(config)
 
-        chunks_by_key: dict[tuple[str, str], list[dict]] = {}
+        # Grouped by job, not by (generator, version): two jobs may run the same
+        # generator version on different neutrino flavours or nuclei, and merging
+        # those together would silently mix two initial states into one file.
+        chunks_by_job: dict[int, list[dict]] = {}
         for chunk in outputs["chunks"]:
-            key = (str(chunk["generator"]), str(chunk["version_id"]))
-            chunks_by_key.setdefault(key, []).append(chunk)
+            chunks_by_job.setdefault(int(chunk["job_index"]), []).append(chunk)
 
         merged_outputs_written: list[str] = []
         per_target: list[dict] = []
 
         for merged in outputs["merged"]:
-            key = (str(merged["generator"]), str(merged["version_id"]))
-            candidate_chunks = chunks_by_key.get(key, [])
+            candidate_chunks = chunks_by_job.get(int(merged["job_index"]), [])
 
             valid_inputs: list[str | Path] = []
             skipped_chunks: list[dict[str, object]] = []
@@ -183,8 +251,11 @@ def cmd_merge(args: argparse.Namespace) -> int:
                 )
                 per_target.append(
                     {
+                        "job_label": merged["job_label"],
                         "generator": merged["generator"],
                         "version_id": merged["version_id"],
+                        "particle": merged["particle"],
+                        "nucleus": merged["nucleus"],
                         "merged_output": str(merged["path"]),
                         "expected_chunk_count": len(candidate_chunks),
                         "merged_input_count": 0,
@@ -199,8 +270,11 @@ def cmd_merge(args: argparse.Namespace) -> int:
             merged_outputs_written.append(output)
             per_target.append(
                 {
+                    "job_label": merged["job_label"],
                     "generator": merged["generator"],
                     "version_id": merged["version_id"],
+                    "particle": merged["particle"],
+                    "nucleus": merged["nucleus"],
                     "merged_output": output,
                     "expected_chunk_count": len(candidate_chunks),
                     "merged_input_count": len(valid_inputs),
@@ -236,10 +310,9 @@ def cmd_merge(args: argparse.Namespace) -> int:
 def cmd_plot_output(args: argparse.Namespace) -> int:
     if args.config:
         config = load_config(args.config)
-        if not config.get("enabled_generator_instances"):
+        if not config.get("jobs"):
             raise RuntimeError(
-                f"{args.config} declares no enabled generator versions, so there "
-                "are no merged outputs to plot."
+                f"{args.config} declares no jobs, so there are no merged outputs to plot."
             )
         written = make_config_plots(config, args.output_dir, bins=args.bins)
         _print_json({"config": args.config, "plots": written})
@@ -255,8 +328,7 @@ def cmd_analyze_kinematics(args: argparse.Namespace) -> int:
         analyses = analyze_config(load_config(args.config))
         if not analyses:
             raise RuntimeError(
-                f"{args.config} declares no enabled generator versions, so there "
-                "are no merged outputs to analyze."
+                f"{args.config} declares no jobs, so there are no merged outputs to analyze."
             )
     else:
         analyses = [analyze_file(args.input)]
@@ -433,16 +505,41 @@ def build_parser() -> argparse.ArgumentParser:
         "validate-config",
         help="Validate a YAML configuration",
         description=(
-            "Load a run configuration, expand environment variables, apply defaults, and "
-            "validate it against the generator catalog. Prints a one-line summary of the "
-            "run name, executor, and the enabled generator instances. Exits non-zero with "
-            "an error message if the config is invalid. Nothing is executed or submitted."
+            "Load a run configuration, expand environment variables and job macros, apply "
+            "defaults, and validate every job against the generator catalog. Prints a "
+            "summary of the run name, executor and job labels. Exits non-zero with an "
+            "error message if the config is invalid. Nothing is executed or submitted."
         ),
         epilog="Example:\n  neutrino-factory validate-config --config configs/examples/power_law_numu_Ar.yaml",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     validate_parser.add_argument("--config", required=True, help="Path to the run configuration YAML")
     validate_parser.set_defaults(func=cmd_validate_config)
+
+    expand_parser = subparsers.add_parser(
+        "expand",
+        help="Print the jobs a configuration materializes to",
+        description=(
+            "Expand a configuration's macros and matrices and print the resulting jobs — "
+            "one line each, with the generator, its versions, the neutrino flavour, target "
+            "nucleus, weak current, event budget and chunk count. Use it to check what a "
+            "compact configuration actually asks for before submitting it, and to diff two "
+            "revisions of a configuration against each other. Nothing is executed."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  neutrino-factory expand --config configs/examples/production_grid.yaml\n"
+            "  neutrino-factory expand --config configs/examples/production_grid.yaml --json"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    expand_parser.add_argument("--config", required=True, help="Path to the run configuration YAML")
+    expand_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the full materialized job dictionaries as JSON",
+    )
+    expand_parser.set_defaults(func=cmd_expand)
 
     plan_parser = subparsers.add_parser(
         "plan",

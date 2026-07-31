@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import unittest
 
-from neutrino_factory.config import resolve_config
 from neutrino_factory.particles import PARTICLE_PDG
 from neutrino_factory.translators.base import ConfigTranslator
 from neutrino_factory.translators.genie import GenieTranslator
@@ -21,6 +20,8 @@ from neutrino_factory.translators.gibuu import (
 )
 from neutrino_factory.translators.neut import NeutTranslator
 from neutrino_factory.translators.nuwro import NuWroTranslator
+
+from .helpers import view_config
 
 TRANSLATORS = (GenieTranslator, GiBUUTranslator, NeutTranslator, NuWroTranslator)
 
@@ -86,7 +87,7 @@ class TranslatorFlavourTests(unittest.TestCase):
         }
 
     def _config(self, particle: str) -> dict:
-        return resolve_config(
+        return view_config(
             {
                 "flux": {
                     "type": "power_law",
@@ -95,7 +96,7 @@ class TranslatorFlavourTests(unittest.TestCase):
                     "emax_gev": 5.0,
                     "gamma": -2.0,
                 },
-                "target": {"nucleus": "C12", "pdg": 1000060120},
+                "target": {"nucleus": "C12"},
             }
         )
 

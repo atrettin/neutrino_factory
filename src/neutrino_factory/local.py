@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import copy
 import json
-import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
-from . import catalog
+from . import catalog, layout
 from .merge import merge_outputs
 from .slurm import build_task_manifest, write_manifest
 from .generators.registry import get_adapter
@@ -24,44 +24,61 @@ def _ensure_layout(config: dict[str, Any]) -> None:
     (Path(config["storage"]["work_root"]) / "logs").mkdir(parents=True, exist_ok=True)
 
 
-def _version_id(task: dict[str, Any]) -> str:
-    return catalog.version_identifier(str(task["code_version"]), str(task["config_version"]))
+def job_view_config(config: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
+    """The configuration as this task's job sees it.
 
+    Adapters, translators, normalizers and the stub generator all read
+    ``config["flux"]``, ``config["target"]`` and ``config["physics"]``. Rather
+    than teaching every one of them about jobs, the job's own blocks are grafted
+    onto the global ``run``/``storage``/``slurm`` configuration here, at the one
+    point where a task is turned into work.
 
-def _version_token(task: dict[str, Any]) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]", "_", _version_id(task))
+    The blocks are *replaced*, never merged: a histogram-flux job merged over a
+    power-law base would keep the base's ``gamma``/``emin_gev`` keys and hand
+    ``build_flux`` a block describing two different fluxes at once.
+    """
+    jobs = config.get("jobs") or []
+    index = int(task["job_index"])
+    if index >= len(jobs):
+        raise IndexError(
+            f"Manifest task {task.get('task_index')} refers to job {index}, but this "
+            f"configuration expands to {len(jobs)} job(s). Re-run `neutrino-factory plan`."
+        )
+    job = jobs[index]
+
+    expected_label = task.get("job_label")
+    if expected_label and expected_label != job.get("label"):
+        raise ValueError(
+            f"Manifest task {task.get('task_index')} refers to job {index} "
+            f"('{expected_label}'), but this configuration expands job {index} to "
+            f"'{job.get('label')}'. The configuration changed after the manifest was "
+            "written; re-run `neutrino-factory plan`."
+        )
+
+    view = copy.deepcopy(config)
+    view["flux"] = copy.deepcopy(job["flux"])
+    view["target"] = copy.deepcopy(job["target"])
+    view["physics"] = copy.deepcopy(job["physics"])
+    view["run"] = {
+        **config["run"],
+        "log_level": job.get("log_level", config["run"].get("log_level", "default")),
+    }
+    view["job"] = copy.deepcopy(job)
+    return view
 
 
 def run_task(config: dict[str, Any], task: dict[str, Any], execution_mode: str = "local") -> str:
+    config = job_view_config(config, task)
     _ensure_layout(config)
 
     adapter = get_adapter(task["generator_name"], config)
-    work_root = Path(config["storage"]["work_root"])
-    output_root = Path(config["storage"]["output_root"])
-    generator_name = task["generator_name"]
-    version_token = _version_token(task)
-    file_stem = f"{task['run_name']}_{generator_name}_{version_token}_chunk{task['chunk_id']:03d}"
 
-    # Each task gets its own work directory (keyed by the unique file_stem, which
-    # includes run name and chunk). Generators write fixed-name artifacts
-    # (e.g. events.ghep.root, events.gst.root, translated_config.json) into this
-    # directory, so tasks that share a (generator, version) must not share it —
-    # otherwise a later run reuses an earlier run's stale ROOT output.
-    raw_path = (
-        work_root
-        / "raw"
-        / generator_name
-        / version_token
-        / file_stem
-        / f"{file_stem}.json"
-    )
-    normalized_path = (
-        output_root
-        / "chunks"
-        / generator_name
-        / version_token
-        / f"{file_stem}.h5"
-    )
+    # Each task gets its own work directory: generators write fixed-name
+    # artifacts (events.ghep.root, events.gst.root, translated_config.json) into
+    # it, so two tasks sharing a directory would make a later run read an
+    # earlier run's stale ROOT output. See layout.py for the path scheme.
+    raw_path = layout.raw_output_path(config, task)
+    normalized_path = layout.chunk_output_path(config, task)
     raw_path.parent.mkdir(parents=True, exist_ok=True)
     normalized_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -84,34 +101,39 @@ def run_local(config: dict[str, Any], manifest_path: str | Path | None = None) -
     merged_dir = Path(config["storage"]["output_root"]) / "merged"
     merged_dir.mkdir(parents=True, exist_ok=True)
 
-    # Chunks are merged per (generator, code_version, config_version): files from
-    # different generators or versions describe different physics and must never
-    # be merged together.
-    groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+    # Chunks are merged per job. Two jobs may share a generator and version and
+    # still differ in flux particle, target nucleus or weak current, so the job
+    # — not the generator version — is what decides which files describe the
+    # same physics and may be merged.
+    groups: dict[int, list[str]] = {}
     chunk_outputs: list[str] = []
     for task in manifest["tasks"]:
         output = run_task(config, task, execution_mode="local")
         chunk_outputs.append(output)
-        key = (task["generator_name"], task["code_version"], task["config_version"])
-        group = groups.setdefault(key, {"task": task, "outputs": []})
-        group["outputs"].append(output)
+        groups.setdefault(int(task["job_index"]), []).append(output)
 
     merged_outputs: list[str] = []
-    for (generator_name, code_version, config_version), group in groups.items():
-        task = group["task"]
-        version_token = _version_token(task)
-        merged_output = merged_dir / f"{config['run']['name']}_{generator_name}_{version_token}.h5"
+    for job_index, outputs in groups.items():
+        job = config["jobs"][job_index]
+        merged_output = layout.merged_output_path(config, job)
         merge_outputs(
-            group["outputs"],
+            outputs,
             merged_output,
             run_metadata={
                 "run_name": config["run"]["name"],
                 "executor": "local",
-                "generator": generator_name,
-                "code_version": code_version,
-                "config_version": config_version,
-                "generator_version_id": _version_id(task),
-                "task_count": len(group["outputs"]),
+                "job_label": job["label"],
+                "generator": job["generator"],
+                "code_version": job["code_version"],
+                "config_version": job["config_version"],
+                "generator_version_id": catalog.version_identifier(
+                    str(job["code_version"]), str(job["config_version"])
+                ),
+                # The initial state, so a merged file says what physics it holds
+                # without anyone having to re-read the configuration.
+                "probe": job["flux"]["particle"],
+                "target_nucleus": job["target"]["nucleus"],
+                "task_count": len(outputs),
                 "config_path": config.get("config_path", ""),
             },
         )

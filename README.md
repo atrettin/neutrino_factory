@@ -78,9 +78,19 @@ neutrino-factory validate-config --config configs/examples/power_law_numu_Ar.yam
 neutrino-factory submit --config configs/examples/power_law_numu_Ar.yaml --executor local
 ```
 
-The local run creates a manifest, runs each enabled generator (or its stub),
-normalizes the outputs into `HDF5`, and merges them. Multiple version entries
-of the same generator can run side by side (for example, two GENIE tunes).
+The local run creates a manifest, runs each job (or its stub), normalizes the
+outputs into `HDF5`, and merges each job's chunks. A configuration is a list of
+jobs, each pairing one generator version with one initial state (flux, target,
+weak current) and its own event budget — so several generators, neutrino
+flavours and nuclear targets can run side by side from one file and one
+submission. `macros` and `matrix` keep such a file short; run
+
+```bash
+neutrino-factory expand --config configs/examples/production_grid.yaml
+```
+
+to see the jobs a configuration materializes to before submitting it. See
+`docs/configuration.md`.
 
 You can also merge from a config directly:
 

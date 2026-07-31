@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import unittest
 
-from neutrino_factory.config import resolve_config
 from neutrino_factory.translators.nuwro import NuWroTranslator, FLUX_NBINS
+
+from .helpers import view_config
 
 
 def _task() -> dict:
@@ -26,7 +27,8 @@ class NuWroTranslatorFluxTests(unittest.TestCase):
             "gamma": -2.0,
         }
         flux.update(flux_overrides)
-        return resolve_config({"flux": flux, "target": {"nucleus": "Ar40"}})
+        return view_config({"flux": flux, "target": {"nucleus": "Ar40"}, "generator": "nuwro",
+                            "code_version": "nuwro_25.11", "config_version": "default"})
 
     def test_power_law_renders_histogram_beam_energy(self) -> None:
         translated = NuWroTranslator().translate(self._config(), _task())

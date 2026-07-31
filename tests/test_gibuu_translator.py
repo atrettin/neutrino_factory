@@ -4,9 +4,10 @@ import unittest
 
 import numpy as np
 
-from neutrino_factory.config import resolve_config
 from neutrino_factory.flux import build_flux
 from neutrino_factory.translators.gibuu import GiBUUTranslator, FLUX_NBINS
+
+from .helpers import view_config
 
 
 def _task() -> dict:
@@ -36,7 +37,7 @@ class GiBUUTranslatorFluxTests(unittest.TestCase):
             "gamma": -2.0,
         }
         flux.update(flux_overrides)
-        return resolve_config({"flux": flux, "target": {"nucleus": "C12"}})
+        return view_config({"flux": flux, "target": {"nucleus": "C12"}})
 
     def test_power_law_uses_user_flux_jobcard_and_table(self) -> None:
         translated = GiBUUTranslator().translate(self._config(), _task())
@@ -98,7 +99,7 @@ class GiBUUTranslatorXsecWeightTests(unittest.TestCase):
             "gamma": 0.0,
         }
         flux.update(flux_overrides)
-        return resolve_config({"flux": flux, "target": {"nucleus": "C12"}})
+        return view_config({"flux": flux, "target": {"nucleus": "C12"}})
 
     def test_translator_is_instantiable(self) -> None:
         # compute_xsec_weight is now implemented, so the abstract base no longer

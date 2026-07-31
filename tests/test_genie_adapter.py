@@ -8,20 +8,15 @@ from unittest.mock import patch
 
 import numpy as np
 
-from neutrino_factory.config import resolve_config
 from neutrino_factory.generators.genie import ESSENTIAL_OVERLAY_FILENAME, GenieAdapter
 from neutrino_factory.translators.genie import GENIE_FLUX_FILE, GENIE_FLUX_HIST
+
+from .helpers import view_config
 
 
 class GenieAdapterTests(unittest.TestCase):
     def _base_config(self, software_root: str) -> dict:
-        return resolve_config(
-            {
-                "storage": {
-                    "software_root": software_root,
-                },
-            }
-        )
+        return view_config(storage={"software_root": software_root})
 
     def _translated_config(self, tune: str, **overrides) -> dict:
         base = {

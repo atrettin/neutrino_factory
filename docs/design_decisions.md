@@ -843,3 +843,56 @@ naming the probe, target, current and XML path.
 This is reachable in ordinary use: the shipped `gxspl-NUsmall.xml` carries
 nue/nuebar/numu/numubar splines only, so a ν_τ run has no cross section to
 reconstruct and must say so.
+
+## A job label is a pure function of its own job
+
+Output paths are keyed by the job label
+(`<generator>_<versions>_<particle>_<nucleus>_<current>`, or an explicit
+`name:`). Labels are never disambiguated against the other jobs in a
+configuration — two jobs that produce the same label are a hard error instead.
+
+The alternative, appending a suffix on collision, would make a label depend on
+the rest of the file: adding an unrelated job could silently rename another job's
+HDF5 outputs, invalidating anything downstream that referenced them by name.
+These files are provenance records for physics samples, so path stability under
+edits to the configuration matters more than the convenience of never having to
+name a job. The error message says which two entries collided and that an
+explicit `name:` resolves it.
+
+## Seeds are hashed, not laid out arithmetically
+
+A task's seed is `blake2b(run.seed | job label | chunk id) % 2_000_000_000 + 1`
+rather than the previous `run.seed + generator_index * 1000 + chunk_id`.
+
+Two properties motivated the change. First, the offset scheme collided outright
+at 1000 or more chunks per job, which per-job chunking makes reachable. Second,
+and more importantly, it made every seed depend on a job's *position* in the
+configuration, so inserting a job re-seeded every job after it — re-running a
+campaign with one generator added would have silently regenerated different
+events for all the others. Hashing the job's own identity makes a seed
+reproducible from `run.seed` alone and independent of its neighbours.
+
+The modulus keeps a seed (plus GiBUU's `PASS_SEED_OFFSET` of 1e6 for the NC pass
+of an inclusive run) inside the signed 32-bit range Fortran generators require.
+`build_task_manifest` asserts all seeds in a manifest are distinct: a hash
+collision is astronomically unlikely and silently catastrophic, since two tasks
+would generate identical events and inflate the sample's statistics.
+
+## Plots are grouped by the configuration, not by the events
+
+`make_config_plots` groups merged outputs into comparison figures by the
+`(flux.particle, target.nucleus)` of the **job**, not by the `probe`/`target`
+columns of the events in each file.
+
+Three reasons. The event columns are reduced to a single label per file, which
+degenerates to `"mixed"` when a file disagrees with itself — a grouping key must
+not be data-dependent that way. The set of figures a run produces should be
+derivable from the configuration alone, without opening any HDF5. And if a
+generator ever writes an unexpected target string, the figure should still be
+filed under the initial state that was actually requested, with the discrepancy
+visible in the per-dataset title (which does come from the events) rather than
+silently splitting one comparison into two.
+
+Cross sections on different nuclei, or for different flavours, are not
+comparable quantities, so generators are only ever drawn on shared axes within
+one such group.
