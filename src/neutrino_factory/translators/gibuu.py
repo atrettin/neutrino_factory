@@ -8,6 +8,7 @@ import numpy as np
 
 from .base import ConfigTranslator, physics_current
 from ..flux import Flux, build_flux
+from ..particles import is_antineutrino
 
 # Number of equal-width bins used to approximate a continuous spectrum as a
 # GiBUU user flux file (nuExp=99). GiBUU allocates the flux arrays dynamically.
@@ -97,6 +98,11 @@ class GiBUUTranslator(ConfigTranslator):
         protons, neutrons = NUCLEUS_COMPOSITION[nucleus]
         mass_number = protons + neutrons
 
+        if particle not in FLAVOR_ID:
+            raise KeyError(
+                f"Unknown neutrino particle '{particle}' for GiBUU probe. "
+                f"Known: {', '.join(FLAVOR_ID)}"
+            )
         flavor_id = FLAVOR_ID[particle]
         pass_currents = CURRENT_PASSES[current]
 
@@ -140,7 +146,10 @@ class GiBUUTranslator(ConfigTranslator):
         gibuu_passes = []
         for index, pass_current in enumerate(pass_currents):
             process_id = PROCESS_ID[pass_current]
-            if particle.endswith("bar"):
+            # The beam sign comes from the probe's PDG code, not from the "bar"
+            # suffix of its name: the name is a framework label, the sign is the
+            # physics.
+            if is_antineutrino(particle, "GiBUU"):
                 process_id = -process_id
             gibuu_passes.append(
                 {

@@ -208,9 +208,20 @@ class GiBUUCurrentTests(unittest.TestCase):
         self.assertNotEqual(seeds[0], seeds[1])
 
     def test_antineutrino_negates_every_pass(self) -> None:
-        passes = self._passes("inclusive", particle="numubar")
-        self.assertIn("process_ID     = -2", passes[0]["jobcard"])
-        self.assertIn("process_ID     = -3", passes[1]["jobcard"])
+        # For every antineutrino flavour: the sign comes from the probe's PDG
+        # code, so it must not depend on how the flavour happens to be spelled.
+        for particle in ("nuebar", "numubar", "nutaubar"):
+            with self.subTest(particle=particle):
+                passes = self._passes("inclusive", particle=particle)
+                self.assertIn("process_ID     = -2", passes[0]["jobcard"])
+                self.assertIn("process_ID     = -3", passes[1]["jobcard"])
+
+    def test_neutrino_flavours_keep_a_positive_process_id(self) -> None:
+        for particle, flavor_id in (("nue", 1), ("numu", 2), ("nutau", 3)):
+            with self.subTest(particle=particle):
+                passes = self._passes("inclusive", particle=particle)
+                self.assertIn("process_ID     = 2", passes[0]["jobcard"])
+                self.assertIn(f"flavor_ID      = {flavor_id}", passes[0]["jobcard"])
 
 
 if __name__ == "__main__":

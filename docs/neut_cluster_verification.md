@@ -141,7 +141,12 @@ cd "<NF_WORK_ROOT>/raw/neut/5.7.0-nuint2024_default/smoke_neut_c12_neut_5.7.0-nu
 apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" python3 -c "
 import uproot
 f = uproot.open('events.flat.root')
-print('ours:', f['evtrt_numu'].to_numpy()[0].sum() / f['flux_numu'].to_numpy()[0].sum())"
+# The pair is named after the beam flavour ('flux_numu'/'evtrt_numu' for numu,
+# 'flux_nueb'/'evtrt_nueb' for nuebar, 'fluxhisto'/'ratehisto' as NEUT's
+# fallback), so pick it out by prefix rather than by a fixed name.
+flux = next(k.split(';')[0] for k in f.keys() if k.startswith('flux'))
+rate = next(k.split(';')[0] for k in f.keys() if k.startswith(('evtrt', 'ratehisto')))
+print('ours:', f[rate].to_numpy()[0].sum() / f[flux].to_numpy()[0].sum())"
 
 # independent reference
 apptainer exec docker://nuisancemc/tutorial:nuint2024 \

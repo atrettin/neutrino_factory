@@ -14,8 +14,11 @@
 #include "neutpart.h"
 #include "neutvect.h"
 
+#include "TClass.h"
 #include "TFile.h"
+#include "TH1.h"
 #include "TH1D.h"
+#include "TKey.h"
 #include "TSystem.h"
 #include "TTree.h"
 
@@ -111,13 +114,22 @@ void nf_flatten(const char* in_path, const char* out_path) {
   // rate (flux x sigma) alongside the events. Their integral ratio is the
   // flux-averaged total cross section in 1e-38 cm^2 per nucleon, which is the
   // only normalization information NEUT emits — carry it across.
-  const char* histogram_names[] = {"flux_numu", "evtrt_numu", "fluxhisto", "ratehisto"};
-  for (const char* name : histogram_names) {
-    TH1D* hist = (TH1D*)fin.Get(name);
-    if (hist) {
-      fout.cd();
-      hist->Write(name);
-    }
+  //
+  // The names are flavour-dependent: neutroot2 formats them as "flux_%s" /
+  // "evtrt_%s" with its own short flavour token ("numu", "numub", "nue",
+  // "nueb"; verified in the NEUT 5.7.0 binary), alongside a generic
+  // "fluxhisto" / "ratehisto" copy that is the only pair present for a beam it
+  // has no token for. Rather than encode that mapping, copy every histogram
+  // verbatim and let NeutNormalizer pick the pair out by prefix — that is also
+  // what NUISANCE does (GetObjectWithName).
+  TIter next(fin.GetListOfKeys());
+  while (TKey* key = (TKey*)next()) {
+    TClass* cls = TClass::GetClass(key->GetClassName());
+    if (!cls || !cls->InheritsFrom(TH1::Class())) continue;
+    TH1* hist = (TH1*)key->ReadObj();
+    if (!hist) continue;
+    fout.cd();
+    hist->Write(key->GetName());
   }
 
   fout.Close();

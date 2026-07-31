@@ -87,10 +87,12 @@ def _write_sidecar(
     software_root: Path,
     emin_gev: float = 0.5,
     emax_gev: float = 10.0,
+    probe: str = "numu",
+    probe_pdg: int = 14,
 ) -> None:
     sidecar = {
-        "probe": "numu",
-        "probe_pdg": 14,
+        "probe": probe,
+        "probe_pdg": probe_pdg,
         "target": "Ar40",
         "target_pdg": 1000180400,
         "energy_range_gev": [emin_gev, emax_gev],
@@ -99,7 +101,7 @@ def _write_sidecar(
         "flux_model": "power_law",
         "flux_config": {
             "type": "power_law",
-            "particle": "numu",
+            "particle": probe,
             "emin_gev": emin_gev,
             "emax_gev": emax_gev,
             "gamma": 0.0,
@@ -524,6 +526,37 @@ class GenieNormalizerRootTests(unittest.TestCase):
                     gst_path, work_dir / "out.h5", _base_task(), "local"
                 )
             self.assertIn("input-flux.root", str(ctx.exception))
+
+    def test_normalize_gst_root_raises_when_the_probe_has_no_spline(self) -> None:
+        """A probe the staged splines do not cover must fail loudly.
+
+        The spline set staged here (like the shipped gxspl-NUsmall.xml) covers
+        numu only; a nutau run would otherwise come back with every xsec_weight
+        silently zero, which is indistinguishable from a physical result
+        downstream.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(
+                work_dir, self._software_root, probe="nutau", probe_pdg=16
+            )
+            gst_path = work_dir / "events.gst.root"
+            _write_gst_root(
+                gst_path,
+                energies_gev=[1.0],
+                weights=[1.0],
+                qel=[True],
+                res=[False],
+                dis=[False],
+                coh=[False],
+                mec=[False],
+            )
+
+            with self.assertRaises(RuntimeError) as ctx:
+                GenieNormalizer().normalize(
+                    gst_path, work_dir / "out.h5", _base_task(), "local"
+                )
+            self.assertIn("16", str(ctx.exception))
 
     def test_normalize_gst_root_raises_without_software_root_in_sidecar(self) -> None:
         """A sidecar with no software_root must fail loudly.

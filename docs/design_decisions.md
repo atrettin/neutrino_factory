@@ -362,10 +362,22 @@ to `flux(E) · σ(E)`.
 
 **Where σ_avg comes from.** Unlike GENIE, no external spline file is needed:
 when sampling a flux histogram (`EVCT-MPV 3`), NEUT writes both that histogram
-(`flux_numu`) and the resulting event rate (`evtrt_numu`, = flux × σ) into its
-own output, and the ratio of their integrals *is* the flux-averaged total cross
-section. `NeutNormalizer` reads them and injects the ratio into the translated
-config as `flux_averaged_xsec_1e38`.
+(`flux_<flavour>`) and the resulting event rate (`evtrt_<flavour>`, = flux × σ)
+into its own output, and the ratio of their integrals *is* the flux-averaged
+total cross section. `NeutNormalizer` reads them and injects the ratio into the
+translated config as `flux_averaged_xsec_1e38`.
+
+**Why the pair is found by prefix, not by name.** The names carry the beam
+flavour: `neutroot2` formats them as `flux_%s` / `evtrt_%s` with its *own* short
+token — `numu`, `numub`, `nue`, `nueb` (read off the NEUT 5.7.0 binary; note
+`numub`, not `numubar`) — and falls back to `fluxhisto` / `ratehisto` for a beam
+it has no token for, e.g. ν_τ. None of that is a documented contract, so the
+framework does not encode the mapping: `setup/neut/nf_flatten.C` copies *every*
+TH1 out of NEUT's output verbatim, and `NeutNormalizer._find_histogram` picks
+the unique `flux*` / `evtrt*` (or `fluxhisto` / `ratehisto`) pair, erroring if
+there is none or more than one rather than guessing. NUISANCE solves the same
+problem the same way (`PlotUtils::GetObjectWithName`). Hardcoding `flux_numu`
+made every non-numu NEUT run fail at normalization.
 
 **Validation** (not self-consistency — independent references):
 - *Units and per-nucleon convention.* The ratio does not scale with A:
@@ -429,7 +441,7 @@ a staircase, not a separate defect.
    integral ratio a correctly flux-weighted σ average on *any* binning, so
    `NeutNormalizer._flux_averaged_xsec` needs no width factor.
 3. *Provenance.* `NeutNormalizer` no longer rebuilds the flux from the run config.
-   It loads the `flux_numu` histogram NEUT stamped into its own output — the input
+   It loads the `flux_<flavour>` histogram NEUT stamped into its own output — the input
    TH1 copied verbatim — on its **native binning** (`contents_are_counts=True`,
    `_generated_flux`), and `translators/neut.py::_flux_grid` keeps that binning
    intact. Only part 1 was needed for the reported symptom; part 3 is the GENIE
@@ -799,3 +811,35 @@ sample, not the request. An inclusive run whose NC events are simply missing
 produces a one-panel figure, which is a signal worth investigating rather than a
 plotting artefact — `check-status` and `analyze-kinematics` are the tools for
 confirming the run itself is complete.
+
+## The probe flavour is one table, validated at config time (2026-07)
+
+`flux.particle` accepts the six neutrino probes — `nue`, `numu`, `nutau` and
+their antineutrinos — and `src/neutrino_factory/particles.py` is the single
+table mapping them to PDG codes. Every translator derives its generator-native
+beam setting from it (GENIE's numeric `-p`, NuWro's `beam_particle`, NEUT's
+`EVCT-IDPT`, GiBUU's `flavor_ID` plus the sign of `process_ID`), so a flavour is
+supported by all four generators or by none.
+
+Two consequences worth stating:
+
+* **`validate_flux` rejects an unknown name**, so a typo fails at
+  `validate-config` instead of as a `KeyError` deep inside a translator once
+  Slurm tasks are already running.
+* **The antineutrino sign comes from the PDG code, never from the name.**
+  `translators/gibuu.py` used to negate `process_ID` when the flavour string
+  ended in `bar`; a name-based test silently produces a *neutrino* run for any
+  probe spelled differently. `particles.is_antineutrino` asks the table instead.
+
+## GENIE: a probe with no staged spline is an error, not a zero weight (2026-07)
+
+`GenieTranslator.compute_xsec_weight` reconstructs σ(E) from the staged spline
+XML by matching `nu:<probe_pdg>;tgt:<target_pdg>;`. When nothing matched it used
+to return the zero-filled weight array, so every event came back with
+`xsec_weight = 0` — physical-looking output that is silently unnormalized, the
+exact failure mode CLAUDE.md's development posture forbids. It now raises,
+naming the probe, target, current and XML path.
+
+This is reachable in ordinary use: the shipped `gxspl-NUsmall.xml` carries
+nue/nuebar/numu/numubar splines only, so a ν_τ run has no cross section to
+reconstruct and must say so.

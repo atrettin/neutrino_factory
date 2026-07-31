@@ -7,6 +7,7 @@ import numpy as np
 
 from .base import ConfigTranslator, physics_current
 from ..flux import Flux, build_flux
+from ..particles import probe_pdg
 
 # Number of equal-width bins used to approximate a continuous spectrum as a
 # NuWro `beam_energy` histogram. NuWro's parser caps at 5000 bins.
@@ -16,16 +17,6 @@ FLUX_NBINS = 500
 # in cm^2 (see compute_xsec_weight); this rescales to the common "1e-38 cm^2"
 # convention so numbers stay O(1) near 1 GeV instead of O(1e-38).
 XSEC_SCALE = 1e38
-
-# PDG codes for NuWro's beam_particle parameter.
-PARTICLE_PDG = {
-    "numu": 14,
-    "nue": 12,
-    "numubar": -14,
-    "nuebar": -12,
-    "nutau": 16,
-    "nutaubar": -16,
-}
 
 # The nuclear-target dynamics channels NuWro switches on and off individually,
 # as ``dyn_<channel>_<current>`` parameters. Every one of them exists in NuWro's
@@ -82,7 +73,7 @@ class NuWroTranslator(ConfigTranslator):
         nuwro_params = {
             "number_of_events": int(task["event_count"]),
             "random_seed": seed,
-            "beam_particle": PARTICLE_PDG[particle],
+            "beam_particle": probe_pdg(particle, "NuWro"),
             "beam_type": 0,
             "beam_energy": self._beam_energy(flux),
             "nucleus_p": protons,
