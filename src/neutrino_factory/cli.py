@@ -282,18 +282,34 @@ def _collect_catalog_rows(generator_filter: str | None, built_only: bool) -> lis
             built = catalog.image_built(image)
             if built_only and not built:
                 continue
-            rows.append(
-                {
-                    "generator": generator,
-                    "code_version": code_version,
-                    "config_versions": catalog.available_config_versions(generator, code_version),
-                    "image": image,
-                    "buildable": catalog.is_buildable(generator, code_version),
-                    "build_arg": catalog.build_arg(generator, code_version),
-                    "built": built,
-                }
-            )
+            # One row per config version, since the energy ranges can differ
+            # between them (a GENIE tune's ceiling is its spline's top knot).
+            # A code version with nothing staged still gets one row, so it stays
+            # visible in the table.
+            config_versions = catalog.available_config_versions(generator, code_version) or [None]
+            for config_version in config_versions:
+                rows.append(
+                    {
+                        "generator": generator,
+                        "code_version": code_version,
+                        "config_version": config_version,
+                        "valid_range_gev": catalog.valid_energy_range_gev(
+                            generator, code_version, config_version
+                        ),
+                        "max_range_gev": catalog.max_energy_range_gev(
+                            generator, code_version, config_version
+                        ),
+                        "image": image,
+                        "buildable": catalog.is_buildable(generator, code_version),
+                        "build_arg": catalog.build_arg(generator, code_version),
+                        "built": built,
+                    }
+                )
     return rows
+
+
+def _format_energy_range(bounds: tuple[float, float] | None) -> str:
+    return f"{bounds[0]:g} - {bounds[1]:g}" if bounds else "-"
 
 
 def cmd_list_generators(args: argparse.Namespace) -> int:
@@ -307,20 +323,40 @@ def cmd_list_generators(args: argparse.Namespace) -> int:
         print("No generators match the given filters.")
         return 0
 
-    header = ("GENERATOR", "CODE_VERSION", "CONFIG_VERSIONS", "IMAGE", "BUILT")
-    lines = [header] + [
-        (
-            row["generator"],
-            row["code_version"],
-            ",".join(row["config_versions"]),
-            row["image"] or "-",
-            "yes" if row["built"] else "no",
+    header = (
+        "GENERATOR",
+        "CODE_VERSION",
+        "CONFIG_VERSION",
+        "VALID_RANGE_GEV",
+        "IMAGE",
+        "BUILT",
+    )
+    lines: list[tuple[str, ...]] = [header]
+    previous_key: tuple[str, str] | None = None
+    for row in rows:
+        # Blank the repeated (generator, code_version) labels — and the image
+        # columns, which are properties of the code version — so consecutive
+        # config versions read as one block.
+        key = (row["generator"], row["code_version"])
+        repeat = key == previous_key
+        previous_key = key
+        lines.append(
+            (
+                "" if repeat else row["generator"],
+                "" if repeat else row["code_version"],
+                row["config_version"] or "-",
+                _format_energy_range(row["valid_range_gev"]),
+                "" if repeat else (row["image"] or "-"),
+                "" if repeat else ("yes" if row["built"] else "no"),
+            )
         )
-        for row in rows
-    ]
     widths = [max(len(line[col]) for line in lines) for col in range(len(header))]
     for line in lines:
-        print("  ".join(value.ljust(widths[col]) for col, value in enumerate(line)))
+        print(
+            "  ".join(
+                value.ljust(widths[col]) for col, value in enumerate(line)
+            ).rstrip()
+        )
     return 0
 
 

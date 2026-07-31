@@ -843,3 +843,49 @@ naming the probe, target, current and XML path.
 This is reachable in ordinary use: the shipped `gxspl-NUsmall.xml` carries
 nue/nuebar/numu/numubar splines only, so a ν_τ run has no cross section to
 reconstruct and must say so.
+
+## Generator energy ranges: a hard maximum and a softer validity window (2026-07)
+
+Every generator adapter now declares two energy ranges (`generators/base.py`):
+
+* `MAX_ENERGY_RANGE_GEV` — outside it the generator cannot be asked to generate
+  events at all: it crashes, or its output is not usable. Requesting a flux
+  outside it is a **`ConfigError`**.
+* `VALID_ENERGY_RANGE_GEV` — the (narrower) range over which the generator's
+  physics assumptions hold. Requesting a flux outside it is a **warning**: the
+  run produces events, they just should not be trusted without further thought.
+
+Two errors would have been simpler, but a deliberate out-of-validity comparison
+is a legitimate thing to want from a generator-comparison framework, and there
+is no clean way to say "yes, I meant it" to a hard error. A silent pass was the
+other extreme: before this change a 300 GeV run against any generator validated
+happily.
+
+**Validity is always intersected with the maximum** (`valid_energy_range_gev`),
+because physics cannot be valid where the generator cannot run. That is what
+makes the GENIE case fall out for free.
+
+**GENIE's maximum is read off the staged spline, not declared.** Its real
+ceiling is a property of the cross-section splines rather than of the code
+version: above the top knot,
+`GenieTranslator._sum_matching_splines` interpolates with `right=knot_x[-1]`, so
+σ(E) is a **flat extrapolation of the last knot value** — physical-looking but
+wrong `xsec_weight`s, the failure mode CLAUDE.md's development posture forbids.
+`GenieAdapter.max_energy_range_gev` therefore resolves the tune's `xsecs.xml`
+and reads the knot range from its **first `<spline>` block only** (every spline
+in a set shares the same energy grid endpoints, and the staged files are ~500 MB,
+so a full scan would make `list-generators` unusable); the result is memoized on
+(path, mtime, size). The declared `MAX_ENERGY_RANGE_GEV` is the fallback for
+when nothing is staged — e.g. stub runs.
+
+The energy range checked is taken from the **built `Flux` object**, not from the
+config keys, so a histogram flux is checked against the range its ROOT histogram
+actually spans rather than against `emin_gev`/`emax_gev`, which it ignores.
+
+### Provenance of the declared numbers
+
+The values currently in the adapters are **provisional best guesses**, each
+carrying a `# TODO: verify` comment and a matching entry in `.claude/TODOS.md`;
+they have not yet been checked against the generators' own documentation. The
+one number that is measured rather than guessed is GENIE's ceiling, which comes
+from the staged spline (every FNAL set staged so far spans 0.01-1000 GeV).

@@ -27,6 +27,11 @@ class GiBUUAdapter(GeneratorAdapter):
         },
     }
 
+    # TODO: verify — provisional. GiBUU is a nuclear transport model aimed at
+    # the few-GeV region; its neutrino mode is not intended for high energies.
+    MAX_ENERGY_RANGE_GEV = (0.01, 50.0)
+    VALID_ENERGY_RANGE_GEV = (0.1, 20.0)
+
     @classmethod
     def build_arg(cls, code_version: str) -> dict[str, str] | None:
         # GiBUU release tarballs are keyed by the bare year; the code_version

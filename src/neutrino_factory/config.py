@@ -165,7 +165,65 @@ def _validate_required_sections(config: Dict[str, Any], required: Iterable[str])
     return errors
 
 
-def validate_config(config: Dict[str, Any]) -> None:
+def _format_range(bounds: tuple[float, float]) -> str:
+    return f"{bounds[0]:g}-{bounds[1]:g} GeV"
+
+
+def _contains(outer: tuple[float, float], inner: tuple[float, float]) -> bool:
+    return outer[0] <= inner[0] and inner[1] <= outer[1]
+
+
+def _validate_energy_range(
+    generator_name: str,
+    code_version: str,
+    config_version: str,
+    software_root: str | None,
+    requested: tuple[float, float],
+    warnings: list[str],
+) -> list[str]:
+    """Check the run's energy range against a generator version's two ranges.
+
+    Outside the *maximum* range the generator cannot be asked to generate events
+    at all, so that is an error. Outside the *valid* range it runs but its
+    physics assumptions do not hold, so that is a warning appended to
+    ``warnings``. A ``None`` range means the adapter declares no limit.
+    """
+    errors: list[str] = []
+    label = f"{generator_name}[{catalog.version_identifier(code_version, config_version)}]"
+
+    maximum = catalog.max_energy_range_gev(
+        generator_name, code_version, config_version, software_root
+    )
+    if maximum is not None and not _contains(maximum, requested):
+        errors.append(
+            f"Flux energy range {_format_range(requested)} is outside the range "
+            f"{label} can generate events over ({_format_range(maximum)})"
+        )
+        # A range that is already impossible needs no validity warning on top.
+        return errors
+
+    valid = catalog.valid_energy_range_gev(
+        generator_name, code_version, config_version, software_root
+    )
+    if valid is not None and not _contains(valid, requested):
+        warnings.append(
+            f"Flux energy range {_format_range(requested)} extends outside the "
+            f"range over which {label}'s physics assumptions hold "
+            f"({_format_range(valid)}); events generated outside it may not be "
+            f"physically reliable"
+        )
+    return errors
+
+
+def validate_config(config: Dict[str, Any]) -> list[str]:
+    """Validate a resolved config, returning non-fatal warnings.
+
+    Raises :class:`ConfigError` with every error joined into one message. The
+    returned warnings describe configurations that will run but whose output
+    deserves scrutiny (out-of-validity energies, unchecked availability in stub
+    mode); callers are expected to surface them to the user.
+    """
+    warnings: list[str] = []
     errors = _validate_required_sections(
         config,
         ["run", "flux", "target", "generators", "splitting", "storage", "slurm"],
@@ -194,7 +252,21 @@ def validate_config(config: Dict[str, Any]) -> None:
 
     config_path = config.get("config_path")
     flux_base_dir = str(Path(config_path).parent) if config_path else None
-    errors.extend(flux_module.validate_flux(flux, base_dir=flux_base_dir))
+    flux_errors = flux_module.validate_flux(flux, base_dir=flux_base_dir)
+    errors.extend(flux_errors)
+
+    # The run's energy range is a property of the flux object, not of the config
+    # keys: a histogram flux takes its bounds from the ROOT histogram's edges.
+    # Only buildable (i.e. already valid) flux blocks are checked against the
+    # per-generator ranges below.
+    requested_range: tuple[float, float] | None = None
+    if not flux_errors:
+        try:
+            flux_object = flux_module.build_flux(flux, base_dir=flux_base_dir)
+        except flux_module.FluxError as error:
+            errors.append(str(error))
+        else:
+            requested_range = (flux_object.emin_gev, flux_object.emax_gev)
 
     if not isinstance(generators, dict):
         errors.append("generators must be a mapping")
@@ -205,7 +277,7 @@ def validate_config(config: Dict[str, Any]) -> None:
     # validate strictly so a valid config is guaranteed to run.
     stub_mode = bool(run.get("stub_mode", True))
     if stub_mode and generators:
-        LOGGER.warning(
+        warnings.append(
             "run.stub_mode is enabled: generator config_versions are NOT checked "
             "for availability (e.g. staged GENIE cross-section splines). Set "
             "run.stub_mode: false to validate that configured versions can "
@@ -255,6 +327,18 @@ def validate_config(config: Dict[str, Any]) -> None:
                 errors.append(str(error))
                 continue
 
+            if requested_range is not None:
+                errors.extend(
+                    _validate_energy_range(
+                        generator_name,
+                        code_version,
+                        config_version,
+                        software_root,
+                        requested_range,
+                        warnings,
+                    )
+                )
+
             version_id = catalog.version_identifier(code_version, config_version)
             if version_id in seen_version_ids:
                 errors.append(
@@ -267,6 +351,7 @@ def validate_config(config: Dict[str, Any]) -> None:
 
     if errors:
         raise ConfigError("; ".join(errors))
+    return warnings
 
 
 def find_repo_root(start: str | Path | None = None) -> Path | None:
@@ -315,7 +400,10 @@ def resolve_config(config: Dict[str, Any], source_path: str | Path | None = None
     if source_path is not None:
         merged["config_path"] = str(Path(source_path).resolve())
 
-    validate_config(merged)
+    warnings = validate_config(merged)
+    for warning in warnings:
+        LOGGER.warning("%s", warning)
+    merged["validation_warnings"] = warnings
     merged["enabled_generator_instances"] = enabled_generator_instances(merged)
     merged["enabled_generators"] = enabled_generators(merged)
     return merged
