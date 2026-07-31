@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
@@ -14,7 +15,7 @@ from .base import GeneratorAdapter
 from .. import catalog, containers
 from ..flux import build_flux
 from ..normalizers.genie import GenieNormalizer
-from ..translators.genie import GenieTranslator
+from ..translators.genie import _KNOT_RE, _SPLINE_OPEN_RE, GenieTranslator
 
 
 LOGGER = logging.getLogger(__name__)
@@ -55,6 +56,49 @@ MESSENGER_PRESETS: dict[str, list[str]] = {
 }
 
 
+@functools.lru_cache(maxsize=16)
+def _spline_energy_range_cached(
+    path: str, mtime_ns: int, size: int
+) -> tuple[float, float] | None:
+    energies: list[float] = []
+    in_spline = False
+    with open(path, "r", encoding="ISO-8859-1") as handle:
+        for line in handle:
+            if not in_spline:
+                if not _SPLINE_OPEN_RE.search(line):
+                    continue
+                in_spline = True
+            energies.extend(float(match.group(1)) for match in _KNOT_RE.finditer(line))
+            if "</spline>" in line:
+                break
+    if len(energies) < 2:
+        return None
+    return (min(energies), max(energies))
+
+
+def spline_energy_range(xml_path: str | Path) -> tuple[float, float] | None:
+    """Energy range, in GeV, spanned by the knots of a GENIE spline XML file.
+
+    Reads the *first* ``<spline>`` block and stops there: every spline in a
+    GENIE cross-section set is generated on the same energy grid endpoints, and
+    a staged ``xsecs.xml`` is ~500 MB, so scanning the whole file to learn one
+    number would make ``list-generators`` and config validation unusable.
+
+    Returns ``None`` if the file cannot be read or holds no usable knots. The
+    result is memoized on (path, mtime, size), so re-staging a spline
+    invalidates the entry.
+    """
+    path = Path(xml_path)
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    try:
+        return _spline_energy_range_cached(str(path), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return None
+
+
 class GenieAdapter(GeneratorAdapter):
     name = "genie"
     executable = "gevgen"
@@ -72,6 +116,14 @@ class GenieAdapter(GeneratorAdapter):
             "git_ref": "R-3_04_00",
         },
     }
+
+    # TODO: verify — provisional. Fallback only: the real ceiling is the staged
+    # spline's top knot (see max_energy_range_gev). Every FNAL spline set staged
+    # so far spans 0.01-1000 GeV, so that is the assumption when none is staged.
+    MAX_ENERGY_RANGE_GEV = (0.01, 1000.0)
+    # TODO: verify — provisional. GENIE's comprehensive model sets target the
+    # few-GeV to tens-of-GeV region; intersected with the spline range above.
+    VALID_ENERGY_RANGE_GEV = (0.1, 100.0)
 
     @staticmethod
     def _tag_safe(value: str) -> str:
@@ -126,6 +178,35 @@ class GenieAdapter(GeneratorAdapter):
         root = software_root if software_root is not None else cls._default_software_root()
         xsec_root = cls._xsec_dir(root, code_version)
         return sorted(p.parent.name for p in xsec_root.glob("*/xsecs.xml"))
+
+    @classmethod
+    def max_energy_range_gev(
+        cls,
+        code_version: str,
+        config_version: str | None = None,
+        software_root: str | Path | None = None,
+    ) -> tuple[float, float] | None:
+        """The staged spline's knot range, or the declared fallback.
+
+        GENIE's hard energy limit is a property of the cross-section splines,
+        not of the code version: above the top knot the reconstructed total
+        cross section is a flat extrapolation of the last knot value
+        (``translators.genie.GenieTranslator._sum_matching_splines``), which
+        would hand downstream analyses physical-looking but wrong
+        ``xsec_weight`` values. Read it off disk whenever a spline is staged.
+        """
+        if config_version:
+            root = (
+                software_root
+                if software_root is not None
+                else cls._default_software_root()
+            )
+            xml_path = cls.genie_xsecs_xml(root, code_version, config_version)
+            if xml_path is not None:
+                spline_range = spline_energy_range(xml_path)
+                if spline_range is not None:
+                    return spline_range
+        return cls.MAX_ENERGY_RANGE_GEV
 
     @classmethod
     def ensure_compatible(

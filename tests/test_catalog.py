@@ -12,8 +12,17 @@ from neutrino_factory.cli import build_parser
 from neutrino_factory.generators.genie import GenieAdapter
 
 
-def _stage_xsecs(software_root: Path, code_version: str, tune_dir: str) -> Path:
-    """Create a fake staged xsecs.xml file and return its path."""
+def _stage_xsecs(
+    software_root: Path,
+    code_version: str,
+    tune_dir: str,
+    knot_energies: tuple[float, ...] = (),
+) -> Path:
+    """Create a fake staged xsecs.xml file and return its path.
+
+    With ``knot_energies`` the file holds one minimal ``<spline>`` block, which
+    is what the adapter reads its energy range off.
+    """
     dest = (
         software_root
         / "genie"
@@ -23,7 +32,15 @@ def _stage_xsecs(software_root: Path, code_version: str, tune_dir: str) -> Path:
         / "xsecs.xml"
     )
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text("<?xml version='1.0'?>", encoding="utf-8")
+    lines = ["<?xml version='1.0'?>"]
+    if knot_energies:
+        lines.append('<spline name="nu:14;tgt:1000180400;proc:Weak[CC],QES;" nknots="3">')
+        lines.extend(
+            f"<knot><E>{energy:e}</E><xsec>1.0e-01</xsec></knot>"
+            for energy in knot_energies
+        )
+        lines.append("</spline>")
+    dest.write_text("\n".join(lines), encoding="utf-8")
     return dest
 
 
@@ -72,6 +89,36 @@ class CatalogTests(unittest.TestCase):
                 catalog.ensure_compatible(
                     "genie", "R-3_06_00", "AR23_20i_00_000", root, require_available=True
                 )
+
+    def test_valid_range_is_intersected_with_max_range(self) -> None:
+        # Physics can never be valid where the generator cannot run: a narrower
+        # maximum must clip the declared validity window.
+        maximum = catalog.max_energy_range_gev("gibuu", "release2025", "default")
+        valid = catalog.valid_energy_range_gev("gibuu", "release2025", "default")
+        assert maximum is not None and valid is not None
+        self.assertGreaterEqual(valid[0], maximum[0])
+        self.assertLessEqual(valid[1], maximum[1])
+
+    def test_genie_max_range_comes_from_staged_spline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _stage_xsecs(root, "R-3_06_00", "G1810a0211a", knot_energies=(0.05, 1.0, 12.5))
+            self.assertEqual(
+                catalog.max_energy_range_gev("genie", "R-3_06_00", "G18_10a_02_11a", root),
+                (0.05, 12.5),
+            )
+            # The spline ceiling also clips the declared validity window.
+            self.assertEqual(
+                catalog.valid_energy_range_gev("genie", "R-3_06_00", "G18_10a_02_11a", root),
+                (0.1, 12.5),
+            )
+
+    def test_genie_falls_back_to_declared_range_without_a_spline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(
+                catalog.max_energy_range_gev("genie", "R-3_06_00", "G18_10a_02_11a", Path(tmp)),
+                GenieAdapter.MAX_ENERGY_RANGE_GEV,
+            )
 
     def test_neut_buildable_from_published_image(self) -> None:
         # NEUT has no git ref (its source is not public); its payload is
@@ -179,8 +226,33 @@ class ListGeneratorsCliTests(unittest.TestCase):
         self.assertTrue(all(row["generator"] == "genie" for row in rows))
         self.assertIn("R-3_06_00", [row["code_version"] for row in rows])
         genie_row = next(r for r in rows if r["code_version"] == "R-3_06_00")
-        self.assertEqual(genie_row["config_versions"], ["G18_10a_02_11a"])
+        self.assertEqual(genie_row["config_version"], "G18_10a_02_11a")
         self.assertEqual(genie_row["build_arg"], {"name": "GENIE_TAG", "value": "R-3_06_00"})
+        # Both ranges are machine-readable even though the table shows only the
+        # valid one. The staged file here has no knots, so both fall back to the
+        # adapter's declared values.
+        declared_max = GenieAdapter.MAX_ENERGY_RANGE_GEV
+        declared_valid = GenieAdapter.VALID_ENERGY_RANGE_GEV
+        assert declared_max is not None and declared_valid is not None
+        self.assertEqual(genie_row["max_range_gev"], list(declared_max))
+        self.assertEqual(genie_row["valid_range_gev"], list(declared_valid))
+
+    def test_list_emits_one_row_per_config_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _stage_xsecs(Path(tmp), "R-3_06_00", "G18_10a_02_11a")
+            _stage_xsecs(Path(tmp), "R-3_06_00", "AR23_20i_00_000")
+            output = self._run(
+                ["list-generators", "--generator", "genie"], software_root=tmp
+            )
+        rows = [line for line in output.splitlines() if line.strip()]
+        tune_rows = [line for line in rows if "G18_10a_02_11a" in line or "AR23_20i_00_000" in line]
+        self.assertEqual(len(tune_rows), 2)
+        # The first tune row carries the labels; the second repeats neither the
+        # generator nor the code version.
+        second = next(line for line in tune_rows if "G18_10a_02_11a" in line)
+        self.assertTrue(second.startswith(" "))
+        self.assertNotIn("R-3_06_00", second)
+        self.assertIn("VALID_RANGE_GEV", rows[0])
 
     def test_built_filter_hides_unbuilt(self) -> None:
         output = self._run(["list-generators", "--built"])

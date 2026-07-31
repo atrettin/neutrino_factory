@@ -219,6 +219,80 @@ class ConfigTests(unittest.TestCase):
             }
         }
 
+    @staticmethod
+    def _gibuu_generators() -> dict:
+        # GiBUU declares static energy ranges (max 0.01-50, valid 0.1-20 GeV),
+        # so its bounds do not depend on anything staged on disk. GENIE, enabled
+        # by default, is switched off so it is the only generator under test.
+        return {
+            "gibuu": {
+                "versions": [
+                    {"enabled": True, "code_version": "release2025", "config_version": "default"}
+                ]
+            },
+            "genie": {
+                "versions": [
+                    {
+                        "enabled": False,
+                        "code_version": "R-3_06_00",
+                        "config_version": "G18_10a_02_11a",
+                    }
+                ]
+            },
+        }
+
+    def test_flux_above_max_energy_range_raises(self) -> None:
+        with self.assertRaises(ConfigError) as caught:
+            resolve_config(
+                {
+                    "flux": {"emin_gev": 0.5, "emax_gev": 300.0},
+                    "generators": self._gibuu_generators(),
+                }
+            )
+        self.assertIn("gibuu", str(caught.exception))
+        self.assertIn("0.01-50 GeV", str(caught.exception))
+
+    def test_flux_outside_valid_range_warns_but_passes(self) -> None:
+        config = resolve_config(
+            {
+                "flux": {"emin_gev": 0.5, "emax_gev": 40.0},
+                "generators": self._gibuu_generators(),
+            }
+        )
+        warnings = [w for w in config["validation_warnings"] if "physics assumptions" in w]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("0.1-20 GeV", warnings[0])
+
+    def test_in_range_flux_produces_no_energy_warning(self) -> None:
+        config = resolve_config(
+            {
+                "run": {"stub_mode": False},
+                "flux": {"emin_gev": 0.5, "emax_gev": 10.0},
+                "generators": self._gibuu_generators(),
+            }
+        )
+        self.assertEqual(config["validation_warnings"], [])
+
+    def test_histogram_flux_energy_range_is_taken_from_the_histogram(self) -> None:
+        # A histogram flux carries its range in the ROOT file, not in the config
+        # keys, so the check must read it off the built flux object.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            flux_path = Path(tmpdir) / "flux.root"
+            _write_root_histogram(flux_path, "numu_flux", [0.5, 10.0, 300.0], [10.0, 1.0])
+            with self.assertRaises(ConfigError) as caught:
+                resolve_config(
+                    {
+                        "flux": {
+                            "type": "histogram",
+                            "particle": "numu",
+                            "histogram_file": str(flux_path),
+                            "histogram_name": "numu_flux",
+                        },
+                        "generators": self._gibuu_generators(),
+                    }
+                )
+        self.assertIn("0.5-300 GeV", str(caught.exception))
+
     def test_histogram_flux_validates(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             flux_path = Path(tmpdir) / "flux.root"

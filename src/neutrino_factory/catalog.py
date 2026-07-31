@@ -64,6 +64,37 @@ def available_config_versions(
     return _adapter(generator).available_config_versions(code_version, software_root)
 
 
+def max_energy_range_gev(
+    generator: str,
+    code_version: str,
+    config_version: str | None = None,
+    software_root: str | Path | None = None,
+) -> tuple[float, float] | None:
+    """Energy range the generator can run over at all, or ``None`` if unbounded.
+
+    Requesting energies outside it is a hard configuration error.
+    """
+    return _adapter(generator).max_energy_range_gev(
+        code_version, config_version, software_root
+    )
+
+
+def valid_energy_range_gev(
+    generator: str,
+    code_version: str,
+    config_version: str | None = None,
+    software_root: str | Path | None = None,
+) -> tuple[float, float] | None:
+    """Energy range over which the generator's physics holds, or ``None``.
+
+    Always a subset of :func:`max_energy_range_gev`. Requesting energies outside
+    it is a warning, not an error.
+    """
+    return _adapter(generator).valid_energy_range_gev(
+        code_version, config_version, software_root
+    )
+
+
 def image_for(generator: str, code_version: str) -> str | None:
     return _adapter(generator).image_for(code_version)
 

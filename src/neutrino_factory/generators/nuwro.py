@@ -25,6 +25,12 @@ class NuWroAdapter(GeneratorAdapter):
         },
     }
 
+    # TODO: verify — provisional. NuWro's DIS is handled by Pythia6 and keeps
+    # running far above where its nuclear model is trustworthy, so the maximum
+    # is deliberately much wider than the valid range.
+    MAX_ENERGY_RANGE_GEV = (0.01, 1000.0)
+    VALID_ENERGY_RANGE_GEV = (0.1, 50.0)
+
     def translate_config(self, task: dict) -> dict:
         return NuWroTranslator().translate(self.config, task)
 

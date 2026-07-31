@@ -61,6 +61,13 @@ class NeutAdapter(GeneratorAdapter):
         },
     }
 
+    # TODO: verify — provisional. NEUT is developed for the T2K/Super-K energy
+    # regime. Note the separate, unexplained truncation of a very wide topmost
+    # flux bin documented in docs/design_decisions.md, which is not captured by
+    # these bounds.
+    MAX_ENERGY_RANGE_GEV = (0.01, 100.0)
+    VALID_ENERGY_RANGE_GEV = (0.1, 30.0)
+
     @classmethod
     def is_buildable(cls, code_version: str) -> bool:
         """A published container image is a buildable source, like a git ref.

@@ -13,6 +13,24 @@ The common YAML config is the source of truth for both the local and Slurm execu
 - `storage`: roots for software, outputs, working files, and container images
 - `slurm`: job resources for MPP submission (default partition: `alma` — required by the new MPP Slurm cluster)
 
+## Flux energy range vs. generator energy ranges
+
+The run's energy range — `flux.emin_gev`/`flux.emax_gev` for a power-law flux,
+or the histogram's own edges for a histogram flux — is validated against each
+enabled generator version:
+
+| Check | Outcome |
+|---|---|
+| Outside the generator's **maximum** range | `validate-config` fails: the generator cannot be asked to generate events there at all. |
+| Inside the maximum but outside its **valid** range | `validate-config` passes with a warning: the events are produced, but the generator's physics assumptions do not hold across the whole range. |
+
+Both ranges are declared per adapter; GENIE's maximum is read from the staged
+cross-section spline, since above its top knot the reconstructed `xsec_weight`
+would be a flat extrapolation. See `docs/design_decisions.md`.
+
+`neutrino-factory list-generators` shows each version's valid range in the
+`VALID_RANGE_GEV` column (`--json` carries `max_range_gev` as well).
+
 ## Weak current: `physics.current`
 
 | Value | What is generated |

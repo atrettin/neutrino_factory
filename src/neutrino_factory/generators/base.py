@@ -29,6 +29,17 @@ class GeneratorAdapter(ABC):
     # ``None`` for generators that are not buildable.
     build_arg_name: str | None = None
 
+    # Energy range, in GeV, outside which this generator cannot be asked to
+    # generate events at all: it crashes, or its output is unusable. Violating
+    # it is a hard config error. ``None`` means "unconstrained / not known".
+    MAX_ENERGY_RANGE_GEV: tuple[float, float] | None = None
+    # Energy range, in GeV, over which the generator's underlying physics
+    # assumptions hold. Always treated as a subset of MAX_ENERGY_RANGE_GEV (see
+    # ``valid_energy_range_gev``). Violating it is a warning, not an error: an
+    # out-of-validity run still produces events, they just should not be
+    # trusted without further thought.
+    VALID_ENERGY_RANGE_GEV: tuple[float, float] | None = None
+
     def __init__(self, config: dict[str, Any]):
         self.config = config
 
@@ -120,6 +131,45 @@ class GeneratorAdapter(ABC):
         to discover tunes from staged cross-section files on disk.
         """
         return cls.known_config_versions(code_version)
+
+    @classmethod
+    def max_energy_range_gev(
+        cls,
+        code_version: str,
+        config_version: str | None = None,
+        software_root: str | Path | None = None,
+    ) -> tuple[float, float] | None:
+        """Energy range the generator can be run over at all, or ``None``.
+
+        The default is the declared ``MAX_ENERGY_RANGE_GEV``. GENIE overrides
+        this to read the real ceiling off the staged cross-section spline, whose
+        top knot is a genuine hard limit (above it the reconstructed cross
+        section would be a flat extrapolation of the last knot).
+        """
+        return cls.MAX_ENERGY_RANGE_GEV
+
+    @classmethod
+    def valid_energy_range_gev(
+        cls,
+        code_version: str,
+        config_version: str | None = None,
+        software_root: str | Path | None = None,
+    ) -> tuple[float, float] | None:
+        """Energy range over which the generator's physics is trustworthy.
+
+        The declared ``VALID_ENERGY_RANGE_GEV`` intersected with the maximum
+        range: physics can never be valid where the generator cannot run, so a
+        spline-limited GENIE tune narrows its own validity window automatically.
+        """
+        valid = cls.VALID_ENERGY_RANGE_GEV
+        maximum = cls.max_energy_range_gev(code_version, config_version, software_root)
+        if valid is None:
+            return maximum
+        if maximum is None:
+            return valid
+        lo = max(valid[0], maximum[0])
+        hi = min(valid[1], maximum[1])
+        return (lo, hi) if lo <= hi else None
 
     @classmethod
     def ensure_code_version(cls, code_version: str) -> None:
