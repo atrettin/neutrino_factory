@@ -1,6 +1,10 @@
 # Configuration
 
-The common YAML config is the source of truth for both the local and Slurm execution paths.
+The common YAML config is the source of truth for both the local and Slurm
+execution paths. This document is the schema; see
+[architecture.md](architecture.md) for how a config becomes tasks and
+[design_decisions.md](design_decisions.md) for the rationale behind specific
+choices.
 
 ## Top-level sections
 

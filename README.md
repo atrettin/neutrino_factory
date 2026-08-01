@@ -36,6 +36,9 @@ Targets:
 └── tests/                    # unit and smoke tests
 ```
 
+`docs/architecture.md` is the map of the Python package: module layout, how a
+config becomes tasks, and where outputs land.
+
 ## Environment variables
 
 All of these are usually written once by `neutrino-factory setup` into the
