@@ -6,6 +6,12 @@ from pathlib import Path
 import numpy as np
 
 from ..common_output import version_metadata, write_common_hdf5
+from ..final_state import (
+    NATIVE_CODE_FIELD,
+    event_fields,
+    flatten_particle_arrays,
+    summarize_final_state,
+)
 from ..flux import Flux, HistogramFlux
 from ..kinematics import KINEMATIC_FIELDS, derive_kinematics
 from ..translators.genie import GenieTranslator
@@ -66,10 +72,11 @@ class GenieNormalizer(OutputNormalizer):
     def _normalize_gst_root(self, root_path: Path, out_path, task: dict, mode: str) -> str:
         try:
             import uproot
+            import awkward as ak
         except ImportError as exc:
             raise RuntimeError(
-                "uproot is required to read GENIE ROOT output. "
-                "Install it with: pip install uproot"
+                "uproot and awkward are required to read GENIE ROOT output. "
+                "Install them with: pip install uproot awkward"
             ) from exc
 
         sidecar = root_path.parent / "translated_config.json"
@@ -127,6 +134,34 @@ class GenieNormalizer(OutputNormalizer):
                     "Cannot read lepton four-vectors from 'pxv/pyv/pzv' and 'El/pxl/pyl/pzl': "
                     f"{exc}"
                 ) from exc
+            try:
+                # The post-FSI final state: pdgf/Ef/pxf/pyf/pzf are gst's jagged
+                # per-event arrays of the particles that leave the nucleus (the
+                # 'f' family, as opposed to the pre-FSI 'i' one). They include
+                # the outgoing lepton and the residual nucleus; both are filtered
+                # out by summarize_final_state.
+                final_state_arrays = flatten_particle_arrays(
+                    ak,
+                    tree["pdgf"].array(library="ak"),
+                    *(
+                        tree[branch].array(library="ak")
+                        for branch in ("Ef", "pxf", "pyf", "pzf")
+                    ),
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Cannot read the final-state particle list from 'pdgf/Ef/pxf/pyf/pzf': {exc}"
+                ) from exc
+            try:
+                # GENIE's own channel code, carried verbatim so the exact split
+                # can be recovered. gntpc writes its scattering type re-encoded
+                # into NEUT's mode scheme; GENIE has no single native integer of
+                # its own in gst.
+                native_codes = tree["neut_code"].array(library="np")
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Cannot read GENIE's native interaction code from 'neut_code': {exc}"
+                ) from exc
 
         energies_gev = np.asarray(energies_gev, dtype=np.float64)
         weights_arr = np.asarray(weights, dtype=np.float64)
@@ -142,6 +177,7 @@ class GenieNormalizer(OutputNormalizer):
             )
         ]
         kinematics = derive_kinematics(nu_p4, lepton_p4, interactions)
+        final_state = summarize_final_state(*final_state_arrays)
 
         # Declare how much this chunk's estimate is worth, so merging averages
         # the chunks instead of summing them (see ConfigTranslator.xsec_norm_count
@@ -166,8 +202,10 @@ class GenieNormalizer(OutputNormalizer):
                 "probe": probe,
                 "target": target,
                 "generator": self.name,
+                NATIVE_CODE_FIELD: int(native_codes[i]),
             }
             event.update({field: float(kinematics[field][i]) for field in KINEMATIC_FIELDS})
+            event.update(event_fields(final_state, i))
             events.append(event)
 
         return write_common_hdf5(out_path, metadata, events)

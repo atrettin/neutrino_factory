@@ -6,6 +6,12 @@ from pathlib import Path
 import numpy as np
 
 from ..common_output import version_metadata, write_common_hdf5
+from ..final_state import (
+    NATIVE_CODE_FIELD,
+    event_fields,
+    flatten_particle_arrays,
+    summarize_final_state,
+)
 from ..flux import build_flux
 from ..kinematics import KINEMATIC_FIELDS, derive_kinematics
 from ..translators.nuwro import NuWroTranslator
@@ -126,6 +132,32 @@ class NuWroNormalizer(OutputNormalizer):
                 raise RuntimeError(
                     f"Cannot read interaction flags from 'e/flag/flag.*': {exc}"
                 ) from exc
+            try:
+                # e/post is the post-FSI particle vector -- what actually leaves
+                # the nucleus -- as opposed to e/out, the primary vertex the
+                # outgoing lepton is taken from above. Components are again
+                # (t, x, y, z) = (E, px, py, pz) in MeV.
+                fs_pdg, fs_energy, fs_momentum, fs_counts = flatten_particle_arrays(
+                    ak,
+                    tree["e/post/post.pdg"].array(library="ak"),
+                    *(
+                        tree[f"e/post/post.{c}"].array(library="ak")
+                        for c in ("t", "x", "y", "z")
+                    ),
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Cannot read the final-state particle list from 'e/post/post.*': {exc}"
+                ) from exc
+            try:
+                # NuWro's own channel code, carried verbatim. It is finer than
+                # the common label: dyn distinguishes the CC and NC variant of
+                # each dynamics (see translators.nuwro.DYNAMICS_CHANNELS).
+                native_codes = tree["e/dyn"].array(library="np")
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Cannot read NuWro's native interaction code from 'e/dyn': {exc}"
+                ) from exc
 
         energies_gev = np.asarray(energies_mev, dtype=np.float64) / MEV_PER_GEV
         weights_arr = np.asarray(weights, dtype=np.float64)
@@ -143,6 +175,9 @@ class NuWroNormalizer(OutputNormalizer):
             )
         ]
         kinematics = derive_kinematics(nu_p4, lepton_p4, interactions, valid=has_lepton)
+        final_state = summarize_final_state(
+            fs_pdg, fs_energy / MEV_PER_GEV, fs_momentum / MEV_PER_GEV, fs_counts
+        )
 
         # Declare how much this chunk's estimate is worth, so merging averages
         # the chunks instead of summing them (see ConfigTranslator.xsec_norm_count
@@ -153,8 +188,8 @@ class NuWroNormalizer(OutputNormalizer):
         )
 
         events = []
-        for i, (e_gev, w, xw, itype, is_cc) in enumerate(
-            zip(energies_gev, weights, xsec_weights, interactions, flag_cc)
+        for i, (e_gev, w, xw, itype, is_cc, native_code) in enumerate(
+            zip(energies_gev, weights, xsec_weights, interactions, flag_cc, native_codes)
         ):
             event = {
                 "event_id": start_event + i,
@@ -167,8 +202,10 @@ class NuWroNormalizer(OutputNormalizer):
                 "probe": probe,
                 "target": target,
                 "generator": self.name,
+                NATIVE_CODE_FIELD: int(native_code),
             }
             event.update({field: float(kinematics[field][i]) for field in KINEMATIC_FIELDS})
+            event.update(event_fields(final_state, i))
             events.append(event)
 
         return write_common_hdf5(out_path, metadata, events)

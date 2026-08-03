@@ -342,7 +342,9 @@ reference"), so NEUT's native output cannot be read from Python at all.
 `setup/neut/nf-neut-flatten` as a second stage — the NEUT analogue of GENIE's
 `gevgen` → `gntpc`, dispatched by `NeutAdapter._run_flatten` through the same
 native/container branches as generation. It writes an `nf_neut` tree of plain
-scalars (`mode`, `pdgnu`, `enu_gev`, `totcrs`) and copies NEUT's normalization
+scalars (`mode`, `pdgnu`, `enu_gev`, `totcrs`, the two four-vectors) plus the
+per-event final-state particle list as variable-length branches (`n_fs`,
+`fs_pdg[n_fs]`, `fs_{e,px,py,pz}_gev[n_fs]`), and copies NEUT's normalization
 histograms across.
 
 **Alternatives rejected.** NEUT ships `neutclass_to_tree`, but its `nework`
@@ -636,6 +638,89 @@ does not absorb that. The GiBUU number needs care: its QE weight is extremely
 concentrated (Kish n_eff = 35 out of 14579 events; the top 1% of events carry 86%
 of the weight), so it is quoted with a bootstrap CI of [0.797, 0.851] rather than
 as a point estimate — see the GiBUU weighting section above for why.
+
+## Final-state content in the common output (2026-07-30)
+
+**Context.** The `interaction` label (`qel`/`res`/`mec`/`dis`/`coh`/`other`) is
+the only channel information the common output carried, and it is too coarse to
+cut on: "CC0pi", "CC1pi+", "protons above threshold" and "low hadronic energy"
+are all invisible at that granularity. All four generators already write a full
+post-FSI particle list; none of it was being read.
+
+**Decision.** Eight new scalar columns, derived by one shared formula
+(`final_state.summarize_final_state`) from whatever particle list the generator
+provides: `n_proton`, `n_neutron`, `n_pi_plus`, `n_pi_minus`, `n_pi_zero`,
+`hadronic_energy_gev`, `hadronic_kinetic_energy_gev`, and
+`native_interaction_code`.
+
+**Summaries, not particle lists.** The common format is strictly rectangular —
+one 1-D dataset per column, no ragged mechanism (see `common_output.py`). Storing
+per-event particle lists would mean either a second, differently-shaped group
+that every reader, merger and validator would have to learn about, or padding to
+a fixed maximum. Multiplicities plus energy sums are what selections are actually
+made on, and they fit the format as it stands.
+
+**Conventions**, all enforced in one place so a pion count from GENIE means what
+one from NuWro means:
+
+* **Post-FSI.** The particles that leave the nucleus. Where a generator exposes
+  both a primary and a post-FSI list, the post-FSI one is used — NuWro's
+  `e/post`, not the `e/out` the outgoing lepton is taken from. NEUT's list is
+  selected inside `nf_flatten.C` on NEUT's own flags (`fIsAlive && fStatus == 0`,
+  status 0 = "Normal"), not by index, since the array also holds initial-state
+  nucleons (status -1) and particles killed during the cascade.
+* **"Hadronic" means non-leptonic**: everything except `|pdg|` in 11..16.
+  Photons and kaons therefore count toward the energy sums. The name is a slight
+  abuse, chosen over silently dropping species that carry real energy out of the
+  interaction. The outgoing lepton is present in GiBUU's, NEUT's and NuWro's
+  lists (not GENIE's) and is excluded by this rule; it has its own columns.
+* **Nuclear remnants excluded** (`|pdg| > 1e9`). GENIE's list can carry the
+  residual nucleus, whose ~37 GeV rest mass would otherwise dominate
+  `hadronic_energy_gev` and swamp the physics.
+* **Mass from the four-vector**, `m = sqrt(E² - |p|²)`, never a lookup table. All
+  four generators supply full four-vectors for final-state particles, so a table
+  would only add a way to disagree with the generator about what it produced.
+* `hadronic_kinetic_energy_gev` is *not* the energy transfer ν. It runs ~85% of
+  ν on average and exceeds it for a minority of events, because FSI-ejected
+  nucleons carry Fermi motion that did not come from the neutrino. It is also
+  not GENIE's `sumKEf`, which uses a different (and undocumented) accounting.
+
+**`native_interaction_code` is the one non-universal column.** Its meaning
+depends on `generator`; it exists so the exact channel split can be
+reverse-engineered without going back to the raw files, and nothing in the
+framework interprets it.
+
+| generator | source | notes |
+| --- | --- | --- |
+| `genie` | `gst` branch `neut_code` | GENIE has no single native integer of its own in `gst`; `gntpc` writes its scattering type re-encoded into NEUT's mode scheme |
+| `neut` | `mode` | signed — negative for antineutrino channels |
+| `gibuu` | `evType` | 1 = QE, 2..31 resonances, 32/33/37 background, 34 = DIS, 35/36 = 2p2h |
+| `nuwro` | `e/dyn` | distinguishes the CC and NC variant of each dynamics |
+
+**Placeholders.** Counts default to `-1` and the energies to `-1.0` (counts and
+energies are non-negative, so these are unmistakably "not available" rather than
+"none found"); an *empty* final state is a genuine measurement and comes out as
+zero. `native_interaction_code` defaults to `-2**31`: it cannot be `0`, because
+NuWro's `dyn = 0` is CC quasi-elastic, and it cannot be a small negative number,
+because NEUT negates its mode for antineutrinos. Stub mode leaves all of them at
+their placeholders, as it already does for the kinematic columns.
+
+Files: `final_state.py` (the field table and the one summarizer),
+`common_output.py` (one splice into `NUMERIC_FIELD_SPECS`),
+`normalizers/{genie,gibuu,neut,nuwro}.py`, `setup/neut/nf_flatten.C`,
+`kinematics_report.py`, `tests/final_state_reference.py` (the reference final
+state all four normalizer test modules assert against).
+
+**Verified on real generator output (2026-07-30).** 300-event Docker runs of all
+four generators. GENIE is the strong check: the computed `n_proton`, `n_neutron`,
+`n_pi_plus`, `n_pi_minus`, `n_pi_zero` and `native_interaction_code` agree
+*exactly*, event by event, with `gst`'s own independently-filled `nfp`, `nfn`,
+`nfpip`, `nfpim`, `nfpi0` and `neut_code` branches. Across all four generators
+`hadronic_kinetic_energy_gev ≤ hadronic_energy_gev` holds for every event;
+quasi-elastic events are 97–100% zero-pion with at least one outgoing nucleon;
+GiBUU's 2p2h (`evType` 35/36) events come out with exactly two nucleons; and
+NuWro's `dyn` maps one-to-one onto the common labels (0→qel, 2→res, 4→dis,
+6→coh, 8→mec), confirming the two classifications agree.
 
 ## `analyze-kinematics`: weighted by default, with the weight efficiency in view
 

@@ -8,8 +8,10 @@ from unittest.mock import patch
 
 import numpy as np
 
+from tests.final_state_reference import reference_awkward_branches, reference_final_state
 from tests.kinematics_reference import reference_kinematics, reference_lepton_p4
 from neutrino_factory.common_output import read_events
+from neutrino_factory.final_state import FINAL_STATE_FIELDS, NATIVE_CODE_FIELD
 from neutrino_factory.kinematics import FIELD_DEFAULTS, KINEMATIC_FIELDS, MISSING
 from neutrino_factory.normalizers.neut import NeutNormalizer
 
@@ -27,6 +29,7 @@ def _write_flat_root(
     flux_contents=None,
     lepton_pdgs=None,
     drop_lepton_branches: bool = False,
+    drop_final_state_branches: bool = False,
 ) -> None:
     """Write the file nf_flatten.C produces: an nf_neut tree + the two TH1Ds.
 
@@ -73,6 +76,15 @@ def _write_flat_root(
             "lep_px_gev": lepton[:, 1],
             "lep_py_gev": lepton[:, 2],
             "lep_pz_gev": lepton[:, 3],
+        })
+    if not drop_final_state_branches:
+        fs_pdg, fs_e, fs_px, fs_py, fs_pz = reference_awkward_branches(len(modes))
+        branches.update({
+            "fs_pdg": fs_pdg,
+            "fs_e_gev": fs_e,
+            "fs_px_gev": fs_px,
+            "fs_py_gev": fs_py,
+            "fs_pz_gev": fs_pz,
         })
 
     with uproot.recreate(path) as f:
@@ -205,6 +217,41 @@ class NeutNormalizerRootTests(unittest.TestCase):
                 expected = reference_kinematics(energy)
                 for field in KINEMATIC_FIELDS:
                     self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+
+    def test_normalize_root_summarizes_the_final_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.flat.root"
+            # 1 = CC QE, 11 = CC 1pi+, -1 = the antineutrino CC QE mode, whose
+            # sign the native code must preserve.
+            _write_flat_root(root_path, [1.0, 2.5, 4.0], [1, 11, -1])
+            out_path = work_dir / "out.h5"
+
+            NeutNormalizer().normalize(root_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            expected = reference_final_state()
+            for event in events:
+                for field in FINAL_STATE_FIELDS:
+                    self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+            self.assertEqual([e[NATIVE_CODE_FIELD] for e in events], [1, 11, -1])
+
+    def test_normalize_root_reports_a_flat_file_without_final_state_branches(self) -> None:
+        # A file flattened before nf_flatten.C wrote the particle list: the
+        # multiplicities cannot be recovered from it, so say so rather than
+        # emitting placeholder counts that look like a measurement.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.flat.root"
+            _write_flat_root(root_path, [1.0], [1], drop_final_state_branches=True)
+
+            with self.assertRaises(RuntimeError) as ctx:
+                NeutNormalizer().normalize(
+                    root_path, work_dir / "out.h5", _base_task(event_count=1), "local"
+                )
+            self.assertIn("nf_flatten.C", str(ctx.exception))
 
     def test_normalize_root_blanks_bjorken_x_for_coherent(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

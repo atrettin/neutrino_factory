@@ -22,6 +22,12 @@
 #include "TSystem.h"
 #include "TTree.h"
 
+// Capacity of the fixed final-state buffers. NEUT events are far smaller than
+// this even for DIS on a heavy target; overflowing it is treated as a fatal
+// error rather than truncated, since a silently short particle list would
+// understate the multiplicities the normalizer derives from it.
+const Int_t kMaxFinalState = 200;
+
 void nf_flatten(const char* in_path, const char* out_path) {
   gSystem->Load("libNEUTClass");
 
@@ -51,6 +57,15 @@ void nf_flatten(const char* in_path, const char* out_path) {
   Double_t nu_px_gev = 0.0, nu_py_gev = 0.0, nu_pz_gev = 0.0;
   Double_t lep_e_gev = 0.0, lep_px_gev = 0.0, lep_py_gev = 0.0, lep_pz_gev = 0.0;
   Int_t pdglep = 0;  // 0 marks "no outgoing lepton found" -> normalizer blanks
+  // The post-FSI final state, as variable-length branches. The normalizer
+  // summarizes it into multiplicities and hadronic energy; it is written out
+  // here because uproot cannot reach NeutVect's particle array at all.
+  Int_t n_fs = 0;
+  Int_t fs_pdg[kMaxFinalState];
+  Double_t fs_e_gev[kMaxFinalState];
+  Double_t fs_px_gev[kMaxFinalState];
+  Double_t fs_py_gev[kMaxFinalState];
+  Double_t fs_pz_gev[kMaxFinalState];
   out_tree->Branch("mode", &mode, "mode/I");
   out_tree->Branch("pdgnu", &pdgnu, "pdgnu/I");
   out_tree->Branch("enu_gev", &enu_gev, "enu_gev/D");
@@ -63,6 +78,12 @@ void nf_flatten(const char* in_path, const char* out_path) {
   out_tree->Branch("lep_px_gev", &lep_px_gev, "lep_px_gev/D");
   out_tree->Branch("lep_py_gev", &lep_py_gev, "lep_py_gev/D");
   out_tree->Branch("lep_pz_gev", &lep_pz_gev, "lep_pz_gev/D");
+  out_tree->Branch("n_fs", &n_fs, "n_fs/I");
+  out_tree->Branch("fs_pdg", fs_pdg, "fs_pdg[n_fs]/I");
+  out_tree->Branch("fs_e_gev", fs_e_gev, "fs_e_gev[n_fs]/D");
+  out_tree->Branch("fs_px_gev", fs_px_gev, "fs_px_gev[n_fs]/D");
+  out_tree->Branch("fs_py_gev", fs_py_gev, "fs_py_gev[n_fs]/D");
+  out_tree->Branch("fs_pz_gev", fs_pz_gev, "fs_pz_gev[n_fs]/D");
 
   const Long64_t n_entries = in_tree->GetEntries();
   for (Long64_t i = 0; i < n_entries; ++i) {
@@ -103,6 +124,32 @@ void nf_flatten(const char* in_path, const char* out_path) {
         lep_pz_gev = part->fP.Pz() / 1000.0;
         break;
       }
+    }
+
+    // The post-FSI final state: the particles that actually leave the nucleus.
+    // NeutVect's array also holds the initial-state nucleons (fStatus = -1) and
+    // particles killed or replaced during FSI (fStatus != 0, e.g. 3 = absorbed,
+    // 7 = produced child particles), so it is filtered on NEUT's own flags
+    // rather than by index. The outgoing lepton is included here as well; the
+    // normalizer excludes leptons when it summarizes the list.
+    n_fs = 0;
+    for (int j = 1; j < nv->Npart(); ++j) {
+      NeutPart* part = nv->PartInfo(j);
+      if (!part) continue;
+      if (!part->fIsAlive || part->fStatus != 0) continue;
+      if (n_fs >= kMaxFinalState) {
+        Error("nf_flatten",
+              "entry %lld has more than %d final-state particles; refusing to "
+              "truncate the list, which would understate the multiplicities",
+              i, kMaxFinalState);
+        gSystem->Exit(1);
+      }
+      fs_pdg[n_fs] = part->fPID;
+      fs_e_gev[n_fs] = part->fP.E() / 1000.0;
+      fs_px_gev[n_fs] = part->fP.Px() / 1000.0;
+      fs_py_gev[n_fs] = part->fP.Py() / 1000.0;
+      fs_pz_gev[n_fs] = part->fP.Pz() / 1000.0;
+      ++n_fs;
     }
     out_tree->Fill();
   }
