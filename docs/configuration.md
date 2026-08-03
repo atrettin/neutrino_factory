@@ -98,15 +98,41 @@ parameter the macro does not declare is an error, not a no-op — it is almost
 always a typo that would otherwise leave the intended field at its default.
 
 **`include` is a coupled axis**, not GitHub Actions' append-and-patch `include`:
-each mapping supplies several parameters that travel together and is
-cross-multiplied with the ordinary axes. That is how the (generator,
+each mapping supplies several parameters that travel together and is combined by
+Cartesian product with the ordinary axes. That is how the (generator,
 code_version, config_version) triple stays consistent while flavour and nucleus
 vary independently. **`exclude`** drops combinations matching all of an entry's
 key/value pairs; an exclude naming a key no combination has is an error, since a
 silent no-op would generate jobs the user believes are gone.
 
 A `matrix` without a `use` is also valid: the entry itself becomes the body and
-its parameters are whatever `matrix`/`with` supply.
+its parameters are whatever `matrix`/`with` supply. For example:
+
+```yaml
+jobs:
+  - generator: "{{generator}}"
+    code_version: "{{code_version}}"
+    events: 10000
+    chunks: 1
+    flux:
+      type: power_law
+      particle: numu
+      emin_gev: 0.1
+      emax_gev: 50.0
+      gamma: -2.0
+    target:
+      nucleus: "{{nucleus}}"
+    physics:
+      mode: inclusive
+      current: cc
+    matrix:
+      nucleus: [C12, O16]
+      include:
+        - {generator: genie, code_version: "R-3_06_00"}
+        - {generator: nuwro, code_version: "nuwro_25.11"}
+```
+
+This produces four jobs: genie on C12, genie on O16, nuwro on C12, nuwro on O16.
 
 ## Job labels and output layout
 

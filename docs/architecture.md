@@ -88,8 +88,7 @@ Consequences worth knowing when changing this layer:
 - Anything that predicts or writes an output path must go through `layout.py`.
   `local.py` writes the files and `validate_output.expected_outputs` predicts
   them for `check-status`, `merge --config`, `plot-output` and
-  `analyze-kinematics`; they used to construct the same strings independently
-  and had to be kept in lockstep by hand.
+  `analyze-kinematics`.
 - Anything that groups outputs — merging, plotting — must group by **job**, not
   by `(generator, version)`. Two jobs can share a generator version and differ
   in neutrino flavour or target nucleus.

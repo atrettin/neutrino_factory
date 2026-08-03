@@ -3,6 +3,14 @@
 # cross section, so it needs more events than the other generators for the same
 # statistical uncertainty. With per-job event budgets that is simply this job's
 # `events`, independent of what any other job asks for.
+#
+# `gamma = -1` (flat in ln E): events are binned uniformly in log(E), so each
+# bin spans an energy interval proportional to its centre energy. A 1/E flux
+# means equal numbers of generated events fall in each log-spaced bin, giving
+# approximately uniform statistical uncertainty across bins. The rejection
+# samplers use `gamma = -2` because their yield is also proportional to the
+# cross section, which to first order rises with energy — that extra factor of E
+# must also be cancelled to achieve uniform statistics in log-spaced bins.
 run:
   name: gibuu_numu_c12
   seed: 12345
@@ -20,7 +28,7 @@ jobs:
       particle: numu
       emin_gev: 0.5
       emax_gev: 5.0
-      gamma: -2.0
+      gamma: -1.0
     target:
       nucleus: C12
     physics:

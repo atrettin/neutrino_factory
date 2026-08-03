@@ -5,7 +5,7 @@
 #
 #   * The rejection samplers (GENIE, NuWro, NEUT) draw events from the flux and
 #     accept them in proportion to the cross section, so a falling `gamma = -2`
-#     spectrum gives roughly uniform statistics per linear energy bin.
+#     spectrum gives approximately uniform statistics across log-spaced energy bins.
 #   * GiBUU samples phase space and weights each event by its cross section
 #     instead. It needs `gamma = -1` (flat in ln E) for approximately uniform
 #     uncertainty across log-spaced cross-section bins, and an order of magnitude
