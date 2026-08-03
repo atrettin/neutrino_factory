@@ -16,6 +16,7 @@ from neutrino_factory.plots import (
     make_config_plots,
     read_plot_data,
 )
+from neutrino_factory.config import resolve_config
 from neutrino_factory.validate_output import expected_outputs
 
 
@@ -107,9 +108,13 @@ class DatasetLabelTests(unittest.TestCase):
 
 
 class MakeConfigPlotsTests(unittest.TestCase):
-    def _config(self, root: Path) -> dict:
-        return {
-            "run": {"name": "unit_run", "events": 4, "seed": 1},
+    def _job(self, generator: str, code_version: str, config_version: str, **overrides) -> dict:
+        job = {
+            "generator": generator,
+            "code_version": code_version,
+            "config_version": config_version,
+            "events": 4,
+            "chunks": 1,
             "flux": {
                 "type": "power_law",
                 "particle": "numu",
@@ -117,35 +122,29 @@ class MakeConfigPlotsTests(unittest.TestCase):
                 "emax_gev": 5.0,
                 "gamma": 0.0,
             },
-            "target": {"nucleus": "C12", "pdg": 1000060120},
+            "target": {"nucleus": "C12"},
             "physics": {"mode": "inclusive", "current": "inclusive"},
-            "generators": {
-                "genie": {
-                    "versions": [
-                        {
-                            "enabled": True,
-                            "code_version": "R-3_06_00",
-                            "config_version": "G18_10a_02_11a",
-                        }
-                    ]
-                },
-                "nuwro": {
-                    "versions": [
-                        {
-                            "enabled": True,
-                            "code_version": "21.09.2",
-                            "config_version": "default",
-                        }
-                    ]
-                },
-            },
-            "splitting": {"strategy": "events", "chunks": 1},
-            "storage": {
-                "software_root": str(root / "software"),
-                "output_root": str(root),
-                "work_root": str(root / "work"),
-            },
         }
+        job.update(overrides)
+        return job
+
+    def _config(self, root: Path, jobs: list[dict] | None = None) -> dict:
+        return resolve_config(
+            {
+                "run": {"name": "unit_run", "seed": 1},
+                "jobs": jobs
+                if jobs is not None
+                else [
+                    self._job("genie", "R-3_06_00", "G18_10a_02_11a"),
+                    self._job("nuwro", "nuwro_25.11", "default"),
+                ],
+                "storage": {
+                    "software_root": str(root / "software"),
+                    "output_root": str(root),
+                    "work_root": str(root / "work"),
+                },
+            }
+        )
 
     def test_raises_when_no_merged_output_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -174,8 +173,10 @@ class MakeConfigPlotsTests(unittest.TestCase):
                     f"{present.stem}_energy_weighted.png",
                     f"{present.stem}_xsec_by_type.png",
                     # The dataset is inclusive, so both comparison figures appear.
-                    "unit_run_comparison_cc.png",
-                    "unit_run_comparison_nc.png",
+                    # Comparison figures are grouped by initial state, so the
+                    # flavour and nucleus are part of the name.
+                    "unit_run_numu_C12_comparison_cc.png",
+                    "unit_run_numu_C12_comparison_nc.png",
                 },
             )
             # Default destination is <output_root>/plots.
@@ -195,7 +196,48 @@ class MakeConfigPlotsTests(unittest.TestCase):
             comparisons = sorted(
                 Path(p).name for p in written if "_comparison_" in Path(p).name
             )
-            self.assertEqual(comparisons, ["unit_run_comparison_cc.png"])
+            self.assertEqual(comparisons, ["unit_run_numu_C12_comparison_cc.png"])
+
+    def test_each_initial_state_gets_its_own_comparison_figure(self) -> None:
+        # Cross sections on different nuclei, or for different flavours, are not
+        # comparable quantities and must never share a figure.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = self._config(
+                root,
+                jobs=[
+                    self._job("genie", "R-3_06_00", "G18_10a_02_11a"),
+                    self._job("nuwro", "nuwro_25.11", "default"),
+                    self._job(
+                        "genie",
+                        "R-3_06_00",
+                        "G18_10a_02_11a",
+                        flux={
+                            "type": "power_law",
+                            "particle": "numubar",
+                            "emin_gev": 0.5,
+                            "emax_gev": 5.0,
+                            "gamma": 0.0,
+                        },
+                        target={"nucleus": "Ar40"},
+                    ),
+                ],
+            )
+            for entry in expected_outputs(config)["merged"]:
+                _write(Path(entry["path"]), currents=(True, True))
+
+            written = make_config_plots(config, output_dir=root / "png", bins=5)
+
+            comparisons = sorted(
+                Path(p).name for p in written if "_comparison_" in Path(p).name
+            )
+            self.assertEqual(
+                comparisons,
+                [
+                    "unit_run_numu_C12_comparison_cc.png",
+                    "unit_run_numubar_Ar40_comparison_cc.png",
+                ],
+            )
 
 
 if __name__ == "__main__":

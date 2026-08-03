@@ -12,14 +12,13 @@ output for ad-hoc use:
 from __future__ import annotations
 
 import argparse
-import re
 from pathlib import Path
 from typing import Any
 
 import h5py
 import numpy as np
 
-from . import catalog
+from . import catalog, layout
 from .common_output import EVENT_FIELDS, VERSION_IDENTITY_KEYS
 from .slurm import build_task_manifest
 
@@ -269,45 +268,54 @@ def format_summary(summary: dict[str, Any]) -> str:
 
 
 def expected_outputs(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """Compute the HDF5 files a run should produce, mirroring the paths that
-    ``local.run_task`` / ``local.run_local`` write (kept in lockstep with them).
+    """Compute the HDF5 files a run should produce.
 
-    Returns ``{"chunks": [...], "merged": [...]}`` where each entry carries the
-    ``path``, ``expected_events``, ``generator`` and ``version_id`` (chunk entries
-    also carry ``chunk_id``)."""
+    Paths come from :mod:`neutrino_factory.layout`, the same module
+    ``local.run_task``/``run_local`` write through, so prediction and reality
+    cannot drift apart.
+
+    Returns ``{"chunks": [...], "merged": [...]}``. Every entry carries the
+    ``path`` and ``expected_events`` plus the job's identity — ``job_index``,
+    ``job_label``, ``generator``, ``version_id``, ``particle``, ``nucleus``,
+    ``current`` — so callers can group outputs by initial state without reading
+    a single HDF5 file. Chunk entries also carry ``chunk_id``.
+    """
     manifest = build_task_manifest(config)
-    output_root = Path(config["storage"]["output_root"])
-    run_name = config["run"]["name"]
+    jobs = config["jobs"]
 
     chunks: list[dict[str, Any]] = []
-    merged_groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+    merged_groups: dict[int, dict[str, Any]] = {}
 
     for task in manifest["tasks"]:
-        generator = task["generator_name"]
-        version_id = catalog.version_identifier(
-            str(task["code_version"]), str(task["config_version"])
-        )
-        token = re.sub(r"[^A-Za-z0-9._-]", "_", version_id)
-        file_stem = f"{run_name}_{generator}_{token}_chunk{task['chunk_id']:03d}"
-        chunk_path = output_root / "chunks" / generator / token / f"{file_stem}.h5"
+        job_index = int(task["job_index"])
+        job = jobs[job_index]
+        identity = {
+            "job_index": job_index,
+            "job_label": job["label"],
+            "generator": job["generator"],
+            "version_id": catalog.version_identifier(
+                str(job["code_version"]), str(job["config_version"])
+            ),
+            "particle": job["flux"]["particle"],
+            "nucleus": job["target"]["nucleus"],
+            "current": job["physics"]["current"],
+        }
+
         chunks.append(
             {
-                "path": chunk_path,
+                "path": layout.chunk_output_path(config, task),
                 "expected_events": int(task["event_count"]),
-                "generator": generator,
-                "version_id": version_id,
                 "chunk_id": int(task["chunk_id"]),
+                **identity,
             }
         )
 
-        key = (generator, task["code_version"], task["config_version"])
         group = merged_groups.setdefault(
-            key,
+            job_index,
             {
-                "path": output_root / "merged" / f"{run_name}_{generator}_{token}.h5",
+                "path": layout.merged_output_path(config, job),
                 "expected_events": 0,
-                "generator": generator,
-                "version_id": version_id,
+                **identity,
             },
         )
         group["expected_events"] += int(task["event_count"])

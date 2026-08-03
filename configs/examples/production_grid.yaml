@@ -1,0 +1,106 @@
+# Full production grid: every generator, both numu and numubar, three nuclei —
+# one file, one submission.
+#
+# The two macros exist because the generators cannot share a run definition:
+#
+#   * The rejection samplers (GENIE, NuWro, NEUT) draw events from the flux and
+#     accept them in proportion to the cross section, so a falling `gamma = -2`
+#     spectrum gives approximately uniform statistics across log-spaced energy bins.
+#   * GiBUU samples phase space and weights each event by its cross section
+#     instead. It needs `gamma = -1` (flat in ln E) for approximately uniform
+#     uncertainty across log-spaced cross-section bins, and an order of magnitude
+#     more events to reach the same uncertainty — its yield is dominated by a
+#     small fraction of high-weight events.
+#
+# Run `neutrino-factory expand --config configs/examples/production_grid.yaml`
+# to see the 30 jobs this materializes to before submitting it.
+
+run:
+  name: production_grid
+  seed: 12345
+  executor: slurm
+  stub_mode: false
+  log_level: essential
+
+macros:
+  # Rejection-sampling generators: GENIE, NuWro, NEUT.
+  rejection:
+    params:
+      generator: null          # null = required; supply via `with:` or a matrix axis
+      code_version: null
+      config_version: null
+      particle: numu
+      nucleus: C12
+    job:
+      generator: "{{generator}}"
+      code_version: "{{code_version}}"
+      config_version: "{{config_version}}"
+      events: 200000
+      chunks: 20
+      flux:
+        type: power_law
+        particle: "{{particle}}"
+        emin_gev: 0.1
+        emax_gev: 50.0
+        gamma: -2.0
+      target:
+        nucleus: "{{nucleus}}"
+      physics:
+        mode: inclusive
+        current: inclusive
+
+  # GiBUU: flatter spectrum, ten times the statistics, its own chunking.
+  gibuu:
+    params:
+      particle: numu
+      nucleus: C12
+    job:
+      generator: gibuu
+      code_version: "release2025"
+      config_version: "default"
+      events: 2000000
+      chunks: 40
+      flux:
+        type: power_law
+        particle: "{{particle}}"
+        emin_gev: 0.1
+        emax_gev: 50.0
+        gamma: -1.0
+      target:
+        nucleus: "{{nucleus}}"
+      physics:
+        mode: inclusive
+        current: inclusive
+
+jobs:
+  # 2 flavours x 3 nuclei x 4 generator versions = 24 jobs.
+  # `include` is a COUPLED axis: each mapping supplies several parameters that
+  # travel together, cross-multiplied with the `particle` and `nucleus` axes.
+  - use: rejection
+    matrix:
+      particle: [numu, numubar]
+      nucleus: [C12, O16, Ar40]
+      include:
+        - {generator: genie, code_version: "R-3_06_00", config_version: "G18_10a_02_11a"}
+        - {generator: genie, code_version: "R-3_06_00", config_version: "AR23_20i_00_000"}
+        - {generator: nuwro, code_version: "nuwro_25.11", config_version: "default"}
+        - {generator: neut,  code_version: "5.7.0-nuint2024", config_version: "default"}
+
+  # 2 flavours x 3 nuclei = 6 jobs.
+  - use: gibuu
+    matrix:
+      particle: [numu, numubar]
+      nucleus: [C12, O16, Ar40]
+
+storage:
+  software_root: ${NF_SOFTWARE_ROOT:-./software}
+  output_root: ${NF_OUTPUT_ROOT:-./output}
+  work_root: ${NF_WORK_ROOT:-./work}
+
+slurm:
+  partition: alma
+  # One array covers every job, so size the wall clock for the LONGEST of them
+  # (here the 2M-event GiBUU chunks), not the average.
+  time: "08:00:00"
+  cpus_per_task: 1
+  mem: "4G"

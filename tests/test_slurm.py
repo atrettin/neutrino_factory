@@ -10,7 +10,7 @@ from unittest.mock import patch
 from neutrino_factory.cli import build_parser
 from neutrino_factory.config import load_config
 from neutrino_factory.local import run_task_from_manifest
-from neutrino_factory.slurm import build_task_manifest, render_sbatch_script
+from neutrino_factory.slurm import build_task_manifest, chunk_ranges, render_sbatch_script
 
 
 class SlurmPlanningTests(unittest.TestCase):
@@ -28,9 +28,22 @@ class SlurmPlanningTests(unittest.TestCase):
                 manifest = build_task_manifest(config)
                 script = render_sbatch_script(config, f"{tmpdir}/manifest.json")
 
-            instance_count = len(config["enabled_generator_instances"])
-            expected_tasks = instance_count * int(config["splitting"]["chunks"])
+            # Jobs are heterogeneous: the task count is the sum over jobs of
+            # each job's own chunk count, never a product.
+            expected_tasks = sum(
+                len(chunk_ranges(int(job["events"]), int(job["chunks"])))
+                for job in config["jobs"]
+            )
             self.assertEqual(len(manifest["tasks"]), expected_tasks)
+            self.assertEqual(manifest["manifest_version"], 4)
+            self.assertEqual(len(manifest["jobs"]), len(config["jobs"]))
+            for task in manifest["tasks"]:
+                self.assertIn("job_index", task)
+                self.assertEqual(
+                    task["job_label"], config["jobs"][task["job_index"]]["label"]
+                )
+            seeds = [task["seed"] for task in manifest["tasks"]]
+            self.assertEqual(len(set(seeds)), len(seeds))
             self.assertIn(f"#SBATCH --array=0-{expected_tasks - 1}", script)
         self.assertIn("jobs/run_task.sh", script)
         # The repo root is embedded absolutely (Slurm executes a spool copy, so

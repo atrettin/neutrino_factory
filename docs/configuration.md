@@ -1,17 +1,183 @@
 # Configuration
 
-The common YAML config is the source of truth for both the local and Slurm execution paths.
+The common YAML config is the source of truth for both the local and Slurm
+execution paths. This document is the schema; see
+[architecture.md](architecture.md) for how a config becomes tasks and
+[design_decisions.md](design_decisions.md) for the rationale behind specific
+choices.
 
 ## Top-level sections
 
-- `run`: run name, total event count, seed, executor mode, stub-mode toggle, and generator log verbosity
-- `flux`: neutrino flux model and energy range
-- `target`: nuclear target description
-- `physics`: generic interaction settings, including the weak current to generate
-- `generators`: versioned generator entries (multiple entries per generator are supported)
-- `splitting`: how the total event count is chunked into jobs
+- `run`: run name, seed, executor mode, stub-mode toggle, and default generator log verbosity
+- `macros` (optional): reusable parameterized job templates
+- `jobs`: the run itself — one entry per generator version x initial state
 - `storage`: roots for software, outputs, working files, and container images
 - `slurm`: job resources for MPP submission (default partition: `alma` — required by the new MPP Slurm cluster)
+
+Nothing about the physics is configured globally. See `configs/schema/run_config.yaml`
+for the annotated template.
+
+## Jobs
+
+A **job** is one generator version on one initial state, with its own event
+budget and chunking:
+
+```yaml
+jobs:
+  - name: optional_explicit_label     # otherwise derived; see "Job labels" below
+    generator: genie                  # required
+    code_version: "R-3_06_00"         # required
+    config_version: "G18_10a_02_11a"  # required
+    events: 100000                    # default 100
+    chunks: 20                        # default 1; must not exceed `events`
+    log_level: essential              # optional; overrides run.log_level for this job
+    flux: {type: power_law, particle: numu, emin_gev: 0.1, emax_gev: 50.0, gamma: -2.0}
+    target: {nucleus: C12}
+    physics: {mode: inclusive, current: cc}
+```
+
+The per-job flux and event budget are what make a single-file production run
+possible. The generators do not agree on what a run is: GiBUU samples phase
+space and weights events by cross section rather than rejection-sampling them,
+so it needs a flatter spectrum (`gamma = -1`, flat in ln E) and an order of
+magnitude more events than GENIE, NuWro or NEUT to reach the same statistical
+uncertainty. Under a single global `flux` and `events` those runs had to live in
+separate files and separate submissions.
+
+## Macros and matrix expansion
+
+`macros` and `matrix` are sugar over the `jobs` list. They are expanded away
+before anything else reads the configuration — validation included — so nothing
+downstream knows they exist. `neutrino-factory expand --config <cfg>` prints
+exactly what they materialize to; `--json` adds the full job dictionaries with
+the parameter set each came from.
+
+```yaml
+macros:
+  rejection:
+    params:
+      generator: null        # null = required: must be supplied
+      code_version: null
+      config_version: null
+      particle: numu         # anything else = a default
+      nucleus: C12
+    job:
+      generator: "{{generator}}"
+      code_version: "{{code_version}}"
+      config_version: "{{config_version}}"
+      events: 200000
+      chunks: 20
+      flux: {type: power_law, particle: "{{particle}}", emin_gev: 0.1, emax_gev: 50.0, gamma: -2.0}
+      target: {nucleus: "{{nucleus}}"}
+
+jobs:
+  - use: rejection
+    matrix:
+      particle: [numu, numubar]
+      nucleus: [C12, O16, Ar40]
+      include:
+        - {generator: genie, code_version: "R-3_06_00", config_version: "G18_10a_02_11a"}
+        - {generator: nuwro, code_version: "nuwro_25.11", config_version: "default"}
+      exclude:
+        - {generator: nuwro, nucleus: Ar40}
+```
+
+**Placeholder syntax.** A value that is *only* a placeholder **must be quoted** —
+bare `{{x}}` is YAML flow-mapping syntax and fails to parse. A quoted whole-value
+placeholder keeps the substituted value's **type**: `"{{events}}"` with
+`events: 100000` yields the integer `100000`, so numeric fields can be
+templated. A placeholder inside a longer string (`scan_{{particle}}`)
+interpolates as text and the result stays a string; it is never re-parsed as
+YAML. The `${VAR:-default}` environment syntax is unrelated, works anywhere
+including inside a macro body, and cannot collide with `{{...}}`.
+
+**Precedence**, lowest to highest: macro `params` defaults, then `with:`, then
+the matrix combination, then keys written directly on the `jobs` entry (deep-merged
+last, which is how a single use overrides one field of a macro). Supplying a
+parameter the macro does not declare is an error, not a no-op — it is almost
+always a typo that would otherwise leave the intended field at its default.
+
+**`include` is a coupled axis**, not GitHub Actions' append-and-patch `include`:
+each mapping supplies several parameters that travel together and is combined by
+Cartesian product with the ordinary axes. That is how the (generator,
+code_version, config_version) triple stays consistent while flavour and nucleus
+vary independently. **`exclude`** drops combinations matching all of an entry's
+key/value pairs; an exclude naming a key no combination has is an error, since a
+silent no-op would generate jobs the user believes are gone.
+
+A `matrix` without a `use` is also valid: the entry itself becomes the body and
+its parameters are whatever `matrix`/`with` supply. For example:
+
+```yaml
+jobs:
+  - generator: "{{generator}}"
+    code_version: "{{code_version}}"
+    events: 10000
+    chunks: 1
+    flux:
+      type: power_law
+      particle: numu
+      emin_gev: 0.1
+      emax_gev: 50.0
+      gamma: -2.0
+    target:
+      nucleus: "{{nucleus}}"
+    physics:
+      mode: inclusive
+      current: cc
+    matrix:
+      nucleus: [C12, O16]
+      include:
+        - {generator: genie, code_version: "R-3_06_00"}
+        - {generator: nuwro, code_version: "nuwro_25.11"}
+```
+
+This produces four jobs: genie on C12, genie on O16, nuwro on C12, nuwro on O16.
+
+## Job labels and output layout
+
+Each job gets a label, used in every path it produces:
+
+```
+<generator>_<code_version>+<config_version>_<particle>_<nucleus>_<current>
+```
+
+tokenized so it is filesystem-safe (`+` and other non-`[A-Za-z0-9._-]`
+characters become `_`), or the job's explicit `name:` verbatim. So:
+
+```
+work/raw/<label>/<run>_<label>_chunkNNN/
+output/chunks/<label>/<run>_<label>_chunkNNN.h5
+output/merged/<run>_<label>.h5
+```
+
+A label is a **pure function of its own job** and is never disambiguated against
+its neighbours. Labels end up in filenames of physics samples, and adding an
+unrelated job to a configuration must not silently rename another job's outputs.
+Two jobs whose labels collide are therefore a hard error naming both entries;
+give one of them an explicit `name:` (a macro can template it, e.g.
+`name: "{{particle}}_{{nucleus}}_{{emin}}to{{emax}}"`).
+
+## Target PDG
+
+`target.pdg` is derived from `target.nucleus` using the standard `10LZZZAAAI`
+nuclear code (`C12` -> `1000060120`), so a hand-written PDG can no longer
+disagree with the nucleus it claims to describe. An explicit `pdg:` still
+overrides and logs a warning when the two disagree. Nucleus names are parsed as
+an element symbol plus mass number (`C12`, `Ar40`, `Fe56`, `Xe136`); an
+unparsable or impossible name fails at configuration time rather than inside a
+running Slurm task. The generators' (Z, N) composition is derived the same way,
+so any isotope a generator itself supports is usable without a code change.
+
+## Seeds
+
+A task's seed is `blake2b(run.seed | job label | chunk id)` reduced into
+`[1, 2_000_000_000]` — positive and inside the signed 32-bit range Fortran
+generators need. Hashing rather than offset arithmetic (`run.seed +
+generator_index * 1000 + chunk`) means a seed depends only on the run seed and
+the chunk's own identity, so inserting or removing a job never shifts another
+job's random stream, and there is no chunk count at which the layout collides.
+`build_task_manifest` still asserts that all seeds in a manifest are distinct.
 
 ## Weak current: `physics.current`
 
@@ -111,10 +277,10 @@ The `storage` config values reference the same variables via `${VAR:-default}`
 expansion, so one `.env` drives the YAML config, the shell scripts, and the
 Slurm jobs consistently.
 
-## Slurm manifest schema (v3)
+## Slurm manifest schema (v4)
 
 `neutrino-factory submit --executor slurm` writes `work/manifests/<run>.json`
-with a compact schema (manifest version 3).
+with a compact schema (manifest version 4).
 
 Top-level keys:
 - `manifest_version`
@@ -122,10 +288,12 @@ Top-level keys:
 - `run_name`
 - `config_path`
 - `executor`
+- `jobs` — the materialized jobs, recorded once as provenance for what was planned
 - `tasks`
 
 Task keys:
 - `task_index`
+- `job_index`, `job_label` — the job this task belongs to
 - `generator_name`
 - `code_version`
 - `config_version`
@@ -136,27 +304,35 @@ Task keys:
 - `run_name`
 - `flux`
 
-Derived values (not stored as explicit task fields):
-- generator version identifier: `<code_version>+<config_version>`
-- tokenized version directory name: non `[A-Za-z0-9._-]` replaced with `_`
-- total task count: `len(tasks)`
+One task is produced per (job, chunk). Jobs are heterogeneous, so the total task
+count is the **sum** over jobs of each job's own chunk count, never a product.
+
+`job_index` resolves against the configuration at run time (`local.job_view_config`),
+and `job_label` is cross-checked against it: a manifest written before the
+configuration was edited is detected and reported instead of silently running
+the wrong job.
+
+**One array, one set of resources.** `slurm.time`, `mem` and `cpus_per_task`
+apply to the whole array, but jobs are now heterogeneous — a 200k-event GENIE job
+and a 2M-event GiBUU job share one wall clock. Size them for the longest and
+largest job, not the average.
 
 ## Example
 
-Use `configs/examples/power_law_numu_Ar.yaml` as the initial reference.
+Use `configs/examples/power_law_numu_Ar.yaml` as the initial reference and
+`configs/examples/production_grid.yaml` for a full macro + matrix production run
+(30 jobs across two flavours, three nuclei and five generator versions, with
+GiBUU on its own flux and statistics).
 
 For GENIE-specific tune runs with staged precomputed cross sections:
 
 ```yaml
-generators:
-  genie:
-    versions:
-      - enabled: true
-        code_version: R-3_06_00
-        config_version: G18_10a_02_11a
-      - enabled: true
-        code_version: R-3_06_00
-        config_version: AR23_20i_00_000
+jobs:
+  - use: rejection
+    matrix:
+      include:
+        - {generator: genie, code_version: "R-3_06_00", config_version: "G18_10a_02_11a"}
+        - {generator: genie, code_version: "R-3_06_00", config_version: "AR23_20i_00_000"}
 ```
 
 If `genie/genie_xsec/<tag-safe>/<config_version>/xsecs.xml` exists under
@@ -166,9 +342,10 @@ Computing splines on the fly is expensive, and flux-driven runs require them, so
 staging these files is strongly recommended. `neutrino-factory list-generators`
 only lists a GENIE tune as available once its `xsecs.xml` is present on disk.
 
-Each enabled generator entry computes a generator-specific version identifier. For GENIE this is
-`<code_version>+<config_version>`. This identifier is used in task planning and output layout so multiple versions of one
-generator can run in the same campaign.
+Each job computes a generator-specific version identifier. For GENIE this is
+`<code_version>+<config_version>`. It forms part of the job label, so multiple
+versions of one generator can run in the same campaign without their outputs
+colliding.
 
 ## Stub-mode recommendation
 

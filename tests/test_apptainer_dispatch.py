@@ -15,18 +15,19 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from neutrino_factory.config import resolve_config
 from neutrino_factory.generators.genie import GenieAdapter
 from neutrino_factory.generators.gibuu import GiBUUAdapter
 from neutrino_factory.generators.neut import NeutAdapter
 from neutrino_factory.generators.nuwro import NuWroAdapter
 from neutrino_factory.translators.neut import NeutTranslator
 
+from .helpers import view_config
+
 
 class ApptainerDispatchAdapterTests(unittest.TestCase):
     def test_genie_native_branch_dispatches_with_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            adapter = GenieAdapter(resolve_config({"storage": {"software_root": tmpdir}}))
+            adapter = GenieAdapter(view_config(storage={"software_root": tmpdir}))
             translated = {
                 "energy_range_gev": [0.5, 10.0],
                 "events": 10,
@@ -82,7 +83,7 @@ class ApptainerDispatchAdapterTests(unittest.TestCase):
         )
 
     def _neut_translated(self) -> tuple[dict, dict]:
-        config = resolve_config(
+        config = view_config(
             {
                 "flux": {
                     "type": "power_law",
@@ -92,6 +93,9 @@ class ApptainerDispatchAdapterTests(unittest.TestCase):
                     "gamma": -2.0,
                 },
                 "target": {"nucleus": "C12"},
+                "generator": "neut",
+                "code_version": "5.7.0-nuint2024",
+                "config_version": "default",
             }
         )
         translated = NeutTranslator().translate(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import re
 import sys
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from . import containers
-from .config import enabled_generator_instances
+from .jobs import job_seed
 
 
 def _safe_token(value: str) -> str:
@@ -32,40 +33,72 @@ def chunk_ranges(total_events: int, chunks: int) -> list[tuple[int, int]]:
     return ranges
 
 
+def _ensure_unique_seeds(tasks: list[dict[str, Any]]) -> None:
+    """Guard against a hash collision in ``job_seed``.
+
+    Astronomically unlikely, and silently catastrophic if it ever happened: two
+    tasks would generate the identical events, inflating the statistics of a
+    physics sample without any visible sign. Cheap to check, so check.
+    """
+    seen: dict[int, int] = {}
+    for task in tasks:
+        seed = int(task["seed"])
+        if seed in seen:
+            raise ValueError(
+                f"Seed collision between task {seen[seed]} and task "
+                f"{task['task_index']} (seed {seed}). Change run.seed."
+            )
+        seen[seed] = int(task["task_index"])
+
+
 def build_task_manifest(config: dict[str, Any]) -> dict[str, Any]:
+    """One task per (job, chunk).
+
+    Jobs are heterogeneous — each carries its own event budget and chunk count —
+    so the total task count is the sum over jobs, not a product.
+    """
     run = config["run"]
-    splitting = config["splitting"]
-    generator_instances = enabled_generator_instances(config)
-    ranges = chunk_ranges(int(run["events"]), int(splitting["chunks"]))
+    jobs = config["jobs"]
 
     tasks: list[dict[str, Any]] = []
     task_index = 0
-    for generator_offset, generator_instance in enumerate(generator_instances):
-        generator_name = generator_instance["name"]
+    for job_index, job in enumerate(jobs):
+        ranges = chunk_ranges(int(job["events"]), int(job["chunks"]))
         for chunk_id, (start_event, stop_event) in enumerate(ranges):
             task = {
                 "task_index": task_index,
-                "generator_name": generator_name,
-                "code_version": generator_instance["code_version"],
-                "config_version": generator_instance["config_version"],
+                # The job this task belongs to. The index resolves against the
+                # configuration (local.job_view_config), the label is carried
+                # alongside so a manifest written against a since-edited config
+                # is detected instead of silently running the wrong job.
+                "job_index": job_index,
+                "job_label": job["label"],
+                "generator_name": job["generator"],
+                "code_version": job["code_version"],
+                "config_version": job["config_version"],
                 "chunk_id": chunk_id,
                 "start_event": start_event,
                 "event_count": stop_event - start_event,
-                "seed": int(run["seed"]) + generator_offset * 1000 + chunk_id,
+                "seed": job_seed(int(run["seed"]), str(job["label"]), chunk_id),
                 "run_name": run["name"],
                 # Carry the framework flux block so normalized output is
                 # self-describing (rebuildable via flux.build_flux for plots).
-                "flux": dict(config.get("flux", {})),
+                "flux": copy.deepcopy(job["flux"]),
             }
             tasks.append(task)
             task_index += 1
 
+    _ensure_unique_seeds(tasks)
+
     return {
-        "manifest_version": 3,
+        "manifest_version": 4,
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "run_name": run["name"],
         "config_path": config.get("config_path"),
         "executor": run.get("executor", "local"),
+        # The materialized jobs, recorded once rather than repeated on every
+        # task: provenance for what this run was planned to be.
+        "jobs": copy.deepcopy(jobs),
         "tasks": tasks,
     }
 

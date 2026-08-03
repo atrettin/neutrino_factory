@@ -49,48 +49,43 @@ class MergeCliTests(unittest.TestCase):
             ["merge", "--config", "configs/examples/power_law_numu_Ar.yaml"]
         )
 
+        # The two jobs share a generator AND a version, differing only in the
+        # neutrino flavour. Grouping by (generator, version) would merge their
+        # chunks into one file and silently mix two initial states.
+        def _entry(path, job_index, particle):
+            return {
+                "path": Path(path),
+                "job_index": job_index,
+                "job_label": f"genie_v1_{particle}_C12_cc",
+                "generator": "genie",
+                "version_id": "v1",
+                "particle": particle,
+                "nucleus": "C12",
+                "current": "cc",
+            }
+
         outputs = {
             "chunks": [
-                {
-                    "path": Path("output/chunks/genie/v1/chunk_000.h5"),
-                    "generator": "genie",
-                    "version_id": "v1",
-                },
-                {
-                    "path": Path("output/chunks/genie/v1/chunk_001.h5"),
-                    "generator": "genie",
-                    "version_id": "v1",
-                },
-                {
-                    "path": Path("output/chunks/nuwro/v2/chunk_000.h5"),
-                    "generator": "nuwro",
-                    "version_id": "v2",
-                },
+                _entry("output/chunks/genie_v1_numu_C12_cc/chunk_000.h5", 0, "numu"),
+                _entry("output/chunks/genie_v1_numu_C12_cc/chunk_001.h5", 0, "numu"),
+                _entry("output/chunks/genie_v1_numubar_C12_cc/chunk_000.h5", 1, "numubar"),
             ],
             "merged": [
-                {
-                    "path": Path("output/merged/run_genie_v1.h5"),
-                    "generator": "genie",
-                    "version_id": "v1",
-                },
-                {
-                    "path": Path("output/merged/run_nuwro_v2.h5"),
-                    "generator": "nuwro",
-                    "version_id": "v2",
-                },
+                _entry("output/merged/run_genie_v1_numu_C12_cc.h5", 0, "numu"),
+                _entry("output/merged/run_genie_v1_numubar_C12_cc.h5", 1, "numubar"),
             ],
         }
 
         validation = {
-            "output/chunks/genie/v1/chunk_000.h5": {
+            "output/chunks/genie_v1_numu_C12_cc/chunk_000.h5": {
                 "valid": True,
                 "errors": [],
             },
-            "output/chunks/genie/v1/chunk_001.h5": {
+            "output/chunks/genie_v1_numu_C12_cc/chunk_001.h5": {
                 "valid": False,
                 "errors": ["File does not exist"],
             },
-            "output/chunks/nuwro/v2/chunk_000.h5": {
+            "output/chunks/genie_v1_numubar_C12_cc/chunk_000.h5": {
                 "valid": False,
                 "errors": ["Missing required metadata: expected_events"],
             },
@@ -115,21 +110,25 @@ class MergeCliTests(unittest.TestCase):
                             with redirect_stdout(stdout):
                                 self.assertEqual(args.func(args), 0)
 
+        # Only the numu job's valid chunk is merged, and only into the numu
+        # job's own merged file.
         merge_outputs.assert_called_once_with(
-            [Path("output/chunks/genie/v1/chunk_000.h5")],
-            Path("output/merged/run_genie_v1.h5"),
+            [Path("output/chunks/genie_v1_numu_C12_cc/chunk_000.h5")],
+            Path("output/merged/run_genie_v1_numu_C12_cc.h5"),
         )
         self.assertEqual(
             validate_calls,
             [
-                ("output/chunks/genie/v1/chunk_000.h5", None),
-                ("output/chunks/genie/v1/chunk_001.h5", None),
-                ("output/chunks/nuwro/v2/chunk_000.h5", None),
+                ("output/chunks/genie_v1_numu_C12_cc/chunk_000.h5", None),
+                ("output/chunks/genie_v1_numu_C12_cc/chunk_001.h5", None),
+                ("output/chunks/genie_v1_numubar_C12_cc/chunk_000.h5", None),
             ],
         )
 
         payload = print_json.call_args.args[0]
-        self.assertEqual(payload["merged_outputs"], ["output/merged/run_genie_v1.h5"])
+        self.assertEqual(
+            payload["merged_outputs"], ["output/merged/run_genie_v1_numu_C12_cc.h5"]
+        )
         self.assertEqual(payload["merged_target_count"], 1)
         self.assertEqual(payload["skipped_target_count"], 1)
         self.assertEqual(len(payload["targets"]), 2)
@@ -137,8 +136,8 @@ class MergeCliTests(unittest.TestCase):
         self.assertEqual(payload["targets"][1]["status"], "skipped")
 
         warnings = stdout.getvalue()
-        self.assertIn("Warning: skipping chunk output/chunks/genie/v1/chunk_001.h5", warnings)
-        self.assertIn("Warning: skipping chunk output/chunks/nuwro/v2/chunk_000.h5", warnings)
+        self.assertIn("Warning: skipping chunk output/chunks/genie_v1_numu_C12_cc/chunk_001.h5", warnings)
+        self.assertIn("Warning: skipping chunk output/chunks/genie_v1_numubar_C12_cc/chunk_000.h5", warnings)
         self.assertIn("Warning: no valid chunk files available", warnings)
 
 

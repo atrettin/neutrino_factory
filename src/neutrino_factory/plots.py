@@ -39,6 +39,8 @@ from typing import Any, Callable, Sequence
 import h5py
 import numpy as np
 
+from . import layout
+from .jobs import safe_token
 from .validate_output import expected_outputs
 
 # Canonical interaction-type ordering; any other observed label (e.g. stub
@@ -409,6 +411,8 @@ def figure_channel_comparison(
     plt,
     bins: int = DEFAULT_BINS,
     run_name: str | None = None,
+    group_label: str | None = None,
+    labels: Sequence[str] | None = None,
 ):
     """Six-panel per-channel cross-section comparison across datasets.
 
@@ -418,6 +422,13 @@ def figure_channel_comparison(
     a small channel (COH) stays readable next to a large one (DIS). A single
     figure-level legend maps line colours to datasets; each dataset keeps its
     colour in every panel.
+
+    ``group_label`` names the initial state the comparison is restricted to
+    (``"numu on C12"``) — only datasets sharing one belong in one figure, since
+    cross sections on different nuclei are not comparable quantities.
+    ``labels`` overrides the legend entries, for the case where two datasets
+    share a generator and version and differ in something the default label
+    (generator + version) does not show.
     """
     fig, axes = plt.subplots(2, 3, figsize=(15, 8), sharex=True)
     flat_axes = list(np.asarray(axes).ravel())
@@ -434,7 +445,7 @@ def figure_channel_comparison(
     bin_edges = log_bin_edges(all_energies, bins)
 
     handles: list[Any] = []
-    labels: list[str] = []
+    legend_labels: list[str] = []
     for index, (data, current_mask) in enumerate(selections):
         energies = data.energies[current_mask]
         xsec_weights = data.xsec_weights[current_mask]
@@ -446,7 +457,9 @@ def figure_channel_comparison(
             density = _xsec_density(energies[mask], xsec_weights[mask], bin_edges)
             artist = ax.stairs(density, bin_edges, fill=False, color=color)
         handles.append(artist)
-        labels.append(dataset_legend_label(data))
+        legend_labels.append(
+            labels[index] if labels is not None else dataset_legend_label(data)
+        )
 
     columns = len(flat_axes) // 2
     for position, (ax, (_channel, label)) in enumerate(zip(flat_axes, CHANNEL_PANELS)):
@@ -459,11 +472,17 @@ def figure_channel_comparison(
             ax.set_ylabel(XSEC_YLABEL, fontsize="small")
 
     title = CURRENT_LABELS.get(current, current.upper())
+    if group_label:
+        title = f"{group_label} — {title}"
     if run_name:
         title = f"{run_name} — {title}"
     fig.suptitle(title)
     fig.legend(
-        handles, labels, loc="lower center", ncol=min(len(labels), 3), fontsize="small"
+        handles,
+        legend_labels,
+        loc="lower center",
+        ncol=min(len(legend_labels), 3),
+        fontsize="small",
     )
     # Leave room at the bottom for the shared legend.
     fig.tight_layout(rect=(0.0, 0.08, 1.0, 1.0))
@@ -549,11 +568,21 @@ def make_config_plots(
 ) -> list[str]:
     """Plot every merged output a run configuration is expected to produce.
 
-    Each dataset gets its own set of plots (as in :func:`make_plots`), and the
-    datasets are additionally compared channel by channel in a six-panel figure
-    per weak current present across them
-    (``<run_name>_comparison_<cc|nc>.png``). PNGs go to ``output_dir``, by
-    default ``<output_root>/plots``.
+    Each dataset gets its own set of plots (as in :func:`make_plots`). The
+    datasets are then grouped by initial state — neutrino flavour and target
+    nucleus — and each group is compared channel by channel in a six-panel
+    figure per weak current present within it
+    (``<run_name>_<particle>_<nucleus>_comparison_<cc|nc>.png``). Cross sections
+    on different nuclei are different quantities, so only generators sharing an
+    initial state are ever drawn on the same axes. PNGs go to ``output_dir``,
+    by default ``<output_root>/plots``.
+
+    The grouping comes from the run configuration, not from the events' own
+    ``probe``/``target`` columns: the configuration is the provenance record, so
+    the set of figures a run produces is predictable without reading any HDF5,
+    and a generator that writes an unexpected target string cannot split a
+    comparison in two — the discrepancy shows up in the per-dataset title
+    instead.
 
     Missing files are reported and skipped so a partially completed run can
     still be inspected; if no merged output exists at all this raises, rather
@@ -562,14 +591,10 @@ def make_config_plots(
     plt = _import_pyplot()
 
     merged = expected_outputs(config)["merged"]
-    out_dir = (
-        Path(output_dir)
-        if output_dir is not None
-        else Path(config["storage"]["output_root"]) / "plots"
-    )
+    out_dir = Path(output_dir) if output_dir is not None else layout.plots_dir(config)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    datasets: list[PlotData] = []
+    groups: dict[tuple[str, str], list[tuple[dict[str, Any], PlotData]]] = {}
     written: list[str] = []
     missing: list[str] = []
     for entry in merged:
@@ -579,31 +604,50 @@ def make_config_plots(
             print(f"skipping missing merged output: {path}")
             continue
         data = read_plot_data(path)
-        datasets.append(data)
+        key = (str(entry["particle"]), str(entry["nucleus"]))
+        groups.setdefault(key, []).append((entry, data))
         written.extend(make_plots(path, out_dir, prefix=path.stem, bins=bins, data=data))
 
-    if not datasets:
+    if not groups:
         raise RuntimeError(
             "None of the merged outputs this configuration expects exist: "
-            + ", ".join(missing or ["(the configuration enables no generator versions)"])
+            + ", ".join(missing or ["(the configuration declares no jobs)"])
         )
 
     run_name = config["run"]["name"]
-    currents: list[str] = []
-    for data in datasets:
-        for current in currents_present(data.is_cc):
-            if current not in currents:
-                currents.append(current)
+    for (particle, nucleus), members in groups.items():
+        datasets = [data for _entry, data in members]
+        # Two jobs can share a generator and version within one group and differ
+        # only in the weak current, which the default legend label would not
+        # show; the job label always distinguishes them.
+        default_labels = [dataset_legend_label(data) for data in datasets]
+        labels = (
+            None
+            if len(set(default_labels)) == len(default_labels)
+            else [str(entry["job_label"]) for entry, _data in members]
+        )
 
-    for current in currents:
-        fig = figure_channel_comparison(
-            datasets, current, plt, bins=bins, run_name=run_name
-        )
-        written.append(
-            _write_figure(
-                fig, out_dir / f"{run_name}_comparison_{current}.png", plt, tight=False
+        currents: list[str] = []
+        for data in datasets:
+            for current in currents_present(data.is_cc):
+                if current not in currents:
+                    currents.append(current)
+
+        for current in currents:
+            fig = figure_channel_comparison(
+                datasets,
+                current,
+                plt,
+                bins=bins,
+                run_name=run_name,
+                group_label=f"{particle} on {nucleus}",
+                labels=labels,
             )
-        )
+            filename = (
+                f"{safe_token(run_name)}_{safe_token(particle)}_{safe_token(nucleus)}"
+                f"_comparison_{current}.png"
+            )
+            written.append(_write_figure(fig, out_dir / filename, plt, tight=False))
 
     return written
 

@@ -1,54 +1,49 @@
+# Real (non-stub) NuWro and GiBUU on argon.
+# The two generators need different settings for comparable results: GiBUU is
+# cross-section-weighted rather than rejection-sampled, so it needs a flatter
+# spectrum (gamma = -1) and far more events than NuWro to reach the same
+# statistical uncertainty. Per-job flux and event budgets are exactly what makes
+# running both from one file possible.
 run:
   name: power_law_numu_ar40
-  events: 100000
   seed: 12345
   executor: local
   stub_mode: false
 
-flux:
-  type: power_law
-  particle: numu
-  emin_gev: 0.5
-  emax_gev: 10.0
-  gamma: -2.0
+jobs:
+  - generator: nuwro
+    code_version: "nuwro_25.11"
+    config_version: "default"
+    events: 100000
+    chunks: 1
+    flux:
+      type: power_law
+      particle: numu
+      emin_gev: 0.5
+      emax_gev: 10.0
+      gamma: -2.0
+    target:
+      nucleus: Ar40
+    physics:
+      mode: inclusive
+      current: cc
 
-target:
-  nucleus: Ar40
-  pdg: 1000180400
-
-physics:
-  mode: inclusive
-  current: cc
-
-generators:
-  genie:
-    versions:
-      - enabled: false
-        code_version: "R-3_06_00"       # git tag / release
-        config_version: "G18_10a_02_11a" # GENIE tune
-      - enabled: false
-        code_version: "R-3_06_00"
-        config_version: "AR23_20i_00_000"
-  neut:
-    versions:
-      - enabled: false
-        code_version: "5.7.0-nuint2024"
-        config_version: "default"
-  nuwro:
-    versions:
-      - enabled: true
-        code_version: "nuwro_25.11"
-        config_version: "default"
-  gibuu:
-    versions:
-      - enabled: true
-        code_version: "release2025"
-        config_version: "default"
-        
-
-splitting:
-  strategy: events
-  chunks: 1
+  - generator: gibuu
+    code_version: "release2025"
+    config_version: "default"
+    events: 1000000
+    chunks: 1
+    flux:
+      type: power_law
+      particle: numu
+      emin_gev: 0.5
+      emax_gev: 10.0
+      gamma: -1.0     # flat in ln(E): uniform statistical uncertainty per log bin
+    target:
+      nucleus: Ar40
+    physics:
+      mode: inclusive
+      current: cc
 
 storage:
   software_root: ${NF_SOFTWARE_ROOT:-./software}

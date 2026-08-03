@@ -100,7 +100,7 @@ apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" \
 ```
 
 Expected: two container-side stages run (`neutroot2`, then `nf_flatten:` printing
-`wrote <run.events> events`), and the CLI prints one `chunk_outputs` and one
+`wrote <job events> events`), and the CLI prints one `chunk_outputs` and one
 `merged_outputs` path.
 
 Ignore `Error in cling::AutoLoadingVisitor: Missing FileEntry for
@@ -123,7 +123,7 @@ print("code_version:", f["metadata"].attrs["code_version"])
 PY
 ```
 
-Expected, matching what the Docker run produced locally: `run.events` events;
+Expected, matching what the Docker run produced locally: the job's `events`;
 all nine columns populated; more than one interaction category (in a 50-event
 local run: qel 27, res 13, dis 4, mec 4, coh 2); **no** zero `xsec_weight`;
 `code_version` = `5.7.0-nuint2024`.

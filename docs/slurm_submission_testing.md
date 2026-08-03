@@ -8,8 +8,7 @@ This document is for **later** use on the MPP cluster. The current development e
 
 Use a very small config first:
 
-- `run.events: 12`
-- `splitting.chunks: 2`
+- a single job with `events: 12` and `chunks: 2`
 - `run.stub_mode: true` for a scheduler-only smoke test
 - keep `slurm.time` short, e.g. `00:05:00`
 - keep `slurm.mem` small, e.g. `1G` or `2G`

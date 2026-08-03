@@ -8,7 +8,7 @@ import numpy as np
 
 from .base import ConfigTranslator, physics_current
 from ..flux import Flux, build_flux
-from ..particles import is_antineutrino
+from ..particles import is_antineutrino, nucleus_composition
 
 # Number of equal-width bins used to approximate a continuous spectrum as a
 # GiBUU user flux file (nuExp=99). GiBUU allocates the flux arrays dynamically.
@@ -60,20 +60,12 @@ PROCESS_ID = {"cc": 2, "nc": 3}
 CURRENT_PASSES = {"cc": ("cc",), "nc": ("nc",), "inclusive": ("cc", "nc")}
 
 # Seed offset applied to the second (NC) pass of an inclusive run, so the two
-# passes do not draw the identical random sequence. Chosen far outside the
-# manifest's own seed layout (slurm.py spaces generators by 1000 and chunks by
-# 1), so it cannot collide with another chunk's seed.
+# passes do not draw the identical random sequence. Task seeds are hashed from
+# (run.seed, job label, chunk) into [1, jobs.SEED_MODULUS] rather than laid out
+# arithmetically, so this offset can only collide with another chunk's seed by
+# the same negligible hash coincidence that build_task_manifest already checks
+# for; the sum also stays inside the int32 range Fortran seeds need.
 PASS_SEED_OFFSET = 1_000_000
-
-# (protons, neutrons) per nucleus; A = protons + neutrons. Mirrors the mapping
-# used by the NuWro translator.
-NUCLEUS_COMPOSITION = {
-    "Ar40": (18, 22),
-    "C12": (6, 6),
-    "O16": (8, 8),
-    "Fe56": (26, 30),
-    "Ca40": (20, 20),
-}
 
 
 class GiBUUTranslator(ConfigTranslator):
@@ -95,7 +87,7 @@ class GiBUUTranslator(ConfigTranslator):
         event_count = int(task["event_count"])
         current = physics_current(config)
 
-        protons, neutrons = NUCLEUS_COMPOSITION[nucleus]
+        protons, neutrons = nucleus_composition(nucleus)
         mass_number = protons + neutrons
 
         if particle not in FLAVOR_ID:

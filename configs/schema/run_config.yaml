@@ -1,64 +1,127 @@
-# Common run configuration template for Neutrino Factory
+# Common run configuration template for Neutrino Factory.
+#
+# A run is a list of JOBS. A job is one generator version on one initial state
+# (flux x target x physics), with its own event budget and chunking — the
+# generators do not agree on what a "run" is, so nothing about the physics is
+# configured globally. `macros` and `matrix` are pure sugar for writing many
+# jobs compactly; `neutrino-factory expand --config <this>` prints exactly what
+# they materialize to.
 
 run:
   name: example_run
-  events: 1000
   seed: 12345
   executor: local         # local | slurm
   stub_mode: true         # keep true for local smoke tests without generator installs
   # How chatty the generator's own logs are (GENIE only, for now).
   # default | essential | quiet | verbose
   # essential = initial job configuration + output-file writes + warnings/errors
+  # A job may override this for itself with its own `log_level`.
   log_level: default
 
-flux:
-  type: power_law
-  # nue | nuebar | numu | numubar | nutau | nutaubar
-  particle: numu
-  emin_gev: 0.5
-  emax_gev: 10.0
-  gamma: -2.0
+# ---------------------------------------------------------------------------
+# Macros (optional): a parameterized job template.
+#
+# `{{param}}` placeholders are filled from `params` (defaults; null = required),
+# `with:` (per-use values) and `matrix:` (expansion), in that order of
+# precedence.
+#
+# YAML GOTCHA: a value that is ONLY a placeholder must be quoted —
+# "{{events}}" — because bare {{...}} is YAML flow-mapping syntax and fails to
+# parse. A quoted whole-value placeholder keeps the substituted value's TYPE:
+# "{{events}}" with events: 100000 yields the integer 100000. A placeholder
+# inside a longer string (scan_{{particle}}) interpolates as text.
+#
+# `${VAR:-default}` environment expansion is unrelated, works anywhere, and
+# cannot collide with this syntax.
+# ---------------------------------------------------------------------------
+macros:
+  xsec_scan:
+    params:
+      generator: null
+      code_version: null
+      config_version: null
+      particle: numu
+      nucleus: C12
+      events: 100000
+      chunks: 20
+    job:
+      generator: "{{generator}}"
+      code_version: "{{code_version}}"
+      config_version: "{{config_version}}"
+      events: "{{events}}"
+      chunks: "{{chunks}}"
+      flux:
+        type: power_law
+        # nue | nuebar | numu | numubar | nutau | nutaubar
+        particle: "{{particle}}"
+        emin_gev: 0.1
+        emax_gev: 50.0
+        gamma: -2.0
+      target:
+        nucleus: "{{nucleus}}"
+      physics:
+        mode: inclusive
+        current: inclusive
 
-target:
-  nucleus: Ar40
-  pdg: 1000180400
+jobs:
+  # Matrix expansion. Plain keys are independent axes crossed with each other;
+  # `include` is a COUPLED axis whose keys vary together (the generator and its
+  # two version fields must travel as one unit), cross-multiplied with the rest.
+  # `exclude` drops combinations matching all of its key/value pairs.
+  # 2 particles x 2 nuclei x 3 triples - 2 excluded = 10 jobs.
+  - use: xsec_scan
+    matrix:
+      particle: [numu, numubar]
+      nucleus: [C12, Ar40]
+      include:
+        # Every generator version entry has two required, independent axes:
+        #   code_version   - the code itself (git tag / release), must be catalogued
+        #   config_version - the physics parameter set (GENIE tune; "default" elsewhere)
+        # See catalogued options: neutrino-factory list-generators
+        - {generator: genie, code_version: "R-3_06_00", config_version: "G18_10a_02_11a"}
+        - {generator: genie, code_version: "R-3_06_00", config_version: "AR23_20i_00_000"}
+        - {generator: nuwro, code_version: "nuwro_25.11", config_version: "default"}
+      exclude:
+        - {generator: nuwro, nucleus: Ar40}
 
-physics:
-  mode: inclusive
-  # Weak current to generate: cc | nc | inclusive. Enforced in each generator's
-  # own configuration (GENIE --event-generator-list, NuWro dyn_* switches, NEUT
-  # NEUT-CRS mask, GiBUU process_ID), and recorded per event as `is_cc` in the
-  # output. "inclusive" runs GiBUU twice, once per current — see
-  # docs/configuration.md.
-  current: cc
+  # A single use of the same macro. Keys written directly on the entry (here
+  # `flux`) are deep-merged over the macro's result and win — this is how GiBUU
+  # gets the flatter spectrum it needs while reusing everything else.
+  - use: xsec_scan
+    with:
+      generator: gibuu
+      code_version: "release2025"
+      config_version: "default"
+      events: 2000000
+      chunks: 40
+    flux:
+      gamma: -1.0
 
-# Every generator version entry has two required, independent axes:
-#   code_version   - the code itself (git tag / release), must be catalogued
-#   config_version - the physics parameter set (GENIE tune; "default" elsewhere)
-# See catalogued options: neutrino-factory list-generators
-generators:
-  genie:
-    versions:
-      - enabled: true
-        code_version: "R-3_06_00"        # required
-        config_version: "G18_10a_02_11a" # required (GENIE tune)
-      - enabled: false
-        code_version: "R-3_06_00"
-        config_version: "AR23_20i_00_000"
-  neut:
-    versions:
-      - enabled: false
-        code_version: "5.7.0-nuint2024"
-        config_version: "default"
-  nuwro:
-    versions:
-      - enabled: true
-        code_version: "nuwro_25.11"
-        config_version: "default"
-
-splitting:
-  strategy: events
-  chunks: 4
+  # A literal job needs no macro at all.
+  - name: genie_histogram_flux_c12   # optional; becomes the job label verbatim
+    generator: genie
+    code_version: "R-3_06_00"
+    config_version: "G18_10a_02_11a"
+    events: 5000
+    chunks: 1
+    log_level: essential             # optional per-job override of run.log_level
+    flux:
+      type: histogram
+      particle: numu
+      # Path resolved relative to this config file; energy range from the edges.
+      histogram_file: ../examples/fluxes/numu_hist_flux.root
+      histogram_name: numu_flux
+    target:
+      nucleus: C12
+      # pdg: 1000060120   # optional; derived from `nucleus` when omitted
+    physics:
+      mode: inclusive
+      # Weak current to generate: cc | nc | inclusive. Enforced in each
+      # generator's own configuration (GENIE --event-generator-list, NuWro dyn_*
+      # switches, NEUT NEUT-CRS mask, GiBUU process_ID), and recorded per event
+      # as `is_cc` in the output. "inclusive" runs GiBUU twice, once per current
+      # — see docs/configuration.md.
+      current: cc
 
 storage:
   software_root: ${NF_SOFTWARE_ROOT:-./software}
@@ -67,6 +130,8 @@ storage:
 
 slurm:
   partition: alma
+  # One Slurm array covers every job, so these apply to all of them: size the
+  # wall clock and memory for the LONGEST/largest job, not the average.
   time: "00:30:00"
   cpus_per_task: 1
   mem: "2G"
