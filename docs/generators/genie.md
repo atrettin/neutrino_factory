@@ -344,10 +344,6 @@ and non-obvious:
 
 ## Known limitations
 
-- `MAX_ENERGY_RANGE_GEV` / `VALID_ENERGY_RANGE_GEV` are provisional guesses
-  pending verification against GENIE's documentation — though GENIE's practical
-  maximum is measured from the staged spline and needs no separate check. Tracked
-  in `.claude/TODOS.md`.
 - The shipped `gxspl-NUsmall.xml` covers nue/nuebar/numu/numubar only; ν_τ runs
   need a spline set that includes it.
 - A GENIE array run produces per-chunk HDF5 files; chunk merging after a Slurm

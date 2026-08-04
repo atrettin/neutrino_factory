@@ -154,7 +154,5 @@ both currents.
   defined (tracked in `.claude/TODOS.md`).
 - `run.log_level` is ignored — only the GENIE adapter maps it (tracked in
   `.claude/TODOS.md`).
-- `MAX_ENERGY_RANGE_GEV` / `VALID_ENERGY_RANGE_GEV` are provisional guesses
-  pending verification against NuWro's documentation.
 - A NuWro array run produces per-chunk HDF5 files; chunk merging after a Slurm
   array is not yet automated (framework-wide).

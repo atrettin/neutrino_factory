@@ -342,5 +342,3 @@ non-resonant background.
 - **A GiBUU abort on a bad jobcard key currently surfaces as a confusing
   `FileNotFoundError`** for a missing task JSON, because `local.run_task` does
   not check the generator's exit status. Tracked in `.claude/TODOS.md`.
-- `MAX_ENERGY_RANGE_GEV` / `VALID_ENERGY_RANGE_GEV` are provisional guesses
-  pending verification.

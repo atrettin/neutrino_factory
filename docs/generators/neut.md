@@ -459,5 +459,3 @@ autoload; the macro still compiles because the wrapper passes `NF_NEUT_INCDIR`.
 - Not bit-reproducible from its seed (see above).
 - `config_version` is `"default"` only.
 - `run.log_level` is ignored — only the GENIE adapter maps it.
-- `MAX_ENERGY_RANGE_GEV` / `VALID_ENERGY_RANGE_GEV` are provisional guesses
-  pending verification.
