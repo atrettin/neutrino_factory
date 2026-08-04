@@ -248,9 +248,9 @@ class NeutNormalizer(OutputNormalizer):
         it in proportion to the raw bin content and then an energy uniformly
         within that bin, so the generated flux density is piecewise constant on
         exactly these edges. Rebuilding the flux from the config would divide the
-        events by a grid they were never drawn from (see the NEUT flux section of
-        docs/design_decisions.md, and the GENIE section for the same failure mode
-        found first there).
+        events by a grid they were never drawn from (see the flux section of
+        docs/generators/neut.md, and docs/generators/genie.md for the same
+        failure mode found first there).
 
         ``NeutAdapter._write_flux_file`` writes per-bin integrals, hence
         ``contents_are_counts``: dividing by the bin widths recovers the density.

@@ -5,7 +5,7 @@
 # a git ref. The NUISANCE collaboration publishes a tutorial image carrying a
 # working NEUT 5.7.0 build, and both container pathways extract from it:
 # setup/setup_neut.sh pulls and retags it for Docker, and stage 1 below
-# bootstraps from it for Apptainer. See docs/design_decisions.md.
+# bootstraps from it for Apptainer. See docs/generators/neut.md.
 #
 # The source image is a ~5 GB kitchen sink (GENIE, NuWro, NUISANCE, GEANT4);
 # only NEUT and the ROOT build it links against are staged into the payload.

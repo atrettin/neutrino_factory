@@ -1,7 +1,7 @@
 # Apptainer definition for the GiBUU neutrino event generator on Linux x86_64,
 # with ROOT event output enabled via the RootTuple library.
 # Hand-translated from setup/Dockerfile.gibuu — UPDATE BOTH TOGETHER.
-# Differences from the Dockerfile (deliberate, see docs/design_decisions.md):
+# Differences from the Dockerfile (deliberate, see docs/containers.md):
 #   * No --platform pinning: cluster builds run on native x86_64.
 #   * Runtime payload is staged under /opt/nf/generators/gibuu for composition
 #     into the unified nf-base runtime image.

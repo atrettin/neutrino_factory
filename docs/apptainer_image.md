@@ -14,7 +14,7 @@ convenience wrapper to manage Apptainer-based environments, see
 
 `nf-base.sif` is assembled by `setup/build_apptainer_images.sh` from
 separately-built per-generator *payload* SIFs
-(`setup/apptainer/{genie,gibuu,nuwro}.def`):
+(`setup/apptainer/{genie,gibuu,nuwro,neut}.def`):
 
 - Each payload stages a self-contained tree under
   `/opt/nf/generators/<gen>/<code_version>/` (including a `bin/<binary>`
@@ -37,11 +37,13 @@ symlinks for the bare binary names.
 Under the apptainer runtime, the adapters' `build_run_command` rewrites the
 native command to the explicit `nf-run` form (via
 `containers.apptainer_dispatch`), while bare names on `$PATH` keep the
-**native-binary-first check unchanged — do not reorder those branches**;
-"native" means "inside the one image every task already runs in."
+**native-binary-first check** intact; "native" means "inside the one image every
+task already runs in." The order of those branches is load-bearing: Apptainer
+cannot nest, so a task that already runs inside the image must execute the binary
+directly rather than falling through to a container-wrapping branch.
 
-Each `<gen>.def` still mirrors its `setup/Dockerfile.<gen>` build steps —
-when you change one, update the other in the same session (the
+Each `<gen>.def` mirrors its `setup/Dockerfile.<gen>` build steps, so the two are
+parallel implementations of one build and only stay correct while they agree (the
 `/opt/nf/generators/<cv>` staging + wrappers are Apptainer-composition-only
 and have no Docker counterpart). Project code still comes from the repo
 checkout via `PYTHONPATH`, so code changes need no image rebuild.

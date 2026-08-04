@@ -1,7 +1,7 @@
 # Apptainer definition for the GENIE neutrino event generator on Linux x86_64.
 # Hand-translated from setup/Dockerfile.genie — UPDATE BOTH TOGETHER.
 # Differences from the Dockerfile (divergence is deliberate, see
-# docs/design_decisions.md):
+# docs/containers.md):
 #   * No --platform pinning: cluster builds run on native x86_64.
 #   * Runtime payload is staged under /opt/nf/generators/genie for composition
 #     into the unified nf-base runtime image.

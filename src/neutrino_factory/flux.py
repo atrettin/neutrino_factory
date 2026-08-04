@@ -53,8 +53,8 @@ class Flux(ABC):
         ``bin_edges`` has ``nbins + 1`` entries; ``bin_contents`` has ``nbins``.
         ``spacing`` is ``"linear"`` or ``"log"``; log spacing resolves a steeply
         falling spectrum over a wide range at constant relative resolution, which
-        linear spacing cannot (see the GENIE flux section of
-        ``docs/design_decisions.md``). Subclasses with a native binning may
+        linear spacing cannot (see the flux section of
+        ``docs/generators/genie.md``). Subclasses with a native binning may
         override this.
         """
         if spacing == "linear":

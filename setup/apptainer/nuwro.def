@@ -1,6 +1,6 @@
 # Apptainer definition for the NuWro neutrino event generator on Linux x86_64.
 # Hand-translated from setup/Dockerfile.nuwro — UPDATE BOTH TOGETHER.
-# Differences from the Dockerfile (deliberate, see docs/design_decisions.md):
+# Differences from the Dockerfile (deliberate, see docs/containers.md):
 #   * No --platform pinning: cluster builds run on native x86_64.
 #   * Runtime payload is staged under /opt/nf/generators/nuwro for composition
 #     into the unified nf-base runtime image.

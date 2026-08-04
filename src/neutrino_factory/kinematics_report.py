@@ -9,7 +9,7 @@ Everything distributional here is **weighted by ``xsec_weight``**. That is not a
 refinement, it is a correctness requirement: GiBUU samples phase space uniformly
 and weights by cross section, so its raw event distribution is not the physical
 one. The weight-efficiency table exists to make that visible -- see
-``docs/design_decisions.md`` on GiBUU weighting.
+``docs/generators/gibuu.md`` on GiBUU weighting.
 
 Following ``validate_output``, the diagnostic functions (``analyze_file``,
 ``analyze_config``) never print; they return plain dictionaries. The ``format_*``

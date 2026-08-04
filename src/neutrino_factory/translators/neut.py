@@ -15,7 +15,7 @@ from ..particles import nucleus_composition, probe_pdg
 # sampling aid. Log spacing gives constant relative resolution (~0.62%/bin over
 # 0.1-50 GeV) where 500 equal-width bins gave 0.1 GeV steps that swallowed the
 # whole region in which sigma(E) rises by orders of magnitude. Matches GENIE's
-# GENIE_FLUX_NBINS; see the NEUT flux section of docs/design_decisions.md.
+# GENIE_FLUX_NBINS; see the flux section of docs/generators/neut.md.
 FLUX_NBINS = 1000
 FLUX_SPACING = "log"
 
@@ -43,17 +43,24 @@ CONFIG_VERSION_CARDS: dict[str, dict[str, Any]] = {
 # unwanted current restricts generation to one current — NEUT has no CC/NC switch
 # of its own, and ``NEUT-MODE n > 0`` would pin a single channel.
 #
-# The slot order is *not* the mode number: it is the fixed list documented in the
-# NEUT-shipped cards (verified in the 5.7.0 image,
-# share/neut/Cards/neut_5.4.0_nd5_O.card), and it differs between neutrinos
-# (NEUT-CRS) and antineutrinos (NEUT-CRSB), which carry separate free/bound CCQE
-# slots. Both rows are written on every card, each masked with its own table, so
-# the run does not depend on which array NEUT consults for a given beam sign.
+# The slot order is *not* the mode number. A slot is an index into a dense
+# 30-element scaling array, ordered by NEUT's internal channel enumeration
+# (necard.h: "Multiplied factor to cross section on each mode. See nemodsel.F");
+# a mode is the sparse per-event channel ID (CC <= 30, NC >= 31). Slots also
+# split some channels by free vs. bound nucleon where the mode does not, so the
+# map is not even injective: nu slots 11 and 12 both produce mode 51. The two
+# arrays differ from each other because the nubar list carries separate
+# free/bound CCQE slots (1 and 11), shifting NC elastic and coherent by one.
+# Both rows are written on every card, each masked with its own table, so the run
+# does not depend on which array NEUT consults for a given beam sign. Slot 22 for
+# neutrinos has no channel and is left at zero in both masks.
 #
-# The card labels slots 14/15 (nu) and 15/16 (nubar) only as "coherent"; they are
-# read as CC-then-NC, the CC-before-NC ordering every other pair in the list
-# follows (eta, K, 1 gamma, DIS, diffractive). Slot 22 for neutrinos is "N/A" and
-# is left at zero in both masks.
+# The slot -> mode map was measured on NEUT 5.7.0 (each slot enabled alone under
+# NEUT-MODE -1, 400 events, observed mode read off the flattened tree); deriving
+# each slot's current from its mode reproduces both tables below with zero
+# mismatches, including the coherent pairs, which the cards label ambiguously as
+# just "coherent" and which resolve CC-then-NC. Full table in
+# docs/generators/neut.md.
 _CC, _NC = "cc", "nc"
 CRS_SLOT_CURRENTS: dict[str, tuple[str | None, ...]] = {
     # 1 CCQE | 2-4 CC 1pi | 5 CC DIS 1320 | 6-9 NC 1pi | 10 NC DIS 1320 |

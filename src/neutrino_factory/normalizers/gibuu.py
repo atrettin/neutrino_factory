@@ -70,7 +70,7 @@ def _interaction_from_evtype(ev_type: int) -> str:
     category: GENIE's non-resonant background comes from its DIS generator with
     the KNO multiplicity tune applied below ``Wcut``, and so carries the gst
     ``dis`` flag. GiBUU's own NuHepMC exporter instead calls them SIS -- see
-    docs/design_decisions.md for why we follow GENIE here.
+    docs/generators/gibuu.md for why we follow GENIE here.
     """
     if ev_type == 1:
         return "qel"

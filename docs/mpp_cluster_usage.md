@@ -111,6 +111,57 @@ Per-generator merged HDF5 files appear under `$NF_OUTPUT_ROOT/merged/`. Chunk
 merging currently happens in the local pipeline; after a Slurm run, merge
 chunks explicitly with `neutrino-factory merge` if needed.
 
+## First submission on a new cluster
+
+Working up from a scheduler-only smoke test isolates Slurm problems from
+generator problems, which otherwise present identically (a task that dies before
+writing anything).
+
+**1. Start from a deliberately tiny config**: one job with `events: 12` and
+`chunks: 2`, `run.stub_mode: true`, `slurm.time: "00:05:00"`, `slurm.mem: 1G`.
+Stub mode exercises the whole path — manifest, array, normalization, merge —
+without needing a single generator image.
+
+**2. Point the storage roots at a shared filesystem** (on MPCDF, `/ptmp`), via
+`.env` or the environment:
+
+```bash
+export NF_SOFTWARE_ROOT=/ptmp/mpp/$USER/neutrino_factory/software
+export NF_OUTPUT_ROOT=/ptmp/mpp/$USER/neutrino_factory/output
+export NF_WORK_ROOT=/ptmp/mpp/$USER/neutrino_factory/work
+```
+
+**3. Validate and render before submitting.**
+
+```bash
+neutrino-factory validate-config --config <config>
+neutrino-factory submit --config <config> --executor slurm --dry-run
+```
+
+Inspect what lands under `work/manifests/`, `work/slurm/` and `work/logs/`. The
+manifest schema is documented in [configuration.md](configuration.md); check that
+the rendered sbatch script enters `nf-base.sif` before Python, and that the
+partition is right (on the new MPP cluster, `alma` — see above).
+
+**4. Submit, then monitor.**
+
+```bash
+sbatch work/slurm/<run_name>.sbatch
+squeue --me
+sacct -j <jobid> --format=JobID,State,Elapsed,MaxRSS
+```
+
+`jobs/submit_mpp.sh <config> --submit` wraps the render-and-submit pair.
+
+**5. Confirm the outputs**: logs under `$NF_WORK_ROOT/logs/`, normalized chunk
+outputs under `$NF_OUTPUT_ROOT/chunks/`, merged HDF5 under
+`$NF_OUTPUT_ROOT/merged/`.
+
+**6. Only then switch to a real generator**: set `run.stub_mode: false`, enable a
+single generator, keep the event count and walltime small, and confirm the
+binary resolves inside the image (`nf-run <gen> <code_version> <binary>`) before
+scaling to a multi-generator production run.
+
 ## Troubleshooting
 
 - `apptainer build` fails → are you on odslserv01/02? Builds fail on mppui1.

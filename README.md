@@ -28,7 +28,7 @@ Targets:
 ```text
 .
 ├── configs/                  # schema templates and example user configs
-├── docs/                     # usage, cluster notes, extension guide
+├── docs/                     # knowledge base (start at docs/README.md)
 ├── jobs/                     # Slurm wrappers
 ├── scripts/                  # helper utilities
 ├── setup/                    # Docker build scripts + Dockerfiles; apptainer/ defs + cluster build script
@@ -36,6 +36,9 @@ Targets:
 └── tests/                    # unit and smoke tests
 ```
 
+[`docs/README.md`](docs/README.md) is the index of the documentation: the
+architecture and config schema, per-generator and physics domain knowledge, the
+container pathways, and the cluster runbook. Start there.
 `docs/architecture.md` is the map of the Python package: module layout, how a
 config becomes tasks, and where outputs land.
 
@@ -186,7 +189,7 @@ them. Where a variable is not defined for an event it carries a clearly
 unphysical placeholder: `-1` for the non-negative quantities, `-999` for
 `lepton_p_parallel_gev` and `lepton_costheta` (whose physical range includes
 `-1`). Notably, `bjorken_x` is `-1` for coherent events. See
-`docs/design_decisions.md` for the full convention.
+`docs/physics.md` for the full convention.
 
 Inspect a file's kinematic content with `analyze-kinematics`, which prints event
 counts by interaction type, the weight efficiency of each channel, and per-

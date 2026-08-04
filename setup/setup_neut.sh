@@ -6,7 +6,7 @@
 # containing a working NEUT build, so this script pulls that image and retags it
 # under the project's uniform "<generator>:<code_version>" convention. There is
 # consequently no setup/Dockerfile.neut for setup/apptainer/neut.def to mirror —
-# see docs/design_decisions.md.
+# see docs/generators/neut.md.
 #
 # Usage: setup/setup_neut.sh [5.7.0-nuint2024]
 #        setup/setup_neut.sh --code-version 5.7.0-nuint2024
