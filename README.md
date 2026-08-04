@@ -5,11 +5,11 @@
 - **Docker** — local development and testing (macOS/Linux laptops).
 - **Apptainer** — HPC cluster execution (MPCDF/ODSL), where Docker is unavailable. SIF images are built natively on the cluster from hand-written definition files (`setup/apptainer/*.def`) that mirror the Dockerfiles.
 
-Targets:
-- `GENIE` — Docker image built and working
-- `NuWro` — Docker image built and working
-- `GiBUU` — Docker image built and working
-- `NEUT` — Docker image pulled and working; NEUT source is not freely available, so the image is extracted from the published NUISANCE tutorial image rather than built
+Supported generators:
+- `GENIE` — built from source, off the GENIE-MC/Generator release tags
+- `NuWro` — built from source, off the NuWro/nuwro release tags
+- `GiBUU` — built from source, from the HEPForge release tarballs
+- `NEUT` — not built from source (NEUT's source is not freely available); the image is extracted from the published NUISANCE tutorial image
 
 ## Features
 
@@ -19,7 +19,7 @@ Targets:
 - common output format in `HDF5`
 - local executor for development and smoke testing
 - MPP-oriented Slurm job-array scaffolding
-- Docker-based generator builds, one setup script per generator for easy extension
+- containerized generator builds, one setup script per generator for easy extension
 - different generator versions can coexist and run in parallel
 - a global generator catalog (`neutrino-factory list-generators`) that pins each run to an exact code version + config version (GENIE tune)
 
