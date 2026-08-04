@@ -20,10 +20,14 @@ run YAML.
 ## Docker — local development
 
 Python is installed in a virtual environment in `.venv`. Generators are compiled
-inside Docker images built by `setup/setup_<generator>.sh`. When the generator
-binary is not on `$PATH`, the adapter's `build_run_command` wraps it in
-`docker run` via `containers.docker_wrap` — the only place a container command is
-constructed.
+inside Docker images built by `setup/setup_<generator>.sh` — one each for
+`genie`, `nuwro`, `gibuu` and `neut` (the last pulls and retags a published image
+rather than building; see [generators/neut.md](generators/neut.md)).
+`setup/setup_all.sh` drives all of them, with `--only <generator>` to restrict it.
+
+When the generator binary is not on `$PATH`, the adapter's `build_run_command`
+wraps it in `docker run` via `containers.docker_wrap` — the only place a container
+command is constructed.
 
 Docker build scripts accept `--list-versions` and validate the requested
 `code_version` against the catalog.

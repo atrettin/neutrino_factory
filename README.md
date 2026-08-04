@@ -213,54 +213,17 @@ supports.
 
 ## Generator setup (containers)
 
-The image tag is derived from the catalog (`src/neutrino_factory/catalog.py`)
-via the config's `code_version` — there is no manual image config key. The
-active runtime is chosen by `NF_CONTAINER_RUNTIME` (persisted in `.env`).
-
-**Docker (local):** each generator is built by its own setup script —
-`setup/setup_all.sh`, `setup/setup_genie.sh`, `setup/setup_nuwro.sh`,
-`setup/setup_gibuu.sh`, `setup/setup_neut.sh` (which pulls and retags a published
-image instead of building — NEUT source is not freely available). Each accepts
-`--list-versions` and validates the
-requested `code_version` against the catalog. At runtime the adapter prefers a
-native binary on `$PATH` and otherwise wraps the generator in `docker run`.
-
-**Apptainer (cluster):** SIFs are built by `setup/build_apptainer_images.sh`
-from the hand-written definitions in `setup/apptainer/*.def` (each mirrors its
-`setup/Dockerfile.*` — update both together; `neut.def` is the exception, having
-no Dockerfile to mirror). The Slurm array task runs inside
-the unified `nf-base.sif` image, which provides one Python runtime plus
-generator wrappers in a single interactive environment.
-
-Use `neutrino-factory list-generators --built` to see which catalogued images
-are present for the active runtime.
-
-### GENIE code versions and cross-section splines
-
-`setup/setup_genie.sh` builds the image for a catalogued GENIE code version
-(default `R-3_06_00`), passed positionally or via `--code-version`/`--tag`:
+Generators run in containers — Docker locally, Apptainer on the cluster — chosen
+by `NF_CONTAINER_RUNTIME` (persisted in `.env`). Image names come from the
+version catalog via each job's `code_version`; there is no image key in the
+config. The Quickstarts above give the build commands.
 
 ```bash
-setup/setup_genie.sh R-3_06_00
-setup/setup_genie.sh --code-version R-3_06_00 --download-xsec
+neutrino-factory list-generators --built    # which catalogued images you have
 ```
 
-The code version must be catalogued (see `neutrino-factory list-generators
---generator genie`); distinct code versions produce distinct image tags, so
-multiple GENIE versions coexist.
-
-When `--download-xsec` is enabled, `setup/setup_genie.sh` runs `setup/download_genie_xsec.sh`, which
-downloads the tarball for each catalogued tune from the matching SciSoft directory
-(`R-3_06_00` -> `v3_06_00`), extracts only `gxspl-NUsmall.xml` out of the deep archive, and stages it
-to `genie/genie_xsec/<tag-safe>/<tune>/xsecs.xml`. The download step can also be run standalone:
-
-```bash
-setup/download_genie_xsec.sh --code-version R-3_06_00 --tune G18_10a_02_11a
-```
-
-At runtime, GENIE tasks add `--cross-sections <xsecs.xml>` automatically when a staged file exists for
-the requested `code_version` + `config_version`. If no file is found, the run logs a warning and
-proceeds without it (fine for stub-mode or fixed-energy runs, but flux-driven runs require the splines).
-
-**Note:** `neutrino-factory list-generators` only lists a GENIE tune as available once its `xsecs.xml` is present!
-If you have installed GENIE but no config version is shown as available, this is the likely culprit.
+Details: [docs/containers.md](docs/containers.md) for the two pathways and image
+naming, [docs/apptainer_image.md](docs/apptainer_image.md) for how `nf-base.sif`
+is composed, and [docs/generators/](docs/generators/) for each generator's setup
+commands and quirks — including GENIE's cross-section splines, which must be
+staged before a GENIE tune counts as available.

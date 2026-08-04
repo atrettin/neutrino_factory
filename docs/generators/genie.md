@@ -26,7 +26,36 @@ The FNAL SciSoft tarballs name tunes with the underscores stripped
 separator-insensitive match (`_normalize_tune`). `setup/download_genie_xsec.sh`
 scrapes the available tune list rather than hard-coding it, downloads
 `genie_xsec-<dotver>-noarch-<TUNEKEY>-k250-e1000.tar.bz2` (~428 MB) and extracts
-only `gxspl-NUsmall.xml` (~543 MB staged).
+only `gxspl-NUsmall.xml` (~543 MB staged). Tunes that SciSoft does not publish
+for a code version (HTTP 404) are warned about and skipped, not treated as
+errors.
+
+**The SciSoft directory is derived from the code version**, not configured:
+`R-3_06_00` → ups version `v3_06_00` (and dotted `3.06.00` for the tarball
+name), under `https://scisoft.fnal.gov/scisoft/packages/genie_xsec/<upsver>/`.
+
+### Setup commands
+
+```bash
+# build the image for a catalogued code version (default R-3_06_00)
+setup/setup_genie.sh R-3_06_00
+setup/setup_genie.sh --code-version R-3_06_00 --download-xsec   # …and stage splines
+
+# stage splines on their own
+setup/download_genie_xsec.sh --code-version R-3_06_00 --tune G18_10a_02_11a
+```
+
+`setup_genie.sh` takes the code version positionally or as
+`--code-version`/`--tag`, plus `--jobs N` for the parallel make jobs inside the
+image; it targets `linux/amd64` so it runs on Apple Silicon via Rosetta 2.
+`download_genie_xsec.sh` takes `--tune` (repeatable; default is every tune
+published for the code version), `--software-root`, and `--force` to re-stage
+over an existing `xsecs.xml`. Distinct code versions produce distinct image tags,
+so multiple GENIE versions coexist.
+
+If `neutrino-factory list-generators --generator genie` shows no available config
+version, the usual cause is that no tune's `xsecs.xml` has been staged yet — the
+image alone is not enough.
 
 ## How it is run
 
@@ -42,6 +71,13 @@ are load-bearing:
 - **Flux-driven runs require precomputed splines.** Given a spectrum via `-f`,
   `gevgen` aborts without `--cross-sections`. This is the same file the
   normalization later reads, so a run that generates at all can be normalized.
+  The staged spline is normally guaranteed by config validation, which calls
+  `ensure_compatible(require_available=not stub_mode)` (`config.py`) and so
+  rejects a non-stub run whose tune has no `xsecs.xml`. The adapter's own
+  `_resolve_xml_path` is a weaker second line: if the file is missing it logs a
+  warning and simply omits `--cross-sections`. That path is reachable only when
+  validation was bypassed or the file disappeared afterwards — and a flux-driven
+  run then fails inside `gevgen` rather than at config time.
 - **The `-e` range is padded by a relative `1e-12`.** `gevgen` zeroes every flux
   histogram bin not strictly inside `[emin, emax]`, and reconstructs the upper
   bound as `emin + (emax - emin)` in floating point. Without the padding,
