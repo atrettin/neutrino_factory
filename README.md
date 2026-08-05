@@ -30,6 +30,7 @@ Supported generators:
 ├── configs/                  # schema templates and example user configs
 ├── docs/                     # knowledge base (start at docs/README.md)
 ├── jobs/                     # Slurm wrappers
+├── notebooks/                # Jupyter notebooks for interactive output exploration
 ├── scripts/                  # helper utilities
 ├── setup/                    # Docker build scripts + Dockerfiles; apptainer/ defs + cluster build script
 ├── src/neutrino_factory/     # Python package
@@ -210,6 +211,22 @@ statistical power. Read it before trusting any distribution: GiBUU samples phase
 space uniformly and weights by cross section, so its quasi-elastic channel can
 show `n_eff/n` below 1 % and raw event counts badly overstate what the sample
 supports.
+
+### Interactive exploration (optional)
+
+[`notebooks/explore_output.ipynb`](notebooks/explore_output.ipynb) is a guided
+tour of one output file: what the HDF5 groups and columns hold, the interaction
+breakdown and energy spectra, cross section vs. energy, every kinematic variable
+weighted by `xsec_weight`, and a user-chosen energy slice plotted as the double
+differential cross section in `x` and `y`. It imports the plotting helpers from
+`neutrino_factory.plots`, so notebook and batch plots stay the same code.
+
+Jupyter is an optional dependency — everything else works without it:
+
+```bash
+pip install -e ".[notebook]"
+jupyter lab notebooks/explore_output.ipynb
+```
 
 ## Generator setup (containers)
 

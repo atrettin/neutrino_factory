@@ -25,6 +25,14 @@ dependencies = [
 dev = [
   "pyright>=1.1",
 ]
+# Interactive exploration of the HDF5 output (notebooks/explore_output.ipynb).
+# Nothing in the package imports these -- the CLI and neutrino_factory.plots
+# work without them.
+notebook = [
+  "jupyterlab>=4.0",
+  "ipykernel>=6.0",
+  "ipywidgets>=8.0",
+]
 
 [project.scripts]
 neutrino-factory = "neutrino_factory.cli:main"

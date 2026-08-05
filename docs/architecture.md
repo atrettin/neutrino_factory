@@ -53,6 +53,27 @@ choices lives in [design_decisions.md](design_decisions.md).
   (neutrino_factory config → generator-native params)
 - `src/neutrino_factory/normalizers/` — `OutputNormalizer` per generator (raw
   output → common HDF5)
+- `src/neutrino_factory/kinematics.py` — the derived kinematic columns, one
+  shared formula for every generator (see [physics.md](physics.md))
+- `src/neutrino_factory/plots.py` — plotting of common-output files. Split into
+  axis-level helpers that draw onto a caller-owned axes (`plot_interactions`,
+  `plot_energy`, `plot_xsec_by_interaction`), figure builders (`figure_xsec`,
+  `figure_channel_comparison`) that take `plt` as an argument, and the batch
+  entry points `make_plots` / `make_config_plots` behind `plot-output`. Only the
+  batch entry points import pyplot themselves, and they force the non-interactive
+  `Agg` backend — which is what lets an interactive caller reuse the same helpers
+  under its own backend
+- `src/neutrino_factory/kinematics_report.py` — console report behind
+  `analyze-kinematics` (weighted per-variable statistics, Kish effective sample
+  size)
+
+Outside the package, `notebooks/explore_output.ipynb` is a guided Jupyter tour of
+a single output file — the HDF5 layout, the placeholder convention, cross section
+vs. energy, the kinematic variables weighted by `xsec_weight`, and a chosen
+energy slice as a double differential cross section in `x` and `y`. It imports
+the axis-level helpers from `plots.py` rather than restating them, so the
+interactive and batch figures cannot drift apart. Jupyter is the optional
+`notebook` extra in `pyproject.toml`; nothing in the package imports it.
 
 ## Data flow
 

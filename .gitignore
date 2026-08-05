@@ -38,3 +38,5 @@ logs/
 CLAUDE.md
 ENVIRONMENT.md
 .worktreeinclude
+# Jupyter
+.ipynb_checkpoints/
