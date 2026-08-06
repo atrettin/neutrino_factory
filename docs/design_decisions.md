@@ -280,3 +280,81 @@ silently splitting one comparison into two.
 Cross sections on different nuclei, or for different flavours, are not
 comparable quantities, so generators are only ever drawn on shared axes within
 one such group.
+
+## Two W columns, and negative W² blanked rather than clamped (2026-08-05)
+
+**Decision.** The hadronic invariant mass enters the common output as *two*
+columns, `w_gev` (lepton-only, fixed nucleon mass at rest) and `w_true_gev`
+(against the per-event struck initial-state system), and both are blanked rather
+than clamped when W² comes out negative. The definitions, the per-generator
+sources of the struck system, and the blanking rules live in
+[physics.md](physics.md#the-two-hadronic-mass-columns); only the rationale is
+here.
+
+**Why W at all.** The `interaction` label cannot be aligned across generators in
+the shallow-inelastic region: NEUT's single-pion modes lump the resonant and
+non-resonant pieces together, and no relabelling separates them. W is the axis
+the generators' own thresholds are expressed in, and unlike a channel flag it is
+computable by one formula from four-vectors all four generators supply.
+
+**Why two columns rather than one.** They answer different questions and neither
+subsumes the other. `w_gev` is comparable *between* generators — one formula, no
+dependence on how a generator treats binding or off-shellness — but it cannot
+reproduce a generator's internal cut, because that cut is on the true mass.
+`w_true_gev` reproduces the cut but inherits each generator's own treatment, so
+a disagreement between two generators' `w_true_gev` distributions is ambiguous
+between physics and bookkeeping. Carrying one would have meant choosing which of
+the two uses to give up; carrying both also makes their difference a measurable
+quantity, which is the size of the Fermi-motion smearing.
+
+**Why blank, not clamp.** The neighbouring Q² clamp is not a precedent: it
+removes floating-point noise near forward scattering, where the true value is
+zero. Negative W² is a genuine kinematic corner, and clamping it would produce a
+spike at exactly W = 0 that no downstream histogram could distinguish from
+measured values — the placeholder-mistaken-for-physics failure the project
+avoids elsewhere. Raising was rejected as disproportionate: a handful of
+threshold-corner events is not a broken normalizer, and an exception would
+discard the whole chunk. Blank-and-count routes them into the blank counter
+`analyze-kinematics` already reports.
+
+**What was ruled out.** Reading GENIE's native `W` branch instead of deriving:
+it is not a true W (it is the lepton-only formula with GENIE's own nucleon mass),
+no other generator has an equivalent, and it would break the "one formula for
+every generator" promise. Emitting NEUT's two 2p2h nucleons as separate branches
+rather than summing them: it doubles a schema only one generator can populate,
+and nothing in the rectangular common format could consume it.
+
+## `resonant_primary` as a column, rather than relabelling NuWro's `res` (2026-08-05)
+
+**Decision.** The resonant/non-resonant character of the primary hadronic system
+is recorded in its own column, `resonant_primary`, and `interaction` is left
+exactly as each generator assigned it. The column's per-generator sources and
+measured effect are in
+[physics.md](physics.md#the-resonant_primary-column).
+
+**The problem.** NuWro's RES channel blends non-resonant background into itself
+over 1.6–1.9 GeV, so 38.6% of its `res` cross section is what GENIE would have
+produced from its DIS generator and labelled `dis`. Since the taxonomy is pinned
+to GENIE, those events are arguably mislabelled, and NuWro is visibly the
+outlier: `res` 46.5% of the total cross section against 26–37% for the others.
+
+**Why not relabel them.** Rebucketing on `flag.res_delta` does fix the outlier
+(NuWro moves to 28.5% / 41.1%, inside the range the others span), and it was
+considered. Two things ruled it out. It would make `interaction` mean "the
+channel the generator assigned, except for NuWro, where it means the mechanism" —
+destroying the one property the column exists to guarantee. And it is impossible
+for NEUT, whose single-pion modes lump the mechanisms with no flag to separate
+them, so the fix would cover three generators out of four and convert a visible
+inconsistency into a hidden partial one.
+
+**Why an integer with an unknown state, not a boolean.** "This generator does not
+expose the distinction" (NEUT, every event) and "not applicable to this channel"
+(quasi-elastic, coherent, 2p2h) are real states. A boolean would have to encode
+them as `false`, which reads as "non-resonant" — a placeholder mistakable for a
+measurement, which the project avoids.
+
+**Why NuWro's `res_kind` is checked rather than assumed.** `flag.res_delta` only
+marks every resonant final state under the hybrid model (`res_kind = 2`, the
+default). Under `resevent2.cc` the below-PYTHIA-threshold branch leaves it false,
+which would label the entire Δ peak non-resonant — a silent, total inversion. The
+normalizer raises instead of filling the column from a run it cannot interpret.

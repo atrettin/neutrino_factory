@@ -19,6 +19,27 @@ _MAX_LISTED_PATHS = 3
 
 STRING_DTYPE = h5py.string_dtype(encoding="utf-8")
 
+# Values of the ``resonant_primary`` column: was the primary hadronic system
+# produced by the generator's *resonant* term, or by its non-resonant one?
+#
+# This is deliberately a column of its own rather than a correction to
+# ``interaction``. The two answer different questions: ``interaction`` says which
+# channel the generator assigned the event, ``resonant_primary`` says how the
+# hadronic system was actually made. For GENIE and GiBUU they agree by
+# construction, because their channels *are* their mechanisms. For NuWro they do
+# not -- its ``res`` channel blends non-resonant background into itself from
+# W = 1.08 GeV up, so a large part of what it calls ``res`` is what GENIE would
+# have called ``dis``. Keeping that in a separate column lets an analysis re-cut
+# on the mechanism without ``interaction`` silently meaning something different
+# for one generator.
+#
+# An integer with an "unknown" state rather than a bool, because "this generator
+# does not expose the distinction" (NEUT) and "not applicable to this channel"
+# (quasi-elastic, coherent, 2p2h) are real states a bool would have to fake.
+RESONANT_PRIMARY_UNKNOWN = -1
+RESONANT_PRIMARY_NO = 0
+RESONANT_PRIMARY_YES = 1
+
 # The numeric event columns, each with its dtype and the default used when an
 # event dict omits it (stub/JSON mode) or when reading a file written before the
 # column existed; ``None`` marks a column every event must carry. Everything that
@@ -36,6 +57,10 @@ NUMERIC_FIELD_SPECS: dict[str, tuple[type, Any]] = {
     # silently defaulted value here would be indistinguishable from a real one
     # and would misclassify half the events of an inclusive run.
     "is_cc": (np.bool_, None),
+    # See RESONANT_PRIMARY_* above. Defaulting to "unknown" is correct for every
+    # generator and channel that does not expose the distinction, which is why
+    # this one does have a default where `is_cc` does not.
+    "resonant_primary": (np.int8, RESONANT_PRIMARY_UNKNOWN),
     **{name: (np.float64, default) for name, default in kinematics.FIELD_DEFAULTS.items()},
 }
 

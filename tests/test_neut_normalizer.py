@@ -8,10 +8,14 @@ from unittest.mock import patch
 
 import numpy as np
 
-from tests.kinematics_reference import reference_kinematics, reference_lepton_p4
-from neutrino_factory.common_output import read_events
+from tests.kinematics_reference import (
+    reference_kinematics,
+    reference_lepton_p4,
+    reference_nucleon_p4,
+)
+from neutrino_factory.common_output import RESONANT_PRIMARY_UNKNOWN, read_events
 from neutrino_factory.kinematics import FIELD_DEFAULTS, KINEMATIC_FIELDS, MISSING
-from neutrino_factory.normalizers.neut import NeutNormalizer
+from neutrino_factory.normalizers.neut import FlatSchemaError, NeutNormalizer
 
 
 def _write_flat_root(
@@ -26,7 +30,9 @@ def _write_flat_root(
     edges=None,
     flux_contents=None,
     lepton_pdgs=None,
+    nucleon_counts=None,
     drop_lepton_branches: bool = False,
+    drop_nucleon_branches: bool = False,
 ) -> None:
     """Write the file nf_flatten.C produces: an nf_neut tree + the two TH1Ds.
 
@@ -73,6 +79,24 @@ def _write_flat_root(
             "lep_px_gev": lepton[:, 1],
             "lep_py_gev": lepton[:, 2],
             "lep_pz_gev": lepton[:, 3],
+        })
+    if not drop_nucleon_branches:
+        # nf_flatten.C writes the *sum* over the struck initial-state nucleons,
+        # so n_nuc = 2 (2p2h) is a pair four-vector, and n_nuc = 0 means it found
+        # none and the four-vector is zeros.
+        counts = (
+            np.ones(len(modes), dtype=np.int32)
+            if nucleon_counts is None
+            else np.asarray(nucleon_counts, dtype=np.int32)
+        )
+        nucleon = reference_nucleon_p4(energies) * counts[:, None]
+        branches.update({
+            "n_nuc": counts,
+            "pdgnuc": np.where(counts > 0, 2112, 0).astype(np.int32),
+            "nuc_e_gev": nucleon[:, 0],
+            "nuc_px_gev": nucleon[:, 1],
+            "nuc_py_gev": nucleon[:, 2],
+            "nuc_pz_gev": nucleon[:, 3],
         })
 
     with uproot.recreate(path) as f:
@@ -259,6 +283,75 @@ class NeutNormalizerRootTests(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 NeutNormalizer().normalize(root_path, out_path, _base_task(), "local")
             self.assertIn("nf_flatten.C", str(ctx.exception))
+
+    def test_normalize_root_raises_on_flat_file_without_nucleon_branches(self) -> None:
+        """Likewise for a flat file predating the struck-nucleon branches.
+
+        Blanking w_true_gev for the whole run instead would be indistinguishable
+        from a run of genuinely nucleon-less events.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.flat.root"
+            _write_flat_root(root_path, [1.0, 2.0], [1, 11], drop_nucleon_branches=True)
+            out_path = work_dir / "out.h5"
+
+            with self.assertRaises(FlatSchemaError) as ctx:
+                NeutNormalizer().normalize(root_path, out_path, _base_task(), "local")
+            self.assertIn("nf_flatten.C", str(ctx.exception))
+            self.assertIn("nuc_e_gev", str(ctx.exception))
+
+    def test_resonant_primary_is_unknown_for_every_neut_event(self) -> None:
+        """NEUT's single-pion modes lump the two mechanisms and it emits no flag.
+
+        This negative is the reason the column exists as its own column rather
+        than as a correction to `interaction`: for NEUT there is nothing to
+        correct with.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.flat.root"
+            _write_flat_root(root_path, [2.0] * 4, [1, 11, 21, 2])
+            out_path = work_dir / "out.h5"
+
+            NeutNormalizer().normalize(root_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            self.assertEqual([e["interaction"] for e in events],
+                             ["qel", "res", "dis", "mec"])
+            for event in events:
+                self.assertEqual(event["resonant_primary"], RESONANT_PRIMARY_UNKNOWN)
+
+    def test_nucleon_count_drives_the_true_w(self) -> None:
+        """n_nuc = 0 blanks it; n_nuc = 2 is the 2p2h pair, not a single nucleon."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.flat.root"
+            _write_flat_root(
+                root_path,
+                [2.0, 2.0, 2.0],
+                [1, 2, 16],
+                nucleon_counts=[1, 2, 0],
+            )
+            out_path = work_dir / "out.h5"
+
+            NeutNormalizer().normalize(root_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            single = reference_kinematics(2.0)["w_true_gev"]
+            self.assertAlmostEqual(events[0]["w_true_gev"], single, places=9)
+            self.assertGreater(events[1]["w_true_gev"], single + 0.5)
+            # Mode 16 is coherent: no nucleon, and the label blanks it as well.
+            self.assertEqual(events[2]["w_true_gev"], MISSING)
+            self.assertEqual(events[2]["w_gev"], MISSING)
+            # The lepton-only W survives wherever there is a struck nucleon.
+            for event in events[:2]:
+                self.assertAlmostEqual(
+                    event["w_gev"], reference_kinematics(2.0)["w_gev"], places=9
+                )
 
     def test_mode_maps_to_every_interaction_category(self) -> None:
         # One representative NEUT mode per common-output category, plus an

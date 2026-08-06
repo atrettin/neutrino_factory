@@ -245,9 +245,36 @@ stays inside the int32 range Fortran seeds need.
 
 Tree `RootTuple`, one file per run per pass. Branches: `lepIn_E` (the incoming
 neutrino energy, **GeV**), `weight`, `evType`, `lepIn_P{x,y,z}`,
-`lepOut_{E,Px,Py,Pz}`. Concatenating across runs is correct — they are parts of
-one estimate. A missing pass or run file is a hard error, since it would silently
-understate σ.
+`lepOut_{E,Px,Py,Pz}` and the struck nucleon `nuc_{E,Px,Py,Pz}` (also GeV; the
+companion `nuc_charge` is a charge, not a PDG code, and is not read).
+Concatenating across runs is correct — they are parts of one estimate. A missing
+pass or run file is a hard error, since it would silently understate σ.
+
+The `nuc_*` branches are written inside the same `NeutrinoProdInfo_Get` block as
+`weight`/`evType`/`lepIn_*` (`code/inputOutput/EventOutput.f90`), so they are
+filled for every event that reaches the file, and GiBUU has no coherent channel
+to blank. What they contain is governed by the jobcard's `storeNucleon`, which
+defaults to **2 = bound**:
+the nucleon including its mean-field potential, so its invariant mass sits below
+`M_N`. GiBUU's own comment notes that a real check of energy and momentum
+conservation is only possible with that setting. The framework does not override
+it.
+
+**Only one nucleon is stored, which makes `w_true_gev` uncomputable for 2p2h.**
+`mom_nuc` in `tneutrinoProdInfo` is a single `real, dimension(0:3)`, and
+`doStoreNeutrinoInfo` (`initNeutrino.f90`) passes it `eN%nucleon` — never
+`eN%nucleon2`. That second nucleon is not incidental to the channel: GiBUU's own
+2p2h cross section is `abs4Sq(eN%boson%mom + eN%nucleon%mom + eN%nucleon2%mom)`
+(`lepton2p2h.f90`), i.e. the pair's invariant mass. But `nucleon2` appears
+nowhere in the output path — its only other use is `ResidueAddPH` for the nuclear
+residue — so the pair cannot be reconstructed from a RootTuple file.
+
+The normalizer therefore blanks `w_true_gev` for `evType` 35 and 36 rather than
+computing it from the single stored nucleon. That would have produced a
+one-nucleon invariant mass under a column defined as the struck *system*: on a
+20k-event numu CC C12 run it gave a median of 0.924 GeV starting near `M_N`,
+where GENIE, NEUT and NuWro give 2.18–2.25 GeV with a floor at 2 `M_N`. `w_gev`
+is unaffected, since it uses no nucleon at all.
 
 `evType` is GiBUU's `prod_id` (`code/inputOutput/EventOutput.f90:1138`), whose
 authoritative and **closed** table is

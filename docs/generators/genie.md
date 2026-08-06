@@ -231,10 +231,23 @@ reconstruct and must say so.
 ## Output and interaction taxonomy
 
 Tree `gst`, produced by `gntpc`. Branches read: `Ev`, `wght`, `cc`, the mode flags
-`qel`/`res`/`dis`/`coh`/`mec`, the neutrino momentum `(pxv, pyv, pzv)` and the
-lepton four-vector `(El, pxl, pyl, pzl)` — **all in GeV**, so no unit conversion
-is applied. For NC events the "outgoing lepton" branches hold the scattered
-neutrino.
+`qel`/`res`/`dis`/`coh`/`mec`, the neutrino momentum `(pxv, pyv, pzv)`, the
+lepton four-vector `(El, pxl, pyl, pzl)` and the struck nucleon
+`(En, pxn, pyn, pzn)` with its PDG code `hitnuc` — **all in GeV**, so no unit
+conversion is applied. For NC events the "outgoing lepton" branches hold the
+scattered neutrino.
+
+Two properties of the struck-nucleon branches, both established from GENIE's
+source and both load-bearing for `w_true_gev`:
+
+- **When there is no hit nucleon, GENIE writes literal zeros** into
+  `En/pxn/pyn/pzn` and sets `hitnuc = 0` (`gNtpConv.cxx`), rather than a NaN. A
+  zero four-vector is finite, so `hitnuc` is what the normalizer masks on.
+- **For MEC, `hitnuc` is a two-nucleon *cluster* code** (2000000200/201/202) and
+  the four-momentum is the *pair's*: `GHepRecord::HitNucleon` returns the cluster
+  when `pdg::Is2NucleonCluster` matches. This is what makes "the struck
+  initial-state hadronic system" the right definition of `p_N` across all four
+  generators — see [physics.md](../physics.md#the-two-hadronic-mass-columns).
 
 The mode flags go through the shared `normalizers/base.interaction_from_flags`
 priority chain (qel → res → dis → coh → mec → other), which NuWro's `treeout`
@@ -243,7 +256,7 @@ also uses since it exposes branches with the same names.
 `is_cc` comes from the gst `cc` branch. `xsec_norm_count` is recorded on the real
 path only.
 
-### GENIE supplies much finer codes than the five flags we read
+### GENIE interaction codes
 
 The gst tree has 99 branches, and the five booleans above are the coarsest view
 of the interaction it offers. Unused, but present:
@@ -253,9 +266,9 @@ of the interaction it offers. Unused, but present:
 | `neut_code` | **NEUT-equivalent mode**, in NEUT's own signed numbering — produced by `genie::utils::ghep::NeutReactionCode` (`Framework/GHEP/GHepUtils.cxx`) |
 | `nuance_code` | NUANCE-equivalent mode |
 | `resid` | Resonance ID for RES events (0 = P33(1232), …) |
-| `dfr`, `imd`, `imdanh`, `singlek`, `nuel`, `amnugamma`, `charm`, `em`, `hnl` | Process flags outside our five |
-| `hitnuc`, `hitqrk`, `sea`, `resc` | Struck nucleon / quark, sea-quark flag, rescattering code |
-| `W`, `x`, `y`, `Q2` and the `Ws`/`xs`/`ys`/`Q2s` variants | True vs. hadronic-system-reconstructed kinematics |
+| `dfr`, `imd`, `imdanh`, `singlek`, `nuel`, `amnugamma`, `charm`, `em`, `hnl` | Process flags outside our five (see the `charm` note below) |
+| `hitqrk`, `sea`, `resc` | Struck quark, sea-quark flag, rescattering code |
+| `W`, `x`, `y`, `Q2` and the `Ws`/`xs`/`ys`/`Q2s` variants | Selected-vertex vs. hadronic-system-reconstructed kinematics — see [the hadronic-mass branches](#the-hadronic-mass-branches-w-and-ws) below |
 
 `neut_code` is the interesting one: it is computed on the same topological basis
 NEUT uses — counting pions and nucleons in the primary hadronic system *before*
@@ -286,6 +299,75 @@ Two further observations from the same run:
 - 48 MEC events have `neut_code` 0, because `NeutReactionCode` assigns 2/−2 for
   CC MEC only — NEUT has no NC MEC mode.
 
+#### `charm` puts charmed baryons into our `qel` bucket
+
+GENIE simulates **charm quasi-elastic** production, `nu_mu + n -> mu- + Lambda_c+`
+(and `Sigma_c`), and flags those events with `qel` *and* `charm`. The common
+output reads only the five class flags, so they are labelled `qel` — which is
+consistent with the taxonomy's rule (the category GENIE itself assigns) but puts
+a charmed baryon in a bucket otherwise made of nucleons.
+
+It is visible in `w_true_gev`, because for a quasi-elastic event that column is
+just the mass of the single outgoing baryon. On the 20k-event numu CC C12 run the
+GENIE `qel` distribution is therefore three discrete lines rather than one:
+
+| `w_true_gev` | Events | Baryon (PDG mass) |
+|---|---|---|
+| 0.9383 | 7231 | proton (0.938272) |
+| 2.285 | 22 | Λc+ (2.28646) |
+| 2.453–2.454 | 10 | Σc (2.4529–2.45397) |
+
+The charm events sit at 2.79–4.71 GeV, above the ~2.6 GeV threshold for Λc
+production and inside the run's 0.5–5 GeV flux; they are 32 of 7263 `qel` events,
+0.44%. **No other generator produces them** — the largest `qel` `w_true_gev` is
+1.141 (NEUT), 1.209 (GiBUU) and 1.470 (NuWro), all consistent with a nucleon. So
+a `qel` sample above W ≈ 1.5 GeV is GENIE-specific and entirely charm.
+
+### The hadronic-mass branches, `W` and `Ws`
+
+The `W` branch is **not** a true invariant mass, despite the name pairing with
+`Ws`. `gNtpConv.cxx` computes it as `W² = M² + 2 M ν − Q²` with
+`M = kNucleonMass` — that is, the lepton-only formula the common output calls
+`w_gev`, with a constant differing from ours by 7e-9 GeV. `Ws` is the selected
+generator-level W. This makes `W` an exact independent reference for `w_gev` and
+*not* a reference for `w_true_gev`. GENIE also fills `W`/`x`/`y` for coherent
+events, where the common output blanks all three.
+
+**How exactly the vertex closes.** The charm lines above are sharp for a reason
+that doubles as a measurement of this. For a
+quasi-elastic event nothing is produced but the lepton and one nucleon, so
+`p_nu + p_N(initial) - p_l = p_N(final)` — precisely the four-vector
+`w_true_gev` takes the invariant mass of. An escaping nucleon is on shell, so if
+the reported `p_N` is the one the vertex used and nothing else absorbs
+four-momentum, `w_true_gev` must be a delta function at `m_p` or `m_n`.
+
+GENIE's is: 1st and 99th percentiles both **0.9383**, the proton mass. The others
+spread, and the deviation tracks how far the nucleon they report sits from a free
+one (medians over `qel`, same 20k run):
+
+| Generator | stored initial `m_N` | `w_true_gev` | offset |
+|---|---|---|---|
+| GENIE | 0.9006 (off shell) | 0.9383 | exact |
+| NuWro | 0.8965 (off shell) | 0.9407 | +1 MeV, 1–99% spread 0.78–1.12 |
+| NEUT | 0.9396 (**on shell**, = `m_n`) | 0.9922 | +53 MeV, 0.96–1.05 |
+| GiBUU | 0.8878 (bound, potential included) | 0.8963 | −43 MeV, 0.72–1.05 |
+
+GENIE reports the off-shell nucleon that makes its own vertex exactly two-body,
+which is why its column is a delta. **NuWro's case has been traced to its
+source**: `qelevent1.cc` subtracts a *local-density-dependent* binding energy from
+the initial nucleon before solving the kinematics, so the vertex does not balance
+against the four-vectors it stores — see
+[nuwro.md](nuwro.md#why-w_true_gev-does-not-close-on-quasi-elastic-events) for the
+measured energy and momentum deficits. NEUT's and GiBUU's binding treatments have
+**not** been read; that NEUT is the only one storing an on-shell nucleon and has
+the only upward offset, the largest, is suggestive but not established
+(`.claude/TODOS.md`).
+
+The practical consequence needs no such confirmation: **`w_true_gev` reproduces a
+generator's own W exactly only for GENIE** (it matches gst `Ws` to 2e-13); for the
+others it is displaced by tens of MeV — the same effect that lets 2.8% of NuWro's
+`res` events leak past its `res_dis_cut`.
+
 ### The shallow-inelastic region: GENIE splits it, NEUT and GiBUU do not
 
 GENIE has **no SIS category**. The region NEUT calls "multi-π, 1.3 < W < 2.0"
@@ -298,11 +380,31 @@ For W >  Wcut : RES -> 0,   +  DIS                -> full
 For W <= Wcut : RES -> full + `DIS' (non-RES bkg) -> modified by DIS-HMultWgt-* params
 ```
 
-`Wcut = 1.7` GeV in this build (`CommonParam.xml`, `NonResBackground`). So below
-1.7 GeV the resonant piece is the full Rein–Sehgal/Berger–Sehgal calculation and
-the *non-resonant* piece is produced by the DIS generator with the KNO
-multiplicity tune applied (`KNOTunedQPMDISPXSec`, `AGKYLowW2019`); above it, RES
-is switched off and DIS runs unmodified.
+**`Wcut` is per tune, not a property of the build.** It is read from the tune's
+own `config/<tune>/CommonParam.xml` (`NonResBackground` param set), and the
+shipped tunes span a wide range:
+
+| Tune | `Wcut` (GeV) |
+|---|---|
+| `config/CommonParam.xml` (global default), `G21_11*`, `MK19_00a`, `EX00_00a` | 1.7 |
+| `G18_10a_02_11b`, `AR23_20i`, `G24_20*`, `N24_20i` | 1.809 |
+| `G18_10a_02_11a` and the other `*_02_11a` tunes of the G18_02/G18_10 families | 1.927862 |
+| `G18_01a_02_11a`, `G18_01b_02_11a` | 2.2802 |
+
+Quoting 1.7 for a tune that does not use it puts the RES/DIS transition in the
+wrong place by up to 0.6 GeV — most of the SIS region. Below `Wcut` the resonant
+piece is the full Rein–Sehgal/Berger–Sehgal calculation and the *non-resonant*
+piece is produced by the DIS generator with the KNO multiplicity tune applied
+(`KNOTunedQPMDISPXSec`, `AGKYLowW2019`); above it, RES is switched off and DIS
+runs unmodified.
+
+**The cut is sharp, and it is on the same W the common output derives.** In the
+20k-event `G18_10a_02_11a` run (`Wcut = 1.927862`), the largest `w_true_gev`
+among `res` events is **1.927742 GeV** and *no* `res` event exceeds `Wcut` — a
+1.2e-4 GeV agreement, which is one event's worth of sampling. Note the
+asymmetry, visible in `output/plots_w/w_by_interaction.png`: only RES stops at
+the line. The non-resonant DIS background carries **51%** of the DIS cross
+section below `Wcut`, so `res` and `dis` overlap everywhere beneath it.
 
 **Consequence for the common output.** Both pieces of the SIS region are
 generated, nothing is dropped, and they are labelled by their originating

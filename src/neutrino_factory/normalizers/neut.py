@@ -11,6 +11,18 @@ from ..kinematics import KINEMATIC_FIELDS, derive_kinematics
 from ..translators.neut import NeutTranslator
 from .base import OutputNormalizer
 
+
+class FlatSchemaError(RuntimeError):
+    """The flattened NEUT tree lacks branches the current normalizer needs.
+
+    Raised instead of degrading to placeholders: a whole run of blank kinematics
+    is indistinguishable from a run of genuinely undefined events. It is a
+    distinct type so ``NeutAdapter.normalize_output`` can re-run nf_flatten.C over
+    the still-present native output, which is cheap, rather than making the user
+    delete the stale file by hand.
+    """
+
+
 # NEUT interaction mode -> common-output interaction category, keyed on the
 # absolute mode (NEUT negates the mode for antineutrinos). Spelled out rather
 # than expressed as ranges so a mode NEUT adds later falls through to "other"
@@ -171,8 +183,23 @@ class NeutNormalizer(OutputNormalizer):
                 ])
                 lepton_pdg = tree["pdglep"].array(library="np")
             except Exception as exc:
-                raise RuntimeError(
+                raise FlatSchemaError(
                     "Cannot read lepton four-vectors from 'nu_p*_gev' / 'lep_*_gev'. "
+                    "The flattened file predates these branches; regenerate it with "
+                    f"the current setup/neut/nf_flatten.C: {exc}"
+                ) from exc
+            try:
+                # The struck initial-state hadronic system, summed over its
+                # nucleons by nf_flatten.C (the 2p2h pair for Mode 2). n_nuc is 0
+                # when it found none, which blanks w_true_gev.
+                nucleon_p4 = np.column_stack([
+                    tree[b].array(library="np")
+                    for b in ("nuc_e_gev", "nuc_px_gev", "nuc_py_gev", "nuc_pz_gev")
+                ])
+                nucleon_count = tree["n_nuc"].array(library="np")
+            except Exception as exc:
+                raise FlatSchemaError(
+                    "Cannot read the struck nucleon from 'nuc_*_gev' / 'n_nuc'. "
                     "The flattened file predates these branches; regenerate it with "
                     f"the current setup/neut/nf_flatten.C: {exc}"
                 ) from exc
@@ -200,11 +227,21 @@ class NeutNormalizer(OutputNormalizer):
             energies_gev, weights, translated_with_xsec, flux
         )
 
+        # `resonant_primary` is deliberately left at its "unknown" default here.
+        # NEUT's single-pion modes 11/12/13 lump the resonant and non-resonant
+        # pieces together and it emits no flag distinguishing them, so there is
+        # nothing to fill the column from -- which is itself the reason the column
+        # exists (see common_output.RESONANT_PRIMARY_*).
         interactions = [
             INTERACTION_BY_MODE.get(abs(int(neut_mode)), "other") for neut_mode in modes
         ]
         kinematics = derive_kinematics(
-            nu_p4, lepton_p4, interactions, valid=np.asarray(lepton_pdg) != 0
+            nu_p4,
+            lepton_p4,
+            interactions,
+            valid=np.asarray(lepton_pdg) != 0,
+            nucleon_p4=nucleon_p4,
+            nucleon_valid=np.asarray(nucleon_count) > 0,
         )
 
         # Declare how much this chunk's estimate is worth, so merging averages
