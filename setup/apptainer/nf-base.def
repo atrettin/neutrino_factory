@@ -43,6 +43,15 @@
         && (apt-get install -y --no-install-recommends libpcre3 || apt-get install -y --no-install-recommends libpcre3t64) \
         && rm -rf /var/lib/apt/lists/* \
         || { echo "nf-base: baseline apt install failed (a package name may not resolve on this base image)" >&2; exit 1; }
+    
+    # Additional packages to make the image suitable for interactive remote development with VSCode
+    apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+        git \
+        bash \
+        openssh-server \
+        && rm -rf /var/lib/apt/lists/* \
+        || { echo "nf-base: Remote dev package apt install failed (a package name may not resolve on this base image)" >&2; exit 1; }
 
     pip install --no-cache-dir \
         "PyYAML>=6.0" \
