@@ -40,3 +40,4 @@ ENVIRONMENT.md
 .worktreeinclude
 # Jupyter
 .ipynb_checkpoints/
+notebooks/explore_output/
