@@ -44,6 +44,8 @@ REPORT_VARIABLES: tuple[tuple[str, str], ...] = (
     ("energy_gev", "GeV"),
     ("q2_gev2", "GeV^2"),
     ("bjorken_x", ""),
+    ("w_gev", "GeV"),
+    ("w_true_gev", "GeV"),
     ("inelasticity_y", ""),
     ("lepton_energy_gev", "GeV"),
     ("lepton_momentum_gev", "GeV"),

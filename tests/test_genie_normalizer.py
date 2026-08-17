@@ -9,27 +9,44 @@ from unittest.mock import patch
 
 import numpy as np
 
-from tests.kinematics_reference import reference_kinematics, reference_lepton_p4
-from neutrino_factory.common_output import read_events
+from tests.kinematics_reference import (
+    reference_kinematics,
+    reference_lepton_p4,
+    reference_nucleon_p4,
+)
+from neutrino_factory.common_output import (
+    RESONANT_PRIMARY_NO,
+    RESONANT_PRIMARY_UNKNOWN,
+    RESONANT_PRIMARY_YES,
+    read_events,
+)
 from neutrino_factory.kinematics import KINEMATIC_FIELDS, MISSING
 from neutrino_factory.normalizers.genie import GenieNormalizer
 from neutrino_factory.translators.genie import GENIE_UNITS_CM2, XSEC_SCALE
 
 
 def _write_gst_root(
-    path: Path, energies_gev, weights, qel, res, dis, coh, mec, lepton_p4=None, cc=None
+    path: Path, energies_gev, weights, qel, res, dis, coh, mec, lepton_p4=None, cc=None,
+    hitnuc=None,
 ) -> None:
     """Write a synthetic ``gst`` tree.
 
     Unless ``lepton_p4`` is given, each event gets the reference scatter defined
     by :func:`kinematics_reference.reference_lepton_p4`: a beam neutrino along +z
     with |p| = E, and an outgoing lepton at E_l = E/2 with (px, pz) = (0.3E, 0.4E).
+    The struck nucleon is at rest and on shell unless ``hitnuc`` marks an event as
+    having none (0), in which case GENIE writes zeros into ``En/pxn/pyn/pzn``.
     """
     import uproot
 
     energies = np.array(energies_gev, dtype=np.float64)
     lepton = np.asarray(reference_lepton_p4(energies) if lepton_p4 is None else lepton_p4,
                         dtype=np.float64)
+    hit = np.full(len(energies), 2112, dtype=np.int32) if hitnuc is None else np.array(
+        hitnuc, dtype=np.int32
+    )
+    nucleon = reference_nucleon_p4(energies)
+    nucleon[hit == 0] = 0.0
 
     with uproot.recreate(path) as f:
         f["gst"] = {
@@ -50,6 +67,11 @@ def _write_gst_root(
             "dis": np.array(dis, dtype=np.bool_),
             "coh": np.array(coh, dtype=np.bool_),
             "mec": np.array(mec, dtype=np.bool_),
+            "hitnuc": hit,
+            "En": nucleon[:, 0],
+            "pxn": nucleon[:, 1],
+            "pyn": nucleon[:, 2],
+            "pzn": nucleon[:, 3],
         }
 
 
@@ -392,6 +414,93 @@ class GenieNormalizerRootTests(unittest.TestCase):
                 expected = reference_kinematics(energy)
                 for field in KINEMATIC_FIELDS:
                     self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+
+    def test_resonant_primary_follows_the_channel(self) -> None:
+        """GENIE's channels are its mechanisms, so the column follows the label."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, self._software_root)
+            gst_path = work_dir / "events.gst.root"
+            _write_gst_root(
+                gst_path,
+                energies_gev=[2.0] * 4,
+                weights=[1.0] * 4,
+                qel=[False, False, True, False],
+                res=[True, False, False, False],
+                dis=[False, True, False, False],
+                coh=[False] * 4,
+                mec=[False, False, False, True],
+            )
+            out_path = work_dir / "out.h5"
+
+            GenieNormalizer().normalize(gst_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            self.assertEqual(events[0]["resonant_primary"], RESONANT_PRIMARY_YES)
+            self.assertEqual(events[1]["resonant_primary"], RESONANT_PRIMARY_NO)
+            # No pion-production mechanism to attribute for qel or mec.
+            self.assertEqual(events[2]["resonant_primary"], RESONANT_PRIMARY_UNKNOWN)
+            self.assertEqual(events[3]["resonant_primary"], RESONANT_PRIMARY_UNKNOWN)
+
+    def test_events_without_a_hit_nucleon_blank_only_the_true_w(self) -> None:
+        """GENIE writes zeros into En/pxn/pyn/pzn and flags them with hitnuc == 0.
+
+        A zero four-vector is finite, so only the hitnuc mask can catch it. The
+        lepton-only w_gev, which needs no nucleon, must survive.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, self._software_root)
+            gst_path = work_dir / "events.gst.root"
+            _write_gst_root(
+                gst_path,
+                energies_gev=[2.0, 2.0],
+                weights=[1.0] * 2,
+                qel=[True] * 2,
+                res=[False] * 2,
+                dis=[False] * 2,
+                coh=[False] * 2,
+                mec=[False] * 2,
+                hitnuc=[2112, 0],
+            )
+            out_path = work_dir / "out.h5"
+
+            GenieNormalizer().normalize(gst_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            self.assertAlmostEqual(
+                events[0]["w_true_gev"], reference_kinematics(2.0)["w_true_gev"], places=9
+            )
+            self.assertEqual(events[1]["w_true_gev"], MISSING)
+            for event in events:
+                self.assertAlmostEqual(
+                    event["w_gev"], reference_kinematics(2.0)["w_gev"], places=9
+                )
+
+    def test_mec_cluster_hit_nucleon_still_yields_a_true_w(self) -> None:
+        """For MEC, gst's hitnuc is a 2-nucleon cluster code and En/pxn/... the pair."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, self._software_root)
+            gst_path = work_dir / "events.gst.root"
+            _write_gst_root(
+                gst_path,
+                energies_gev=[2.0],
+                weights=[1.0],
+                qel=[False],
+                res=[False],
+                dis=[False],
+                coh=[False],
+                mec=[True],
+                hitnuc=[2000000201],
+            )
+            out_path = work_dir / "out.h5"
+
+            GenieNormalizer().normalize(gst_path, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            self.assertEqual(events[0]["interaction"], "mec")
+            self.assertGreater(events[0]["w_true_gev"], 0.0)
 
     def test_derived_kinematics_agree_with_genie_native_branches(self) -> None:
         """Pin our definitions to GENIE's own.

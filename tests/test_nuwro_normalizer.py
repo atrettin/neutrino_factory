@@ -8,21 +8,35 @@ from unittest.mock import patch
 
 import numpy as np
 
-from tests.kinematics_reference import reference_kinematics, reference_lepton_p4
-from neutrino_factory.common_output import read_events
+from tests.kinematics_reference import (
+    reference_kinematics,
+    reference_lepton_p4,
+    reference_nucleon_p4,
+)
+from neutrino_factory.common_output import (
+    RESONANT_PRIMARY_NO,
+    RESONANT_PRIMARY_UNKNOWN,
+    RESONANT_PRIMARY_YES,
+    read_events,
+)
 from neutrino_factory.kinematics import FIELD_DEFAULTS, KINEMATIC_FIELDS, MISSING
 from neutrino_factory.normalizers.nuwro import NuWroNormalizer
 
 
 def _write_root_tree(
-    path: Path, energies_mev, weights, qel, res, dis, coh, mec, out_counts=None, cc=None
+    path: Path, energies_mev, weights, qel, res, dis, coh, mec, out_counts=None, cc=None,
+    in_nucleons=None, res_delta=None, res_kind=2,
 ) -> None:
     """Write a synthetic ``treeout`` tree, all momenta in MeV as NuWro does.
 
-    ``e/in`` holds [beam neutrino, struck nucleon]; ``e/out`` holds the primary
-    outgoing lepton at index 0 and is jagged, so ``out_counts`` can be used to
-    give an event no outgoing particles at all. The lepton follows the reference
-    scatter from :func:`kinematics_reference.reference_lepton_p4`.
+    ``e/in`` is jagged: the beam neutrino at index 0 followed by the struck
+    hadronic system, whose size varies by channel (measured on a real Ar40 run:
+    none for coherent, one for qel/res/dis, two or three for MEC). ``in_nucleons``
+    gives the per-event nucleon PDG list, defaulting to a single neutron; each
+    nucleon is at rest and on shell. ``e/out`` holds the primary outgoing lepton
+    at index 0 and is likewise jagged, so ``out_counts`` can give an event no
+    outgoing particles at all. The lepton follows the reference scatter from
+    :func:`kinematics_reference.reference_lepton_p4`.
     """
     import awkward as ak
     import uproot
@@ -32,7 +46,11 @@ def _write_root_tree(
     lepton = reference_lepton_p4(energies)
     if out_counts is None:
         out_counts = np.ones(count, dtype=np.int64)
+    if in_nucleons is None:
+        in_nucleons = [[2112]] * count
     zeros = np.zeros(count, dtype=np.float64)
+    # reference_nucleon_p4 is in GeV; NuWro's tree is in MeV.
+    nucleon_mev = reference_nucleon_p4(energies) * 1000.0
 
     def jagged(component: int):
         return ak.Array([
@@ -40,14 +58,20 @@ def _write_root_tree(
             for i, n in enumerate(out_counts)
         ])
 
+    def jagged_in(component: int, beam):
+        return ak.Array([
+            [float(beam[i])] + [float(nucleon_mev[i, component])] * len(in_nucleons[i])
+            for i in range(count)
+        ])
+
     with uproot.recreate(path) as f:
         f["treeout"] = {
-            # Beam neutrino along +z with |p| = E; the struck nucleon is at rest
-            # here since the normalizer does not read it.
-            "e/in/in.t": np.column_stack([energies, zeros]),
-            "e/in/in.x": np.column_stack([zeros, zeros]),
-            "e/in/in.y": np.column_stack([zeros, zeros]),
-            "e/in/in.z": np.column_stack([energies, zeros]),
+            # Beam neutrino along +z with |p| = E, then the struck nucleon(s).
+            "e/in/in.t": jagged_in(0, energies),
+            "e/in/in.x": jagged_in(1, zeros),
+            "e/in/in.y": jagged_in(2, zeros),
+            "e/in/in.z": jagged_in(3, energies),
+            "e/in/in.pdg": ak.Array([[14] + list(pdgs) for pdgs in in_nucleons]),
             "e/out/out.t": jagged(0),
             "e/out/out.x": jagged(1),
             "e/out/out.y": jagged(2),
@@ -58,6 +82,14 @@ def _write_root_tree(
             "e/flag/flag.cc": np.array(
                 np.ones(count) if cc is None else cc, dtype=np.bool_
             ),
+            # res_delta marks a RES event whose pion came from the resonant term
+            # rather than the blended-in non-resonant background; res_kind selects
+            # which RES model produced it, and only the hybrid model (2) sets the
+            # flag reliably.
+            "e/flag/flag.res_delta": np.array(
+                np.ones(count) if res_delta is None else res_delta, dtype=np.bool_
+            ),
+            "e/par/par.res_kind": np.full(count, res_kind, dtype=np.int32),
             "e/flag/flag.qel": np.array(qel, dtype=np.bool_),
             "e/flag/flag.res": np.array(res, dtype=np.bool_),
             "e/flag/flag.dis": np.array(dis, dtype=np.bool_),
@@ -235,6 +267,125 @@ class NuWroNormalizerRootTests(unittest.TestCase):
                 expected = reference_kinematics(energy_gev)
                 for field in KINEMATIC_FIELDS:
                     self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+
+    def test_mec_sums_the_whole_struck_hadronic_system(self) -> None:
+        """NuWro's MEC puts two or three nucleons in e/in; the pair is the system."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.root"
+            _write_root_tree(
+                root_path,
+                energies_mev=[2000.0, 2000.0],
+                weights=[1e-38] * 2,
+                qel=[True, False],
+                res=[False] * 2,
+                dis=[False] * 2,
+                coh=[False] * 2,
+                mec=[False, True],
+                in_nucleons=[[2112], [2112, 2212]],
+            )
+            out_path = work_dir / "out.h5"
+            task = {**_base_task(), "event_count": 2}
+
+            NuWroNormalizer().normalize(root_path, out_path, task, "local")
+
+            _, events = read_events(out_path)
+            single = reference_kinematics(2.0)["w_true_gev"]
+            self.assertAlmostEqual(events[0]["w_true_gev"], single, places=9)
+            # Two nucleons at rest weigh 2 M_N, so the pair's W is strictly larger
+            # and demonstrably not just the first nucleon's.
+            self.assertGreater(events[1]["w_true_gev"], single + 0.5)
+            # w_gev knows nothing about the nucleon and is unchanged.
+            self.assertAlmostEqual(
+                events[1]["w_gev"], reference_kinematics(2.0)["w_gev"], places=9
+            )
+
+    def test_events_without_a_nucleon_in_e_in_blank_only_the_true_w(self) -> None:
+        """Coherent events carry no nucleon at all; an electron target is not one."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.root"
+            _write_root_tree(
+                root_path,
+                energies_mev=[2000.0, 2000.0],
+                weights=[1e-38] * 2,
+                qel=[True, True],
+                res=[False] * 2,
+                dis=[False] * 2,
+                coh=[False] * 2,
+                mec=[False] * 2,
+                in_nucleons=[[], [11]],
+            )
+            out_path = work_dir / "out.h5"
+            task = {**_base_task(), "event_count": 2}
+
+            NuWroNormalizer().normalize(root_path, out_path, task, "local")
+
+            _, events = read_events(out_path)
+            for event in events:
+                self.assertEqual(event["w_true_gev"], MISSING)
+                self.assertAlmostEqual(
+                    event["w_gev"], reference_kinematics(2.0)["w_gev"], places=9
+                )
+
+    def test_resonant_primary_splits_the_res_channel_on_res_delta(self) -> None:
+        """NuWro's `res` blends in non-resonant background; the column separates it."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.root"
+            _write_root_tree(
+                root_path,
+                energies_mev=[2000.0] * 4,
+                weights=[1e-38] * 4,
+                qel=[False, False, False, True],
+                res=[True, True, False, False],
+                dis=[False, False, True, False],
+                coh=[False] * 4,
+                mec=[False] * 4,
+                res_delta=[True, False, False, False],
+            )
+            out_path = work_dir / "out.h5"
+            task = {**_base_task(), "event_count": 4}
+
+            NuWroNormalizer().normalize(root_path, out_path, task, "local")
+
+            _, events = read_events(out_path)
+            # Same `res` label, opposite mechanism — the whole point of the column.
+            self.assertEqual(events[0]["interaction"], "res")
+            self.assertEqual(events[1]["interaction"], "res")
+            self.assertEqual(events[0]["resonant_primary"], RESONANT_PRIMARY_YES)
+            self.assertEqual(events[1]["resonant_primary"], RESONANT_PRIMARY_NO)
+            # dyn_dis is non-resonant by construction.
+            self.assertEqual(events[2]["resonant_primary"], RESONANT_PRIMARY_NO)
+            # Quasi-elastic has no pion-production mechanism to attribute.
+            self.assertEqual(events[3]["resonant_primary"], RESONANT_PRIMARY_UNKNOWN)
+
+    def test_non_hybrid_res_kind_refuses_to_fill_resonant_primary(self) -> None:
+        """Under resevent2.cc the flag is false across the whole Delta peak."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.root"
+            _write_root_tree(
+                root_path,
+                energies_mev=[2000.0],
+                weights=[1e-38],
+                qel=[False],
+                res=[True],
+                dis=[False],
+                coh=[False],
+                mec=[False],
+                res_kind=1,
+            )
+
+            with self.assertRaises(RuntimeError) as ctx:
+                NuWroNormalizer().normalize(
+                    root_path, work_dir / "out.h5", _base_task(), "local"
+                )
+            self.assertIn("res_kind", str(ctx.exception))
 
     def test_normalize_root_blanks_kinematics_without_outgoing_lepton(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -170,11 +170,14 @@ and an `events` group holding one 1-D dataset per column.
 | `event_id`, `seed` | – | bookkeeping |
 | `generator`, `probe`, `target` | – | `genie`/`gibuu`/`neut`/`nuwro`, flavour, nucleus |
 | `interaction` | – | `qel`, `res`, `dis`, `coh`, `mec`, `other` |
+| `resonant_primary` | – | was the primary hadronic system resonant? `1` yes, `0` no, `-1` unknown / not applicable |
 | `energy_gev` | GeV | incoming neutrino energy |
 | `weight` | generator-native | raw generator weight, passed through verbatim |
 | `xsec_weight` | 1e-38 cm²/nucleon | harmonized cross-section weight |
 | `q2_gev2` | GeV² | four-momentum transfer, `Q² = -(p_ν - p_l)²` |
 | `bjorken_x` | – | `Q² / (2 M_N ν)` |
+| `w_gev` | GeV | hadronic mass from the lepton alone, `W² = M_N² + 2 M_N ν - Q²` |
+| `w_true_gev` | GeV | hadronic mass against the struck nucleon, `W² = (p_ν + p_N - p_l)²` |
 | `inelasticity_y` | – | `ν / E_ν`, with `ν = E_ν - E_l` |
 | `lepton_energy_gev` | GeV | outgoing lepton energy |
 | `lepton_momentum_gev` | GeV | outgoing lepton momentum |
@@ -182,14 +185,18 @@ and an `events` group holding one 1-D dataset per column.
 | `lepton_p_transverse_gev` | GeV | lepton momentum transverse to the beam |
 | `lepton_costheta` | – | cosine of the lepton scattering angle |
 
-The kinematic variables are all lab-frame, derived from the incoming-neutrino
-and outgoing-lepton four-vectors by one shared formula
+The kinematic variables are all lab-frame, derived from the incoming-neutrino,
+outgoing-lepton and struck-nucleon four-vectors by one shared formula
 (`neutrino_factory.kinematics`) rather than from each generator's own
 precomputed branches, so they mean the same thing whichever generator produced
-them. Where a variable is not defined for an event it carries a clearly
-unphysical placeholder: `-1` for the non-negative quantities, `-999` for
-`lepton_p_parallel_gev` and `lepton_costheta` (whose physical range includes
-`-1`). Notably, `bjorken_x` is `-1` for coherent events. See
+them. The two hadronic masses answer different questions: `w_gev` is the
+observable one and is defined identically for every generator, while
+`w_true_gev` is the invariant mass the generators cut on internally and carries
+each one's own treatment of Fermi motion and binding. Where a variable is not
+defined for an event it carries a clearly unphysical placeholder: `-1` for the
+non-negative quantities, `-999` for `lepton_p_parallel_gev` and
+`lepton_costheta` (whose physical range includes `-1`). Notably, `bjorken_x` and
+both W columns are `-1` for coherent events, which have no struck nucleon. See
 `docs/physics.md` for the full convention.
 
 Inspect a file's kinematic content with `analyze-kinematics`, which prints event

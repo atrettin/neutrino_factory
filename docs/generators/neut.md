@@ -368,6 +368,29 @@ reports `pdglep = 0` when it finds none, which blanks the kinematics for that
 event. Verified by dumping every NeutVect entry of a real run against the
 flattened tree: 50/50 events agree.
 
+**The same scan collects the struck initial-state nucleons**, which are exactly
+the nucleons preceding that lepton: one normally, two for 2p2h. They are
+**summed** into `nuc_{e,px,py,pz}_gev`, with `n_nuc` recording how many, because
+the invariant mass of a 2p2h event is the correlated *pair's* — and because GENIE
+hands over its two-nucleon cluster for the same events, so summing is what makes
+`w_true_gev` one quantity across generators. Nucleons *after* the lepton are
+final-state and are not counted, which is why the loop stops there; if no lepton
+is found the collected nucleons are discarded, since the scan then ran past the
+vertex. `n_nuc` is written alongside the sum so a later change of that policy is
+a change in Python rather than a container rebuild.
+
+**The flat tree contains only what this macro chose to write**, and
+`NeutAdapter.normalize_output` reuses an existing `events.flat.root` rather than
+regenerating it. A flat file from an older macro therefore serves a stale schema
+indefinitely. The normalizer raises `FlatSchemaError` naming the missing branches
+and `nf_flatten.C` instead of blanking the affected columns — a whole run of
+placeholders is indistinguishable from a run of genuinely undefined events — and
+the adapter catches it, re-runs the flattener over the still-present
+`events.neut.root`, and retries once. Re-flattening is cheap; only a deleted
+native file makes the error final. Changing the macro means rebuilding the NEUT
+payload SIF for the cluster (`setup/apptainer/neut.def` stages it via `%files`);
+under local Docker the macro is bind-mounted and takes effect immediately.
+
 **Alternatives rejected.** NEUT ships `neutclass_to_tree`, but its `nework`
 branch is a Fortran leaf-list containing `pne[100][3]`, which uproot mis-parses
 (it reads the dtype as `(3,)` rather than `(100,3)`); reading it would mean
@@ -379,8 +402,13 @@ essentially the whole image.
 ## Output and interaction taxonomy
 
 Tree `nf_neut`. Branches: `enu_gev`, `mode`, `nu_p{x,y,z}_gev`,
-`lep_{e,px,py,pz}_gev`, `pdglep` (0 = no lepton found → kinematics blanked). The
-`weight` column is 1.0.
+`lep_{e,px,py,pz}_gev`, `pdglep` (0 = no lepton found → kinematics blanked),
+`nuc_{e,px,py,pz}_gev` (the summed struck system), `n_nuc` (0 = none found →
+`w_true_gev` blanked) and `pdgnuc` (the first nucleon's PDG, informational).
+`pdgnu` and `totcrs` are written but not read. The `weight` column is 1.0.
+
+NEUT emits no invariant-mass quantity of its own, so both W columns are derived
+here like everywhere else.
 
 `INTERACTION_BY_MODE` is keyed on the **absolute** mode (NEUT negates the mode
 for antineutrinos) and spelled out explicitly rather than as ranges, so a mode

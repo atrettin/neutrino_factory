@@ -115,7 +115,15 @@ rescales the weight by construction.
 Tree `treeout`. The particle branches are **jagged**:
 
 - `e/in/in.{t,x,y,z}` — components are `(E, px, py, pz)`. Index 0 is the beam
-  neutrino, the struck nucleon follows.
+  neutrino, followed by the struck initial-state system, whose size is **not**
+  fixed. Measured on a 100k-event numu/Ar40 run: coherent events carry no
+  initial-state hadron at all (the beam alone), `qel`/`res`/`dis` exactly one
+  nucleon, and `mec` **two or three**. A handful of events (9 in 100k) carry an
+  atomic *electron* there instead — the ν-e elastic channel, whose target is not
+  a nucleon.
+  Because of that, `w_true_gev` selects on `e/in/in.pdg` (2112/2212) rather than
+  by index and sums whatever it finds, which gives the correlated pair for 2p2h;
+  events with no nucleon get the placeholder.
 - `e/out/out.{t,x,y,z}` — index 0 is the primary outgoing lepton, but the vector
   **can be empty** for an event. Short entries are zero-padded and flagged by
   `_has_leading`, which is passed to `derive_kinematics(valid=...)` so the whole
@@ -130,6 +138,140 @@ The class flags share GENIE's names and go through the same shared priority chai
 `normalizers/base.interaction_from_flags` (qel → res → dis → coh → mec → other).
 `is_cc` comes from `flag.cc`, which is a separate flag — the class flags span
 both currents.
+
+### The RES/DIS split is a hard cut at `res_dis_cut`, plus a blend *inside* RES
+
+Three parameters govern it (`src/params_all.h`, values in MeV, all defaults the
+framework does not override):
+
+| Parameter | Default |
+|---|---|
+| `res_dis_cut` | 1900 |
+| `res_dis_blending_start` | 1600 |
+| `res_dis_blending_end` | 1900 |
+
+They are not only defaults on paper — NuWro writes them per event into `treeout`
+as `e/par/par.res_dis_cut` and `e/par/par.res_dis_blending_{start,end}`, so a run
+can be checked against its own output rather than against this table.
+
+**The two dynamics are disjoint at `res_dis_cut`, with no overlap by
+construction:**
+
+- RES samples W uniformly from `[Wmin, min(res_dis_cut, kinematic max)]`, with
+  `Wmin = 1080` (`src/dis/res_kinematics.cc`), so a `dyn_res` event can never
+  exceed 1.9 GeV.
+- DIS samples W from `[res_dis_cut, Wmax]` (`src/dis/disevent.cc`, log-uniform in
+  `W - 1000`), and returns weight 0 outright if the beam energy cannot reach the
+  cut. So a `dyn_dis` event can never fall below 1.9 GeV.
+
+**The blending is a different thing entirely**: it interpolates the *composition
+of the RES channel*, not the choice between channels. `resevent2.cc` documents
+the model as Δ-resonant × `alfadelta(W)` + DIS-like single-pion × `alfadis(W)` +
+non-SPP DIS, "the main idea behind is that DIS contribution simulates
+non-resonant part".
+
+**`res_dis_blending_start` is a kink, not the onset.** `src/dis/alfa.cc` makes
+the non-resonant fraction piecewise-linear in *three* pieces, and it is non-zero
+well below 1600 MeV:
+
+```
+W in (1080, W_min):   alfa * (W - 1080) / (W_min - 1080)          0     -> alfa
+W in [W_min, W_max):  alfa + (1 - alfa) * (W - W_min)/(W_max - W_min)   alfa -> 1
+W >= W_max:           1
+```
+
+with `alfa` a channel-dependent base of 0, 0.2 or 0.3. So the background ramps up
+from **W = 1080 MeV** (the RES `Wmin`), merely reaching `alfa` at
+`res_dis_blending_start` before accelerating to 1 at `res_dis_blending_end`.
+Treating 1600 as the onset is contradicted by the events themselves: on the 20k
+run the non-resonant part of `res` starts at 1.27 GeV, and 534 of its 2008 events
+(26%) lie below 1.6 GeV.
+
+`betadis` additionally *overrides* the parameter, substituting
+`W_min = 1300 - 75 * bkgrscaling` for the channels whose base is zero
+(`bkgrscaling` defaults to 0, giving 1300 MeV — which is where the observed
+distribution does turn on). The blending start is therefore not one number across
+channels, which is why plots draw only `res_dis_cut`.
+
+The consequence matters for cross-generator classification: **NuWro's `res` is
+not purely resonant near the boundary.** By 1.9 GeV the RES channel's content is
+entirely non-resonant background, yet it is still labelled `res` by `flag.res`.
+This is the same kind of mixing that makes NEUT's single-pion modes unalignable,
+arrived at by a different route.
+
+**Unlike NEUT, NuWro says which it was.** `e/flag/flag.res_delta` marks an event
+whose hadronic final state came from the resonant term; when it is false the
+final state was hadronized by PYTHIA, i.e. the non-resonant piece. That is what
+fills the common output's `resonant_primary` column
+([../physics.md](../physics.md#the-resonant_primary-column)). Measured on the 20k
+numu CC C12 run, it tracks W exactly as the blending predicts: 100% true below
+1.21 GeV, 93.6% at 1.3–1.4, 45.8% at 1.5–1.6, 7.5% at 1.8–1.9, 1.3% at
+1.9–2.0. All `dyn_dis` events have it false.
+
+**Its meaning is model-dependent, so `e/par/par.res_kind` is checked, not
+assumed.** Under the hybrid model (`res_kind = 2`, NuWro's default and what the
+framework runs) every resonant final state is generated through
+`gen_final_particles_hybrid`, which sets the flag — hence the clean 100% at low
+W. Under `resevent2.cc` (`res_kind != 2`) the below-PYTHIA-threshold branch
+(`pythia_threshold = 1210` MeV) pushes the nucleon–pion pair *without* setting
+it, so the flag would read false across the entire Δ peak and invert the
+column's meaning. The normalizer raises rather than fill `resonant_primary` from
+a run that used another model.
+
+**Measured, and a caveat on `w_true_gev`.** On the 20k-event numu CC C12 run:
+`dis` has **zero** events below 1.9 GeV (minimum 1.9171), so the DIS side of the
+cut is exact. But 2.8% of `res` events (236 of 8400) land *above* it, out to
+1.9723 GeV. That leak is a property of our variable, not of NuWro: NuWro samples
+its internal W from an `effective_mass` (`Meff = min(sqrt(nuc0·nuc0), M12)`,
+binding-corrected) in a boosted frame, whereas `w_true_gev` is built from the
+struck nucleon's actual four-vector, whose invariant mass is essentially on shell
+(median 0.9383 GeV). So unlike GENIE — where `w_true_gev` reproduces the native
+`Ws` to 2e-13 GeV — **our W is not the W NuWro cut on**, and the boundary appears
+smeared by a few tens of MeV on the RES side.
+
+### Why `w_true_gev` does not close on quasi-elastic events
+
+For a quasi-elastic event `p_nu + p_N(initial) - p_l` should be exactly the
+outgoing nucleon, so `w_true_gev` should be a delta function at the nucleon mass.
+NuWro's own pre-FSI outgoing nucleon *is* exactly on shell (`e/out`, invariant
+mass 0.9383 at the 1st, 50th and 99th percentiles), but our reconstruction is
+not: 83% of QE events land within 30 MeV of `m_p`, 47% within 10 MeV.
+
+The reason is that NuWro's QE vertex does not conserve four-momentum between the
+particles it stores. Measured over 6576 QE events on the 20k numu CC C12 run,
+`(p_nu + p_N) - (p_mu + p_N')` has a median energy deficit of **5.9 MeV** and a
+median missing three-momentum of **18 MeV**.
+
+`qelevent1.cc` shows where the energy goes: a binding energy is subtracted from
+the initial nucleon before the kinematics are solved (`aa.t -= _E_bind`). Which
+binding energy depends on `nucleus_target`, and for the framework's runs
+(`nucleus_target = 2`, local Fermi gas) it is
+
+```
+_E_bind = nucleus::Ef(N0) + kaskada_w,   Ef = sqrt(k_F(local)^2 + M^2) - M
+```
+
+(`nucleus.cc:143-157`, `kaskada_w = 7` MeV). Because `k_F` is the **local** Fermi
+momentum, `_E_bind` varies event by event with the density where the interaction
+happened — roughly 7 to 32 MeV across carbon. That is the local density
+approximation of Juszczak, Nowak & Sobczyk (NuInt04, *Spectrum of recoil nucleons
+in quasi-elastic neutrino-nucleus interactions*) carried into the current code. It
+is a spread by construction, not a constant offset, which is why the reconstructed
+`w_true_gev` is a smeared distribution rather than a shifted delta.
+
+Note that the *momentum-dependent optical potential* which is the other half of
+that paper is a different option — `nucleus_target = 6`, `momentum_dependent_potential_kinematics`
+— and is **not** what these runs use.
+
+**Not fully explained.** Two things do not follow from the above and remain open
+(`.claude/TODOS.md`): a 5% tail beyond 100 MeV (99th percentile 227 MeV, 99.9th
+458 MeV), far larger than any binding energy; and the missing three-momentum is
+not a pure rescale along the outgoing nucleon's direction, which is what the
+paper's "exit from the nuclear potential" step would produce. The measured
+dependence of `w_true_gev` on the struck nucleon's momentum is also only ~3 MeV
+across 0–300 MeV, much weaker than `_E_bind`'s own ~30 MeV variation, implying
+most of `_E_bind` is already reflected in the (off-shell, median mass 0.8965)
+nucleon that `e/in` reports.
 
 ## Container build
 

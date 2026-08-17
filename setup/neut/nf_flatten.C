@@ -51,6 +51,12 @@ void nf_flatten(const char* in_path, const char* out_path) {
   Double_t nu_px_gev = 0.0, nu_py_gev = 0.0, nu_pz_gev = 0.0;
   Double_t lep_e_gev = 0.0, lep_px_gev = 0.0, lep_py_gev = 0.0, lep_pz_gev = 0.0;
   Int_t pdglep = 0;  // 0 marks "no outgoing lepton found" -> normalizer blanks
+  // The struck initial-state hadronic system, summed over its nucleons, for the
+  // true invariant hadronic mass. n_nuc = 0 marks "none found" -> normalizer
+  // blanks; pdgnuc is the first nucleon's PDG and is informational only.
+  Double_t nuc_e_gev = 0.0, nuc_px_gev = 0.0, nuc_py_gev = 0.0, nuc_pz_gev = 0.0;
+  Int_t n_nuc = 0;
+  Int_t pdgnuc = 0;
   out_tree->Branch("mode", &mode, "mode/I");
   out_tree->Branch("pdgnu", &pdgnu, "pdgnu/I");
   out_tree->Branch("enu_gev", &enu_gev, "enu_gev/D");
@@ -63,6 +69,12 @@ void nf_flatten(const char* in_path, const char* out_path) {
   out_tree->Branch("lep_px_gev", &lep_px_gev, "lep_px_gev/D");
   out_tree->Branch("lep_py_gev", &lep_py_gev, "lep_py_gev/D");
   out_tree->Branch("lep_pz_gev", &lep_pz_gev, "lep_pz_gev/D");
+  out_tree->Branch("n_nuc", &n_nuc, "n_nuc/I");
+  out_tree->Branch("pdgnuc", &pdgnuc, "pdgnuc/I");
+  out_tree->Branch("nuc_e_gev", &nuc_e_gev, "nuc_e_gev/D");
+  out_tree->Branch("nuc_px_gev", &nuc_px_gev, "nuc_px_gev/D");
+  out_tree->Branch("nuc_py_gev", &nuc_py_gev, "nuc_py_gev/D");
+  out_tree->Branch("nuc_pz_gev", &nuc_pz_gev, "nuc_pz_gev/D");
 
   const Long64_t n_entries = in_tree->GetEntries();
   for (Long64_t i = 0; i < n_entries; ++i) {
@@ -89,8 +101,20 @@ void nf_flatten(const char* in_path, const char* out_path) {
     // index >= 1 is the primary outgoing lepton -- the charged lepton for CC,
     // the scattered neutrino for NC. Leptons do not rescatter, so there is no
     // FSI copy to confuse this.
+    //
+    // The same scan collects the struck initial-state nucleons, which are exactly
+    // the nucleons that precede that lepton: one normally, two for 2p2h. They are
+    // summed rather than written out singly, because the invariant mass of a 2p2h
+    // event is that of the correlated *pair* -- which is also what GENIE hands
+    // over, as its gst struck-nucleon branches carry the two-nucleon cluster.
+    // n_nuc is written alongside so a later change of that policy needs no
+    // container rebuild. Nucleons after the lepton are final-state and must not
+    // be counted, which is why the loop stops there.
     pdglep = 0;
     lep_e_gev = lep_px_gev = lep_py_gev = lep_pz_gev = 0.0;
+    n_nuc = 0;
+    pdgnuc = 0;
+    nuc_e_gev = nuc_px_gev = nuc_py_gev = nuc_pz_gev = 0.0;
     for (int j = 1; j < nv->Npart(); ++j) {
       NeutPart* part = nv->PartInfo(j);
       if (!part) continue;
@@ -103,6 +127,22 @@ void nf_flatten(const char* in_path, const char* out_path) {
         lep_pz_gev = part->fP.Pz() / 1000.0;
         break;
       }
+      if (abs_pid == 2112 || abs_pid == 2212) {
+        if (n_nuc == 0) pdgnuc = part->fPID;
+        ++n_nuc;
+        nuc_e_gev += part->fP.E() / 1000.0;
+        nuc_px_gev += part->fP.Px() / 1000.0;
+        nuc_py_gev += part->fP.Py() / 1000.0;
+        nuc_pz_gev += part->fP.Pz() / 1000.0;
+      }
+    }
+    if (pdglep == 0) {
+      // No lepton found, so the scan ran to the end of the array and anything it
+      // collected may be final-state. The normalizer blanks the whole event on
+      // pdglep == 0 anyway; drop the nucleons rather than leave a wrong sum.
+      n_nuc = 0;
+      pdgnuc = 0;
+      nuc_e_gev = nuc_px_gev = nuc_py_gev = nuc_pz_gev = 0.0;
     }
     out_tree->Fill();
   }

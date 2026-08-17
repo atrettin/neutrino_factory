@@ -8,27 +8,47 @@ from unittest.mock import patch
 
 import numpy as np
 
-from tests.kinematics_reference import reference_kinematics, reference_lepton_p4
-from neutrino_factory.common_output import read_events
-from neutrino_factory.kinematics import KINEMATIC_FIELDS
+from tests.kinematics_reference import (
+    reference_kinematics,
+    reference_lepton_p4,
+    reference_nucleon_p4,
+)
+from neutrino_factory.common_output import (
+    RESONANT_PRIMARY_NO,
+    RESONANT_PRIMARY_UNKNOWN,
+    RESONANT_PRIMARY_YES,
+    read_events,
+)
+from neutrino_factory.kinematics import KINEMATIC_FIELDS, MISSING
 from neutrino_factory.normalizers.gibuu import GiBUUNormalizer
 
 
-def _write_roottuple(path: Path, lepIn_E, weight, evType, lepton_p4=None) -> None:
+def _write_roottuple(
+    path: Path, lepIn_E, weight, evType, lepton_p4=None, with_nucleon: bool = True
+) -> None:
     """Write a synthetic ``RootTuple`` tree.
 
     Unless ``lepton_p4`` is given, each event gets the reference scatter defined
     by :func:`reference_lepton_p4`: a beam neutrino along +z with |p| = E, and an
-    outgoing lepton at E_l = E/2 with (px, pz) = (0.3E, 0.4E).
+    outgoing lepton at E_l = E/2 with (px, pz) = (0.3E, 0.4E). ``with_nucleon``
+    off stands in for a file written before the ``nuc_*`` branches were read.
     """
     import uproot
 
     energies = np.array(lepIn_E, dtype=np.float64)
     lepton = np.asarray(reference_lepton_p4(energies) if lepton_p4 is None else lepton_p4,
                         dtype=np.float64)
+    nucleon = reference_nucleon_p4(energies)
 
     with uproot.recreate(path) as f:
+        nucleon_branches = {
+            "nuc_E": nucleon[:, 0],
+            "nuc_Px": nucleon[:, 1],
+            "nuc_Py": nucleon[:, 2],
+            "nuc_Pz": nucleon[:, 3],
+        } if with_nucleon else {}
         f["RootTuple"] = {
+            **nucleon_branches,
             "lepIn_E": energies,
             "lepIn_Px": np.zeros_like(energies),
             "lepIn_Py": np.zeros_like(energies),
@@ -185,6 +205,102 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
                 expected = reference_kinematics(energy)
                 for field in KINEMATIC_FIELDS:
                     self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+
+    def test_2p2h_blanks_the_true_w_because_only_one_nucleon_is_stored(self) -> None:
+        """GiBUU writes one of the 2p2h pair's nucleons; the pair is unrecoverable.
+
+        Filling w_true_gev from the single stored nucleon would give a
+        one-nucleon invariant mass ~1 GeV below the pair mass every other
+        generator supplies for the same channel.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            _write_roottuple(
+                _part(work_dir),
+                lepIn_E=[2.0, 2.0],
+                weight=[1.0] * 2,
+                evType=[1, 35],
+            )
+            out_path = work_dir / "out.h5"
+
+            GiBUUNormalizer().normalize(work_dir, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            self.assertEqual(events[1]["interaction"], "mec")
+            self.assertEqual(events[1]["w_true_gev"], MISSING)
+            # The quasi-elastic event is unaffected, and the lepton-only W needs
+            # no nucleon so it survives for both.
+            self.assertGreater(events[0]["w_true_gev"], 0.0)
+            for event in events:
+                self.assertGreater(event["w_gev"], 0.0)
+
+    def test_resonant_primary_follows_the_evtype(self) -> None:
+        """evType names the mechanism: 2-31 resonances, 32/33/34/37 non-resonant."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            _write_roottuple(
+                _part(work_dir),
+                lepIn_E=[1.0] * 5,
+                weight=[1.0] * 5,
+                evType=[2, 31, 32, 34, 1],
+            )
+            out_path = work_dir / "out.h5"
+
+            GiBUUNormalizer().normalize(work_dir, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            self.assertEqual(
+                [e["resonant_primary"] for e in events],
+                [
+                    RESONANT_PRIMARY_YES,     # 2  = Delta
+                    RESONANT_PRIMARY_YES,     # 31 = highest resonance
+                    RESONANT_PRIMARY_NO,      # 32 = 1pi background
+                    RESONANT_PRIMARY_NO,      # 34 = DIS
+                    RESONANT_PRIMARY_UNKNOWN, # 1  = quasi-elastic
+                ],
+            )
+
+    def test_missing_nucleon_branches_raise_naming_them(self) -> None:
+        """nuc_* comes from the same neutrinoProdInfo block as lepIn_*/evType.
+
+        If it is absent the file is not GiBUU output we understand, so it must
+        fail loudly rather than silently blank the whole run's w_true_gev.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            _write_roottuple(
+                _part(work_dir),
+                lepIn_E=[1.0],
+                weight=[1.0],
+                evType=[1],
+                with_nucleon=False,
+            )
+
+            with self.assertRaises(RuntimeError) as ctx:
+                GiBUUNormalizer().normalize(
+                    work_dir, work_dir / "out.h5", _base_task(), "local"
+                )
+            self.assertIn("nuc_E", str(ctx.exception))
+
+    def test_multiple_runs_keep_the_nucleon_aligned_with_the_lepton(self) -> None:
+        """Concatenating parts must not shift the nucleon column against the rest."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, num_runs=2)
+            _write_roottuple(_part(work_dir, 1), lepIn_E=[1.0], weight=[1.0], evType=[1])
+            _write_roottuple(_part(work_dir, 2), lepIn_E=[4.0], weight=[1.0], evType=[1])
+            out_path = work_dir / "out.h5"
+
+            GiBUUNormalizer().normalize(work_dir, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            for event, energy in zip(events, [1.0, 4.0]):
+                self.assertAlmostEqual(
+                    event["w_true_gev"], reference_kinematics(energy)["w_true_gev"], places=9
+                )
 
     def test_normalize_root_xsec_weight_matches_hand_derivation_for_flat_flux(self) -> None:
         # Flat power-law flux (gamma=0) over [0.5, 5.0] GeV: the unit-normalized

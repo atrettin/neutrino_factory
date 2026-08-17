@@ -9,7 +9,11 @@ from ..common_output import version_metadata, write_common_hdf5
 from ..flux import Flux, HistogramFlux
 from ..kinematics import KINEMATIC_FIELDS, derive_kinematics
 from ..translators.genie import GenieTranslator
-from .base import OutputNormalizer, interaction_from_flags
+from .base import (
+    OutputNormalizer,
+    interaction_from_flags,
+    resonant_primary_from_interaction,
+)
 
 
 class GenieNormalizer(OutputNormalizer):
@@ -127,6 +131,20 @@ class GenieNormalizer(OutputNormalizer):
                     "Cannot read lepton four-vectors from 'pxv/pyv/pzv' and 'El/pxl/pyl/pzl': "
                     f"{exc}"
                 ) from exc
+            try:
+                # The struck initial-state hadronic system, for w_true_gev. GENIE
+                # writes literal zeros (not NaN) into all four when there is no hit
+                # nucleon, and flags that case with hitnuc == 0 -- so the validity
+                # mask has to come from hitnuc, not from a finiteness check. For MEC
+                # this is the *two-nucleon cluster*, which is the quantity we want.
+                nucleon_p4 = np.column_stack([
+                    tree[branch].array(library="np") for branch in ("En", "pxn", "pyn", "pzn")
+                ])
+                hit_nucleon = tree["hitnuc"].array(library="np")
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Cannot read the struck nucleon from 'En/pxn/pyn/pzn' and 'hitnuc': {exc}"
+                ) from exc
 
         energies_gev = np.asarray(energies_gev, dtype=np.float64)
         weights_arr = np.asarray(weights, dtype=np.float64)
@@ -141,7 +159,21 @@ class GenieNormalizer(OutputNormalizer):
                 flag_qel, flag_res, flag_dis, flag_coh, flag_mec
             )
         ]
-        kinematics = derive_kinematics(nu_p4, lepton_p4, interactions)
+        # GENIE's channels are its generators: `res` is the Rein-Sehgal /
+        # Berger-Sehgal resonant calculation and `dis` is the DIS generator, which
+        # below Wcut is exactly the non-resonant background. So the mechanism
+        # follows from the label with nothing further to read.
+        resonant_primary = [
+            resonant_primary_from_interaction(itype, bool(res))
+            for itype, res in zip(interactions, flag_res)
+        ]
+        kinematics = derive_kinematics(
+            nu_p4,
+            lepton_p4,
+            interactions,
+            nucleon_p4=nucleon_p4,
+            nucleon_valid=np.asarray(hit_nucleon) != 0,
+        )
 
         # Declare how much this chunk's estimate is worth, so merging averages
         # the chunks instead of summing them (see ConfigTranslator.xsec_norm_count
@@ -162,6 +194,7 @@ class GenieNormalizer(OutputNormalizer):
                 "weight": float(w),
                 "xsec_weight": float(xw),
                 "is_cc": bool(is_cc),
+                "resonant_primary": resonant_primary[i],
                 "interaction": itype,
                 "probe": probe,
                 "target": target,

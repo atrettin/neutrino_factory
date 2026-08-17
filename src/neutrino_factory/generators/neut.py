@@ -12,7 +12,7 @@ import numpy as np
 from .base import GeneratorAdapter
 from .. import containers
 from ..flux import build_flux
-from ..normalizers.neut import NeutNormalizer
+from ..normalizers.neut import FlatSchemaError, NeutNormalizer
 from ..translators.neut import (
     FLUX_FILE,
     FLUX_HIST,
@@ -268,4 +268,20 @@ class NeutAdapter(GeneratorAdapter):
             actual = flat
         else:
             actual = Path(raw_output_path)
-        return NeutNormalizer().normalize(actual, normalized_output_path, task, execution_mode)
+
+        try:
+            return NeutNormalizer().normalize(
+                actual, normalized_output_path, task, execution_mode
+            )
+        except FlatSchemaError:
+            # An existing flat file is reused rather than regenerated, so one
+            # written by an older nf_flatten.C keeps serving a stale schema
+            # forever. Re-flattening is cheap (no regeneration), so do it once and
+            # retry; if the native output is gone there is nothing to recover and
+            # the error stands.
+            if actual != flat or not raw.exists():
+                raise
+            self._run_flatten(work_dir, task.get("code_version"))
+            return NeutNormalizer().normalize(
+                flat, normalized_output_path, task, execution_mode
+            )

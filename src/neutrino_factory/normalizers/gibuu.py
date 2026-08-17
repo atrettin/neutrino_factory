@@ -9,7 +9,7 @@ from ..common_output import version_metadata, write_common_hdf5
 from ..flux import build_flux
 from ..kinematics import KINEMATIC_FIELDS, derive_kinematics
 from ..translators.gibuu import GiBUUTranslator
-from .base import OutputNormalizer
+from .base import OutputNormalizer, resonant_primary_from_interaction
 
 
 # GiBUU writes one perturbative-event file per run: with
@@ -44,6 +44,24 @@ def pass_output_dirs(work_dir: Path) -> list[tuple[str, Path]]:
 # documented there, so an out-of-range value means our reading of the output is
 # wrong, not that GiBUU produced an exotic event -- hence the hard error below.
 MAX_GIBUU_EVTYPE = 37
+
+# The evType span of the non-strange baryon resonances (2 = Delta). Everything
+# else in the inelastic range -- 32/33 (1pi background), 34 (DIS), 37 (2pi
+# background) -- is non-resonant, which is what `resonant_primary` records.
+MIN_RESONANCE_EVTYPE = 2
+MAX_RESONANCE_EVTYPE = 31
+
+# 2p2h codes, for which the struck system is a nucleon *pair* but the output
+# carries only one of the two. GiBUU's own 2p2h cross section is built from
+# `eN%boson%mom + eN%nucleon%mom + eN%nucleon2%mom` (lepton2p2h.f90), yet
+# `doStoreNeutrinoInfo` (initNeutrino.f90) hands neutrinoProdInfo only
+# `eN%nucleon`, and `nucleon2` never reaches the RootTuple -- it survives solely
+# in the nuclear-residue bookkeeping. So w_true_gev cannot be computed here at
+# all: filling it from the single stored nucleon would silently produce a
+# one-nucleon invariant mass where every other generator supplies the pair,
+# ~1 GeV lower and indistinguishable from a real value downstream. Those events
+# get the placeholder instead.
+TWO_NUCLEON_EVTYPES = (35, 36)
 
 
 def _interaction_from_evtype(ev_type: int) -> str:
@@ -111,7 +129,7 @@ class GiBUUNormalizer(OutputNormalizer):
     @staticmethod
     def _read_parts(
         parts: list[Path],
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Read and concatenate the ``RootTuple`` branches across run files.
 
         Concatenation is the right combination here, unlike merging chunks: the
@@ -122,7 +140,8 @@ class GiBUUNormalizer(OutputNormalizer):
         import uproot
 
         columns: dict[str, list[np.ndarray]] = {
-            "energies": [], "weights": [], "ev_types": [], "nu_p4": [], "lepton_p4": []
+            "energies": [], "weights": [], "ev_types": [],
+            "nu_p4": [], "lepton_p4": [], "nucleon_p4": [],
         }
         for part in parts:
             with uproot.open(part) as f:
@@ -149,6 +168,14 @@ class GiBUUNormalizer(OutputNormalizer):
                 columns["lepton_p4"].append(np.column_stack([
                     branch(b) for b in ("lepOut_E", "lepOut_Px", "lepOut_Py", "lepOut_Pz")
                 ]))
+                # The struck nucleon, for w_true_gev. Written from the same
+                # neutrinoProdInfo block as weight/evType/lepIn_*, so it is filled
+                # for every event that is in the file at all — no validity mask is
+                # needed. GiBUU's default storeNucleon = 2 stores the *bound*
+                # nucleon, so its invariant mass sits below M_N.
+                columns["nucleon_p4"].append(np.column_stack([
+                    branch(b) for b in ("nuc_E", "nuc_Px", "nuc_Py", "nuc_Pz")
+                ]))
 
         return (
             np.concatenate(columns["energies"]),
@@ -156,6 +183,7 @@ class GiBUUNormalizer(OutputNormalizer):
             np.concatenate(columns["ev_types"]),
             np.concatenate(columns["nu_p4"]),
             np.concatenate(columns["lepton_p4"]),
+            np.concatenate(columns["nucleon_p4"]),
         )
 
     def _normalize_root(self, work_dir: Path, out_path, task: dict, mode: str) -> str:
@@ -222,9 +250,9 @@ class GiBUUNormalizer(OutputNormalizer):
             (pass_current, self._read_parts(parts))
             for pass_current, parts in parts_by_current
         ]
-        energies_gev, weights, ev_types, nu_p4, lepton_p4 = [
+        energies_gev, weights, ev_types, nu_p4, lepton_p4, nucleon_p4 = [
             np.concatenate([columns[index] for _, columns in per_pass])
-            for index in range(5)
+            for index in range(6)
         ]
         is_cc_flags = np.concatenate(
             [
@@ -241,7 +269,23 @@ class GiBUUNormalizer(OutputNormalizer):
         )
 
         interactions = [_interaction_from_evtype(int(ev_type)) for ev_type in ev_types]
-        kinematics = derive_kinematics(nu_p4, lepton_p4, interactions)
+        # GiBUU's evType names the mechanism directly: 2-31 are non-strange baryon
+        # resonances, while 32/33 (1pi background), 34 (DIS) and 37 (2pi
+        # background) are the non-resonant pieces. So, as for GENIE, the mechanism
+        # follows from the code already read.
+        resonant_primary = [
+            resonant_primary_from_interaction(
+                itype, MIN_RESONANCE_EVTYPE <= int(ev_type) <= MAX_RESONANCE_EVTYPE
+            )
+            for itype, ev_type in zip(interactions, ev_types)
+        ]
+        kinematics = derive_kinematics(
+            nu_p4,
+            lepton_p4,
+            interactions,
+            nucleon_p4=nucleon_p4,
+            nucleon_valid=~np.isin(ev_types, TWO_NUCLEON_EVTYPES),
+        )
 
         # Declare how much this chunk's estimate is worth, so merging averages
         # the chunks instead of summing them (see ConfigTranslator.xsec_norm_count
@@ -262,6 +306,7 @@ class GiBUUNormalizer(OutputNormalizer):
                 "weight": float(w),
                 "xsec_weight": float(xw),
                 "is_cc": bool(is_cc),
+                "resonant_primary": resonant_primary[i],
                 "interaction": itype,
                 "probe": probe,
                 "target": target,

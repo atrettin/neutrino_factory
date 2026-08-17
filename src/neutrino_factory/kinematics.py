@@ -17,6 +17,22 @@ Conventions:
 * Bjorken-x uses a **fixed** nucleon mass (see ``NUCLEON_MASS_GEV``) rather than
   the per-event struck-nucleon mass, so the variable is defined identically for
   all generators regardless of whether they expose the hit nucleon.
+* The hadronic invariant mass comes in **two** columns, because the two useful
+  definitions genuinely differ and the framework wants both:
+
+  - ``w_gev`` is the lepton-only, observable W, ``W^2 = M_N^2 + 2 M_N nu - Q^2``
+    against the same fixed nucleon mass as Bjorken-x. It needs nothing but the
+    two four-vectors, so it is defined identically for every generator.
+  - ``w_true_gev`` is ``W^2 = (p_nu + p_N - p_l)^2`` against the per-event struck
+    initial-state hadronic system, off-shell and Fermi-moving. This is the
+    quantity the generators cut on internally (GENIE's ``Wcut``, NEUT's
+    1.3 < W < 2.0 multi-pi window), so it is what reproduces their thresholds --
+    at the price of being generator-dependent where ``w_gev`` is not.
+
+  ``p_N`` is the struck initial-state hadronic *system*, not necessarily a single
+  nucleon: for 2p2h it is the correlated pair. GENIE hands over the two-nucleon
+  cluster for MEC events, so summing the pair is the only choice under which the
+  column means the same thing across generators.
 
 Missing/undefined values use one of two placeholders, because ``-1`` is a
 physical value for the two signed quantities:
@@ -46,6 +62,8 @@ MISSING_SIGNED = -999.0
 FIELD_DEFAULTS: dict[str, float] = {
     "q2_gev2": MISSING,
     "bjorken_x": MISSING,
+    "w_gev": MISSING,
+    "w_true_gev": MISSING,
     "inelasticity_y": MISSING,
     "lepton_energy_gev": MISSING,
     "lepton_momentum_gev": MISSING,
@@ -56,11 +74,12 @@ FIELD_DEFAULTS: dict[str, float] = {
 
 KINEMATIC_FIELDS = tuple(FIELD_DEFAULTS)
 
-# Interaction labels for which Bjorken-x is not meaningful. Coherent scattering
-# is off the nucleus as a whole, so there is no struck nucleon to define x
-# against; every other channel does scatter off a nucleon (x ~ 1 for quasi-elastic
-# is a useful and commonly plotted sanity check, so it is not suppressed).
-NO_BJORKEN_X_INTERACTIONS = frozenset({"coh"})
+# Interaction labels with no struck nucleon, for which the variables defined
+# against one are not meaningful: Bjorken-x and both W columns. Coherent
+# scattering is off the nucleus as a whole; every other channel does scatter off
+# a nucleon (x ~ 1 for quasi-elastic is a useful and commonly plotted sanity
+# check, so it is not suppressed).
+NO_STRUCK_NUCLEON_INTERACTIONS = frozenset({"coh"})
 
 
 def missing_kinematics(count: int) -> dict[str, np.ndarray]:
@@ -76,14 +95,26 @@ def derive_kinematics(
     lepton_p4: Any,
     interactions: Sequence[str] | np.ndarray | None = None,
     valid: Any = None,
+    *,
+    nucleon_p4: Any = None,
+    nucleon_valid: Any = None,
 ) -> dict[str, np.ndarray]:
     """Derive the kinematic columns from neutrino and outgoing-lepton four-vectors.
 
     ``nu_p4`` and ``lepton_p4`` are ``(n, 4)`` arrays of ``(E, px, py, pz)`` in GeV.
-    ``interactions`` is the per-event common-format interaction label (only used to
-    blank Bjorken-x for coherent events). ``valid`` is an optional boolean mask
-    marking events for which the generator actually supplied an outgoing lepton;
-    events outside it get placeholders throughout.
+    ``interactions`` is the per-event common-format interaction label (used to
+    blank the variables defined against a struck nucleon for coherent events).
+    ``valid`` is an optional boolean mask marking events for which the generator
+    actually supplied an outgoing lepton; events outside it get placeholders
+    throughout.
+
+    ``nucleon_p4`` is the optional ``(n, 4)`` four-momentum of the struck
+    initial-state hadronic system, which only some generators expose; without it
+    ``w_true_gev`` stays at its placeholder. ``nucleon_valid`` marks the events
+    for which it was actually filled -- pass it whenever ``nucleon_p4`` is given,
+    because every generator writes *zeros* rather than a sentinel when there is no
+    struck nucleon, and a zero four-vector is finite, so the finiteness check
+    below cannot catch it.
 
     Returns a dict keyed by ``KINEMATIC_FIELDS``, each a ``float64`` array of
     length ``n``.
@@ -127,17 +158,49 @@ def derive_kinematics(
         energy_transfer[positive_beam_energy] / e_nu[positive_beam_energy]
     )
 
-    # Bjorken-x against a fixed nucleon mass; undefined without a struck nucleon
-    # (coherent) or without a positive energy transfer.
-    has_x = energy_transfer > 0.0
+    # Whether the event scattered off a nucleon at all. Coherent scattering is off
+    # the nucleus as a whole, so Bjorken-x and both W columns are undefined there.
+    struck_nucleon = np.ones(index.size, dtype=bool)
     if interactions is not None:
         labels = np.asarray(interactions, dtype=object).reshape(-1)[index]
-        has_x &= np.array(
-            [str(label) not in NO_BJORKEN_X_INTERACTIONS for label in labels], dtype=bool
+        struck_nucleon = np.array(
+            [str(label) not in NO_STRUCK_NUCLEON_INTERACTIONS for label in labels], dtype=bool
         )
+
+    # Bjorken-x against a fixed nucleon mass; additionally undefined without a
+    # positive energy transfer, which it divides by.
+    has_x = struck_nucleon & (energy_transfer > 0.0)
     columns["bjorken_x"][index[has_x]] = q2[has_x] / (
         2.0 * NUCLEON_MASS_GEV * energy_transfer[has_x]
     )
+
+    # Lepton-only W against the same fixed nucleon mass, taken at rest:
+    # W^2 = M_N^2 + 2 M_N nu - Q^2. Unlike Bjorken-x this does not divide by nu, so
+    # a slightly negative energy transfer from Fermi motion is passed through
+    # rather than blanked. W^2 can still go negative in the high-Q^2 / low-nu
+    # corner; those events are blanked, never clamped -- a clamp would pile them up
+    # at exactly 0, indistinguishable from a measured value.
+    w2 = NUCLEON_MASS_GEV**2 + 2.0 * NUCLEON_MASS_GEV * energy_transfer - q2
+    has_w = struck_nucleon & (w2 > 0.0)
+    columns["w_gev"][index[has_w]] = np.sqrt(w2[has_w])
+
+    # True W against the struck initial-state hadronic system, when the generator
+    # exposes it: W^2 = (p_nu + p_N - p_l)^2.
+    if nucleon_p4 is not None:
+        nucleon = np.asarray(nucleon_p4, dtype=np.float64).reshape(-1, 4)
+        if nucleon.shape != nu.shape:
+            raise ValueError(
+                "Nucleon and neutrino four-vectors have different shapes: "
+                f"{nucleon.shape} vs {nu.shape}"
+            )
+        hadronic = nucleon[index] + nu[index] - lepton[index]
+        w2_true = hadronic[:, 0] ** 2 - np.einsum("ij,ij->i", hadronic[:, 1:], hadronic[:, 1:])
+        has_w_true = (
+            struck_nucleon & (w2_true > 0.0) & np.isfinite(nucleon[index]).all(axis=1)
+        )
+        if nucleon_valid is not None:
+            has_w_true &= np.asarray(nucleon_valid, dtype=bool).reshape(-1)[index]
+        columns["w_true_gev"][index[has_w_true]] = np.sqrt(w2_true[has_w_true])
 
     columns["lepton_energy_gev"][index] = e_lepton
     p_lepton_mag = np.linalg.norm(p_lepton, axis=1)
