@@ -17,6 +17,7 @@ neutrino-factory setup --pathway docker  # writes .env
  purge venv and SIF files from version control.
 
 ## Developer commands
+Before running any of the commands below, **check if you are already running inside the project `.venv`**. Check this with `which neutrino-factory`. If it returns a valid path, you are inside the correct environment and you should run the commands directly *without* prepending `source .venv/bin/activate && `.
 - Lint: `pyright`
 - Test: `python -m pytest` (single file: `python -m pytest tests/test_<module>.py`)
 - Validate config: `neutrino-factory validate-config --config <path>`
