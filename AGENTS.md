@@ -68,6 +68,6 @@ neutrino-factory setup --pathway docker  # writes .env
 - `NF_IMAGE_ROOT` — container images (SIF files)
 
 ## Reference files
-- `CLAUDE.md` — legacy Claude Code instructions (superseded by this file for OpenCode)
-- `ENVIRONMENT.md` — current environment facts (machine, cluster access, Docker/Apptainer status, env vars)
+- `ENVIRONMENT.md` — current environment facts (machine, cluster access, Docker/Apptainer status)
 - `.env` — written by `neutrino-factory setup`, loaded by CLI and scripts
+- `docs/README.md` – Framework documentation index. When making changes to the framework, always keep the documentation updated by using the `docs-maintenance` skill in the same session.

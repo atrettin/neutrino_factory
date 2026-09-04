@@ -45,3 +45,4 @@ notebooks/explore_output/
 # Literature directory. Contains papers that we cannot upload to GitHub for copyright reasons.
 literature/
 reports/
+.opencode/TODOS.md
