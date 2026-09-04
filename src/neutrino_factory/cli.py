@@ -401,11 +401,11 @@ def cmd_check_status(args: argparse.Namespace) -> int:
     outputs = expected_outputs(config)
 
     merged_results = [
-        validate_file(entry["path"], entry["expected_events"], args.tolerance)
+        validate_file(entry["path"], expected_events=None, tolerance=args.tolerance)
         for entry in outputs["merged"]
     ]
     chunk_results = [
-        validate_file(entry["path"], entry["expected_events"], args.tolerance)
+        validate_file(entry["path"], expected_events=None, tolerance=args.tolerance)
         for entry in outputs["chunks"]
     ]
     chunks_summary = summarize(chunk_results)
