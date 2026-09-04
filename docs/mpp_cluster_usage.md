@@ -111,6 +111,13 @@ Per-generator merged HDF5 files appear under `$NF_OUTPUT_ROOT/merged/`. Chunk
 merging currently happens in the local pipeline; after a Slurm run, merge
 chunks explicitly with `neutrino-factory merge` if needed.
 
+`check-status` also prints a per-job status table read from the per-chunk
+sidecars (`$NF_OUTPUT_ROOT/chunks/<job>/<chunk>.sidecar.json`): how many of a
+job's chunks have started/finished/validated, the first chunk start, the last
+chunk finish, and the average and maximum chunk run time. A chunk's sidecar is
+written when the task starts and updated when it finishes, so progress is
+visible while a run is in flight, before any HDF5 exists.
+
 ## First submission on a new cluster
 
 Working up from a scheduler-only smoke test isolates Slurm problems from

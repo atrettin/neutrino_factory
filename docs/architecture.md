@@ -110,6 +110,12 @@ Consequences worth knowing when changing this layer:
   `local.py` writes the files and `validate_output.expected_outputs` predicts
   them for `check-status`, `merge --config`, `plot-output` and
   `analyze-kinematics`.
+- Each chunk also writes a **sidecar** (`status.py`) beside its normalized HDF5:
+  `local.run_task` records the start time and task identity when the task begins
+  and updates it with the stop time, duration and output validity when it
+  finishes. `check-status` reads these to report a job's progress and wall-clock
+  cost even before any HDF5 exists — output existence alone cannot tell whether a
+  chunk has started, only that it has finished.
 - Anything that groups outputs — merging, plotting — must group by **job**, not
   by `(generator, version)`. Two jobs can share a generator version and differ
   in neutrino flavour or target nucleus.
