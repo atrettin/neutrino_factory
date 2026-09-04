@@ -1,0 +1,27 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "bash": {
+        "*": "ask",
+        "git *": "allow",
+        "npm *": "allow",
+        "rm *": "deny",
+        "grep *": "allow",
+        "neutrino-factory *": "allow",
+        "pyright *": "allow",
+        "pytest *": "allow",
+        "python -m pytest *": "allow",
+        "ls *": "allow",
+        "echo *": "allow",
+        "cat *": "allow",
+        "source .venv/bin/activate": "allow",
+        "tail *": "allow",
+        "which *": "allow",
+        "head *": "allow",
+        "mktemp *": "allow",
+        "sort *": "allow",
+        "uniq *": "allow"
+    },
+    "edit": "allow"
+  }
+}
