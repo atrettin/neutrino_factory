@@ -430,6 +430,7 @@ else
       log "  $gen:$cv"
     done
   fi
+fi
 
 # ── Build nf-dev.sif (development tools) ──────────────────────────────────────
 if [[ "$DEV_TOOLS" -eq 1 ]]; then

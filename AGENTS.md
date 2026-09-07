@@ -8,6 +8,7 @@ Neutrino monte carlo event generator orchestration. Compare cross sections betwe
 - Cross sections in `xsec_weight` column: **1e-38 cm² per target nucleon**. Kinematics: lab-frame, GeV/GeV². Merging chunks **averages** weights; never sums.
 - Fail loudly instead of filling placeholder values that could be mistaken for physical data.
 - Container images derive from adapters' version catalogs — no manual image config key.
+- Bash scripts: Always run `bash -n <script>` to check syntax after editing.
 
 ## Environment setup
 ```bash
