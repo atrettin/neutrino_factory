@@ -37,6 +37,7 @@ From: {{ CORE_IMAGE }}
         || { echo "nf-dev: apt install failed" >&2; exit 1; }
 
     # OpenCode CLI
+    export OPENCODE_INSTALL_DIR=/usr/local/bin
     curl -fsSL https://opencode.ai/install | bash
 
     # Python development tools
