@@ -36,6 +36,9 @@ From: {{ CORE_IMAGE }}
         && rm -rf /var/lib/apt/lists/* \
         || { echo "nf-dev: apt install failed" >&2; exit 1; }
 
+    # OpenCode CLI
+    curl -fsSL https://opencode.ai/install | bash
+
     # Python development tools
     pip install --no-cache-dir \
         "pyright>=1.1.0" \
@@ -82,6 +85,7 @@ EOF
     command -v curl
     command -v vim
     command -v pytest
+    command -v opencode
     python3 -c "import pyright; print('pyright OK')"
 
 %labels
