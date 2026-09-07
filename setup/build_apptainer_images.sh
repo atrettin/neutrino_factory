@@ -9,7 +9,8 @@
 # Usage:
 #   setup/build_apptainer_images.sh [--bootstrap] [--only genie,gibuu]
 #                                   [--code-version V] [--jobs N] [--force]
-#                                   [--compose-only] [--accept-defaults]
+#                                   [--compose-only] [--dev-tools]
+#                                   [--accept-defaults]
 #
 #   --bootstrap       Build only nf-base.sif (Python/bootstrap runtime only,
 #                     no generator payload composition). Works
@@ -27,6 +28,7 @@
 #   --force           Rebuild SIFs even if they already exist.
 #   --compose-only    Recompose nf-base.sif using currently available payload
 #                     SIFs only; skip all generator payload builds.
+#   --dev-tools       Build nf-dev.sif (development tools on top of nf-base).
 #   --accept-defaults Skip interactive prompts and use default values.
 
 set -euo pipefail
@@ -42,6 +44,7 @@ CODE_VERSION=""
 JOBS="${NF_BUILD_JOBS:-32}"
 FORCE=0
 COMPOSE_ONLY=0
+DEV_TOOLS=0
 ACCEPT_DEFAULTS=0
 
 prompt_image_root() {
@@ -120,9 +123,10 @@ while (($#)); do
     --jobs) JOBS="$2"; shift ;;
     --force) FORCE=1 ;;
     --compose-only) COMPOSE_ONLY=1 ;;
+    --dev-tools) DEV_TOOLS=1 ;;
     --accept-defaults) ACCEPT_DEFAULTS=1 ;;
     --help|-h)
-      sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) fail "Unknown argument: $1" ;;
@@ -420,6 +424,15 @@ else
     IFS='|' read -r sif gen cv <<< "$entry"
     log "  $gen:$cv"
   done
+fi
+
+# ── Build nf-dev.sif (development tools) ──────────────────────────────────────
+if [[ "$DEV_TOOLS" -eq 1 ]]; then
+  NF_DEV_SIF="$NF_IMAGE_ROOT/nf-dev.sif"
+  build_def "$NF_DEV_SIF" "$SCRIPT_DIR/apptainer/nf-dev.def"
+  apptainer exec "$NF_DEV_SIF" bash -lc 'command -v git && command -v pytest' \
+    || fail "nf-dev.sif failed its smoke test"
+  log "nf-dev.sif OK"
 fi
 
 log "Check the catalog in your cenv session with: neutrino-factory list-generators --built"

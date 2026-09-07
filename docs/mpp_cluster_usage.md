@@ -63,21 +63,36 @@ cd /ptmp/mpp/$USER/neutrino_factory/repo
 
 # 2. Build Apptainer images from a plain host shell (outside any container).
 #    This builds bootstrap + generator payload images and composes nf-base.sif.
+#    Add --dev-tools to also build nf-dev.sif with development utilities.
 #    Rerunning is safe: existing SIFs are skipped without --force.
-bash setup/build_apptainer_images.sh
+bash setup/build_apptainer_images.sh [--dev-tools]
 
 # 3. Stage GENIE cross-section splines and check the catalog in nf-base.sif
 bash setup/download_genie_xsec.sh
 apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" env PYTHONPATH="$PWD/src" \
   python3 -m neutrino_factory.cli list-generators --built
 
-# 4. After all images are built, create and enter an interactive cenv session
+# 4. For regular production runs, create and enter the base environment
 cenv --create nf-env "$NF_IMAGE_ROOT/nf-base.sif"
 cenv nf-env
 
-# 5. One-time setup inside the cenv session
+# 5. One-time setup inside the cenv session (for production)
 pip install -e .
 neutrino-factory setup --pathway apptainer --no-build
+
+# 6. For development work with VSCode remote:
+#    a) Build dev image (if not done in step 2):
+#       bash setup/build_apptainer_images.sh --dev-tools
+#    b) Create dev cenv environment:
+#       cenv --create nf-dev-env "$NF_IMAGE_ROOT/nf-dev.sif"
+#    c) Add to ~/.ssh/config on your LOCAL machine:
+#       Host nf-dev-remote
+#           HostName <cluster-host>
+#           User <username>
+#           RemoteCommand ~/.local/bin/cenv nf-dev-env
+#           RequestTTY yes
+#    d) Connect from VSCode using Remote-SSH to nf-dev-remote
+#       Your shell will automatically be inside the nf-dev container.
 ```
 
 If you later change `NF_IMAGE_ROOT` (via `.env` or the wizard), rerun

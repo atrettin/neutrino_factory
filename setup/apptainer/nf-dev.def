@@ -1,0 +1,110 @@
+# Development tools image for neutrino-factory
+#
+# Builds on top of nf-base.sif and adds a full development environment
+# including VSCode remote development tools, Python dev utilities,
+# debugging tools, and documentation generators.
+#
+# Usage: Build this image with:
+#   bash setup/build_apptainer_images.sh --dev-tools
+
+Bootstrap: localimage
+From: nf-base.sif
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    
+    # VSCode remote development and general utilities
+    apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+        git \
+        bash \
+        openssh-server \
+        vim \
+        nano \
+        htop \
+        strace \
+        gdb \
+        telnet \
+        netcat-openbsd \
+        wget \
+        make \
+        autoconf \
+        automake \
+        libtool \
+        pandoc \
+        graphviz \
+        && rm -rf /var/lib/apt/lists/* \
+        || { echo "nf-dev: apt install failed" >&2; exit 1; }
+
+    # Python development tools
+    pip install --no-cache-dir \
+        "pyright>=1.1.0" \
+        "pytest>=7.0" \
+        "pytest-cov>=4.0" \
+        "tox>=4.0" \
+        "virtualenv>=20.0" \
+        "black>=23.0" \
+        "isort>=5.0" \
+        "flake8>=6.0" \
+        "mypy>=1.0"
+
+    # Create helpful wrapper scripts
+    mkdir -p /usr/local/bin
+
+    # Script to check dev environment health
+    cat > /usr/local/bin/nf-dev-check <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "=== neutrino-factory dev environment check ==="
+
+echo -n "Python version: "
+python3 --version
+
+echo -n "Git version: "
+git --version
+
+echo -n "Pyright version: "
+pyright --version 2>&1 || echo "not installed"
+
+echo -n "pytest version: "
+python3 -c "import pytest; print(pytest.__version__)"
+
+echo -n "black version: "
+python3 -c "import black; print(black.__version__)"
+
+echo "=== Environment check complete ==="
+EOF
+    chmod +x /usr/local/bin/nf-dev-check
+
+%test
+    command -v git
+    command -v curl
+    command -v vim
+    command -v pytest
+    python3 -c "import pyright; print('pyright OK')"
+
+%labels
+    org.neutrino-factory.image nf-dev
+
+%help
+    neutrino-factory development tools image.
+    Built on top of nf-base.sif with additional development utilities.
+    
+    Key tools:
+      - Git, curl, vim, htop, strace, gdb
+      - Python: pytest, pyright, black, isort, flake8, mypy
+      - nf-dev-check: verify dev environment
+    
+    VSCode Remote Development Setup:
+      1. Build image: bash setup/build_apptainer_images.sh --dev-tools
+      2. Create cenv: cenv --create nf-dev-env "$NF_IMAGE_ROOT/nf-dev.sif"
+      3. Add to ~/.ssh/config on local machine:
+         Host nf-dev-remote
+             HostName <cluster-host>
+             User <username>
+             RemoteCommand ~/.local/bin/cenv nf-dev-env
+             RequestTTY yes
+      4. Connect from VSCode: Remote-SSH: Connect to Host nf-dev-remote
+    
+    The dev container is automatically entered via RemoteCommand.
