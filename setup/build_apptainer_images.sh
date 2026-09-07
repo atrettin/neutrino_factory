@@ -435,7 +435,8 @@ fi
 # ── Build nf-dev.sif (development tools) ──────────────────────────────────────
 if [[ "$DEV_TOOLS" -eq 1 ]]; then
   NF_DEV_SIF="$NF_IMAGE_ROOT/nf-dev.sif"
-  build_def "$NF_DEV_SIF" "$SCRIPT_DIR/apptainer/nf-dev.def"
+  NF_BASE_ABS="$(cd "$NF_IMAGE_ROOT" && pwd)/nf-base.sif"
+  build_def "$NF_DEV_SIF" "$SCRIPT_DIR/apptainer/nf-dev.def" --build-arg "CORE_IMAGE=$NF_BASE_ABS"
   apptainer exec "$NF_DEV_SIF" bash -lc 'command -v git && command -v pytest' \
     || fail "nf-dev.sif failed its smoke test"
   log "nf-dev.sif OK"

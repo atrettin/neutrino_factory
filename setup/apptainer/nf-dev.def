@@ -8,7 +8,7 @@
 #   bash setup/build_apptainer_images.sh --dev-tools
 
 Bootstrap: localimage
-From: nf-base.sif
+From: {{ CORE_IMAGE }}
 
 %post
     export DEBIAN_FRONTEND=noninteractive
