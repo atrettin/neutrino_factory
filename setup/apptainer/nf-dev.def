@@ -36,9 +36,15 @@ From: {{ CORE_IMAGE }}
         && rm -rf /var/lib/apt/lists/* \
         || { echo "nf-dev: apt install failed" >&2; exit 1; }
 
-    # OpenCode CLI
-    export OPENCODE_INSTALL_DIR=/usr/local/bin
-    curl -fsSL https://opencode.ai/install | bash
+    # OpenCode CLI — install the binary directly to a PATH-visible, baked-in location.
+    # The upstream install script ignores OPENCODE_INSTALL_DIR and hardcodes
+    # $HOME/.opencode/bin, so we bypass it entirely.
+    curl -fsSL -o /tmp/opencode.tar.gz \
+        "https://github.com/anomalyco/opencode/releases/latest/download/opencode-linux-x64.tar.gz" \
+        || { echo "nf-dev: opencode download failed" >&2; exit 1; }
+    tar -xzf /tmp/opencode.tar.gz -C /usr/local/bin
+    chmod 755 /usr/local/bin/opencode
+    rm -f /tmp/opencode.tar.gz
 
     # Python development tools
     pip install --no-cache-dir \
