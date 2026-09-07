@@ -33,10 +33,7 @@ From: {{ CORE_IMAGE }}
         libtool \
         pandoc \
         graphviz \
-        coreutils \
-        grep \
-        sed \
-        awk \
+        gawk \
         findutils \
         procps \
         file \
