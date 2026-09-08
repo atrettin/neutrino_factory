@@ -146,13 +146,13 @@ class NuWroNormalizer(OutputNormalizer):
                 # outgoing lepton at index 0. Components are (t, x, y, z) =
                 # (E, px, py, pz) in MeV.
                 in_arrays = [
-                    tree.arrays(filter_name=f"e/in/in.{c}", library="ak")[f"e/in/in.{c}"]
+                    tree.arrays(filter_name=f"e/in/in.{c}", library="ak")[f"in.{c}"]
                     for c in ("t", "x", "y", "z")
                 ]
                 nu_components = [_leading_component(values, ak) for values in in_arrays]
                 energies_mev = nu_components[0]
                 nucleon_p4_mev, has_nucleon = _summed_nucleons(
-                    in_arrays, tree.arrays(filter_name="e/in/in.pdg", library="ak")["e/in/in.pdg"], ak
+                    in_arrays, tree.arrays(filter_name="e/in/in.pdg", library="ak")["in.pdg"], ak
                 )
             except Exception as exc:
                 raise RuntimeError(
@@ -160,7 +160,7 @@ class NuWroNormalizer(OutputNormalizer):
                 ) from exc
             try:
                 out_arrays = [
-                    tree.arrays(filter_name=f"e/out/out.{c}", library="ak")[f"e/out/out.{c}"]
+                    tree.arrays(filter_name=f"e/out/out.{c}", library="ak")[f"out.{c}"]
                     for c in ("t", "x", "y", "z")
                 ]
                 lepton_components = [_leading_component(values, ak) for values in out_arrays]
@@ -170,7 +170,7 @@ class NuWroNormalizer(OutputNormalizer):
                     f"Cannot read outgoing lepton four-vector from branch 'e/out/out.*': {exc}"
                 ) from exc
             try:
-                weights = tree.arrays(filter_name="e/weight", library="np")["e/weight"]
+                weights = tree.arrays(filter_name="e/weight", library="np")["weight"]
             except Exception as exc:
                 raise RuntimeError(
                     f"Cannot read event weight from branch 'e/weight': {exc}"
@@ -178,7 +178,7 @@ class NuWroNormalizer(OutputNormalizer):
             try:
                 # The current is its own flag in the same struct; the class
                 # flags below (qel/res/...) span both currents.
-                flag_cc = tree.arrays(filter_name="e/flag/flag.cc", library="np")["e/flag/flag.cc"]
+                flag_cc = tree.arrays(filter_name="e/flag/flag.cc", library="np")["flag.cc"]
             except Exception as exc:
                 raise RuntimeError(
                     f"Cannot read the current flag from 'e/flag/flag.cc': {exc}"
@@ -197,19 +197,19 @@ class NuWroNormalizer(OutputNormalizer):
                 # nucleon-pion pair without setting it, so the flag would read
                 # false across the whole Delta peak and quietly invert the meaning
                 # of this column.
-                res_kind = tree.arrays(filter_name="e/par/par.res_kind", library="np")["e/par/par.res_kind"]
-                flag_res_delta = tree.arrays(filter_name="e/flag/flag.res_delta", library="np")["e/flag/flag.res_delta"]
+                res_kind = tree.arrays(filter_name="e/par/par.res_kind", library="np")["par.res_kind"]
+                flag_res_delta = tree.arrays(filter_name="e/flag/flag.res_delta", library="np")["flag.res_delta"]
             except Exception as exc:
                 raise RuntimeError(
                     "Cannot read 'e/par/par.res_kind' / 'e/flag/flag.res_delta', "
                     f"needed for the resonant_primary column: {exc}"
                 ) from exc
             try:
-                flag_qel = tree.arrays(filter_name="e/flag/flag.qel", library="np")["e/flag/flag.qel"]
-                flag_res = tree.arrays(filter_name="e/flag/flag.res", library="np")["e/flag/flag.res"]
-                flag_dis = tree.arrays(filter_name="e/flag/flag.dis", library="np")["e/flag/flag.dis"]
-                flag_coh = tree.arrays(filter_name="e/flag/flag.coh", library="np")["e/flag/flag.coh"]
-                flag_mec = tree.arrays(filter_name="e/flag/flag.mec", library="np")["e/flag/flag.mec"]
+                flag_qel = tree.arrays(filter_name="e/flag/flag.qel", library="np")["flag.qel"]
+                flag_res = tree.arrays(filter_name="e/flag/flag.res", library="np")["flag.res"]
+                flag_dis = tree.arrays(filter_name="e/flag/flag.dis", library="np")["flag.dis"]
+                flag_coh = tree.arrays(filter_name="e/flag/flag.coh", library="np")["flag.coh"]
+                flag_mec = tree.arrays(filter_name="e/flag/flag.mec", library="np")["flag.mec"]
             except Exception as exc:
                 raise RuntimeError(
                     f"Cannot read interaction flags from 'e/flag/flag.*': {exc}"
