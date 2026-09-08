@@ -52,8 +52,6 @@ Before running any of the commands below, ensure the correct environment is acti
 - Cluster scripts use `apptainer` directly; interactive work via `cenv nf-env` or `cenv nf-dev`
 - Mandatory Slurm partition: `--partition=alma` on new cluster. Max duration: 1 day.
 - Filesystems: `/u` (home, 125 GB, backed up), `/ptmp/mpp/$USER` (6 TB, shared, no backup). Use `/ptmp` for repo, images, output, work. `/scratch` is NOT accessible inside containers.
-- outbound HTTPS works for downloading sources during container builds.
-- OpenCode agents: cannot run cluster code directly. Provide user with concise commands to run and report results.
 
 ## Architecture essentials
 - Entry point: `neutrino-factory` CLI (`src/neutrino_factory/cli.py`)
