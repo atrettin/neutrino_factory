@@ -53,8 +53,12 @@ class NeutAdapterArtifactTests(unittest.TestCase):
         adapter = NeutAdapter(config)
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
-            with patch.object(NeutAdapter, "container_available", return_value=False):
-                command = adapter.build_run_command(_translated(config), work_dir)
+            # Pinned to the docker runtime so the command form is bare regardless
+            # of whether a neutroot2 shim is on $PATH (dev image) or not.
+            env = {"NF_CONTAINER_RUNTIME": "docker"}
+            with patch.dict(os.environ, env, clear=False):
+                with patch.object(NeutAdapter, "container_available", return_value=False):
+                    command = adapter.build_run_command(_translated(config), work_dir)
 
             self.assertEqual(command, ["neutroot2", "neut.card", "events.neut.root"])
             for name in ("neut.card", "flux.root", "ranseed.dat", "translated_config.json"):
@@ -132,15 +136,19 @@ class NeutAdapterCommandBranchTests(unittest.TestCase):
     def test_native_binary_wins_over_available_container(self) -> None:
         # Cluster-critical branch: inside the composed Apptainer image the
         # binary is on $PATH and must be run directly (no container wrapping).
+        # Pinned to the docker runtime: under apptainer the same branch emits
+        # the nf-run dispatch form, which test_apptainer_dispatch.py covers.
         config = _config()
         adapter = NeutAdapter(config)
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch(
-                "neutrino_factory.generators.neut.shutil.which",
-                return_value="/opt/neut/bin/neutroot2",
-            ):
-                with patch.object(NeutAdapter, "container_available", return_value=True):
-                    command = adapter.build_run_command(_translated(config), Path(tmpdir))
+            env = {"NF_CONTAINER_RUNTIME": "docker"}
+            with patch.dict(os.environ, env, clear=False):
+                with patch(
+                    "neutrino_factory.generators.neut.shutil.which",
+                    return_value="/opt/neut/bin/neutroot2",
+                ):
+                    with patch.object(NeutAdapter, "container_available", return_value=True):
+                        command = adapter.build_run_command(_translated(config), Path(tmpdir))
 
         self.assertEqual(command[0], "neutroot2")
         self.assertNotIn("docker", command)

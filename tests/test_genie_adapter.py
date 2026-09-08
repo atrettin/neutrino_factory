@@ -164,13 +164,17 @@ class GenieAdapterTests(unittest.TestCase):
     def test_native_binary_wins_over_available_container(self) -> None:
         # Cluster-critical branch: inside the generator's Apptainer image the
         # binary is on $PATH and must be run directly (no container wrapping).
+        # Pinned to the docker runtime: under apptainer the same branch emits
+        # the nf-run dispatch form, which test_apptainer_dispatch.py covers.
         with tempfile.TemporaryDirectory() as tmpdir:
             adapter = GenieAdapter(self._base_config(tmpdir))
-            with patch("neutrino_factory.generators.genie.shutil.which", return_value="/opt/genie/bin/gevgen"):
-                with patch.object(GenieAdapter, "container_available", return_value=True):
-                    command = adapter.build_run_command(
-                        self._translated_config("G18_10a_02_11a"), Path(tmpdir)
-                    )
+            env = {"NF_CONTAINER_RUNTIME": "docker"}
+            with patch.dict(os.environ, env, clear=False):
+                with patch("neutrino_factory.generators.genie.shutil.which", return_value="/opt/genie/bin/gevgen"):
+                    with patch.object(GenieAdapter, "container_available", return_value=True):
+                        command = adapter.build_run_command(
+                            self._translated_config("G18_10a_02_11a"), Path(tmpdir)
+                        )
 
         self.assertEqual(command[0], "gevgen")
         self.assertNotIn("docker", command)
