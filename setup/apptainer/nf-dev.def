@@ -1,0 +1,135 @@
+# Development tools image for neutrino-factory
+#
+# Builds on top of nf-base.sif and adds a full development environment
+# including VSCode remote development tools, Python dev utilities,
+# debugging tools, and documentation generators.
+#
+# Usage: Build this image with:
+#   bash setup/build_apptainer_images.sh --dev-tools
+
+Bootstrap: localimage
+From: {{ CORE_IMAGE }}
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    
+    # VSCode remote development and general utilities
+    apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+        git \
+        bash \
+        openssh-server \
+        vim \
+        nano \
+        htop \
+        strace \
+        gdb \
+        telnet \
+        netcat-openbsd \
+        wget \
+        make \
+        autoconf \
+        automake \
+        libtool \
+        pandoc \
+        graphviz \
+        gawk \
+        findutils \
+        procps \
+        file \
+        tar \
+        gzip \
+        bzip2 \
+        xz-utils \
+        && rm -rf /var/lib/apt/lists/* \
+        || { echo "nf-dev: apt install failed" >&2; exit 1; }
+
+    # OpenCode CLI — install the binary directly to a PATH-visible, baked-in location.
+    # The upstream install script ignores OPENCODE_INSTALL_DIR and hardcodes
+    # $HOME/.opencode/bin, so we bypass it entirely.
+    curl -fsSL -o /tmp/opencode.tar.gz \
+        "https://github.com/anomalyco/opencode/releases/latest/download/opencode-linux-x64.tar.gz" \
+        || { echo "nf-dev: opencode download failed" >&2; exit 1; }
+    tar -xzf /tmp/opencode.tar.gz -C /usr/local/bin
+    chmod 755 /usr/local/bin/opencode
+    rm -f /tmp/opencode.tar.gz
+
+    # Python development tools
+    # pyright needs the [nodejs] extra: the image has no system Node, and
+    # pyright's runtime nodeenv download fails under Apptainer containment.
+    pip install --no-cache-dir \
+        "pyright[nodejs]>=1.1.0" \
+        "pytest>=7.0" \
+        "pytest-cov>=4.0" \
+        "tox>=4.0" \
+        "virtualenv>=20.0" \
+        "black>=23.0" \
+        "isort>=5.0" \
+        "flake8>=6.0" \
+        "mypy>=1.0"
+
+    # Create helpful wrapper scripts
+    mkdir -p /usr/local/bin
+
+    # Script to check dev environment health
+    cat > /usr/local/bin/nf-dev-check <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "=== neutrino-factory dev environment check ==="
+
+echo -n "Python version: "
+python3 --version
+
+echo -n "Git version: "
+git --version
+
+echo -n "Pyright version: "
+pyright --version 2>&1 || echo "not installed"
+
+echo -n "pytest version: "
+python3 -c "import pytest; print(pytest.__version__)"
+
+echo -n "black version: "
+python3 -c "import black; print(black.__version__)"
+
+echo "=== Environment check complete ==="
+EOF
+    chmod +x /usr/local/bin/nf-dev-check
+
+%test
+    command -v git
+    command -v curl
+    command -v vim
+    command -v pytest
+    command -v opencode
+    command -v grep
+    command -v sed
+    command -v awk
+    command -v find
+    python3 -c "import pyright; print('pyright OK')"
+
+%labels
+    org.neutrino-factory.image nf-dev
+
+%help
+    neutrino-factory development tools image.
+    Built on top of nf-base.sif with additional development utilities.
+    
+    Key tools:
+      - Git, curl, vim, htop, strace, gdb
+      - Python: pytest, pyright, black, isort, flake8, mypy
+      - nf-dev-check: verify dev environment
+    
+    VSCode Remote Development Setup:
+      1. Build image: bash setup/build_apptainer_images.sh --dev-tools
+      2. Create cenv: cenv --create nf-dev-env "$NF_IMAGE_ROOT/nf-dev.sif"
+      3. Add to ~/.ssh/config on local machine:
+         Host nf-dev-remote
+             HostName <cluster-host>
+             User <username>
+             RemoteCommand ~/.local/bin/cenv nf-dev-env
+             RequestTTY yes
+      4. Connect from VSCode: Remote-SSH: Connect to Host nf-dev-remote
+    
+    The dev container is automatically entered via RemoteCommand.

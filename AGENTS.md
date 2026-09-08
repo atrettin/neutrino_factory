@@ -8,6 +8,7 @@ Neutrino monte carlo event generator orchestration. Compare cross sections betwe
 - Cross sections in `xsec_weight` column: **1e-38 cm² per target nucleon**. Kinematics: lab-frame, GeV/GeV². Merging chunks **averages** weights; never sums.
 - Fail loudly instead of filling placeholder values that could be mistaken for physical data.
 - Container images derive from adapters' version catalogs — no manual image config key.
+- Bash scripts: Always run `bash -n <script>` to check syntax after editing.
 
 ## Environment setup
 ```bash
@@ -17,7 +18,24 @@ neutrino-factory setup --pathway docker  # writes .env
  purge venv and SIF files from version control.
 
 ## Developer commands
-Before running any of the commands below, **check if you are already running inside the project `.venv`**. Check this with `which neutrino-factory`. If it returns a valid path, you are inside the correct environment and you should run the commands directly *without* prepending `source .venv/bin/activate && `.
+Before running any of the commands below, ensure the correct environment is active. Follow this logic flow:
+
+1. **Check if `neutrino-factory` command resolves**: `which neutrino-factory`
+   - If yes: All commands are available, run them directly
+   - If no: Continue to step 2
+
+2. **Determine environment type**:
+   - **Local environment**: Check for `.venv` directory in repo root
+     - If `.venv` exists: Activate with `source .venv/bin/activate`
+     - If no `.venv`: Create with `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"`
+   - **Cluster environment**: Check for `apptainer` command availability
+     - If `apptainer` is available: You're in a bare shell on the cluster
+       - Run `neutrino-factory` commands with `apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" env PYTHONPATH="$PWD/src" python3 -m neutrino_factory.cli <command> ...`
+       - Run `apptainer` and `bash` commands directly in the bare shell
+     - If `apptainer` is NOT available: You're already inside a container
+       - If `neutrino-factory` is still not available: STOP and run `pip install -e ".[dev]"` to install the package and its requirements
+       - If `neutrino-factory` IS available: Continue with commands directly
+
 - Lint: `pyright`
 - Test: `python -m pytest` (single file: `python -m pytest tests/test_<module>.py`)
 - Validate config: `neutrino-factory validate-config --config <path>`
@@ -27,14 +45,13 @@ Before running any of the commands below, **check if you are already running ins
 - Analyze kinematics: `neutrino-factory analyze-kinematics --config <path>`
 
 ## Cluster constraints
-- **No Docker** on MPP cluster — use Apptainer only. Two workflows exist:
+- **No Docker** on MPP cluster — use Apptainer only. Workflows:
   - **Bare shell (host)**: First-time setup and Apptainer image management (building, pulling) must run from a plain host shell on an interactive cluster node using Bash scripts only. No Python available.
-  - **Inside `nf-base.sif`**: All framework usage (`neutrino-factory` CLI, generator execution, Python scripts) requires entering the Apptainer image first (via `cenv nf-env` or `apptainer exec`).
-- Cluster scripts use `apptainer` directly; interactive work via `cenv nf-env`.
+  - **Inside `nf-base.sif`**: Production runs (`neutrino-factory` CLI, generator execution, Python scripts) via `cenv nf-env`.
+  - **Inside `nf-dev.sif`**: Contains all packages `nf-base.sif` contains, and also packages necessary for development, testing and remote management with VSCode (`curl`, `git`, `nano`, `wget`, `pyright`, `pytest`, etc.). See `setup/apptainer/nf-dev.def` for full package list. If you are on a cluster, can run `neutrino-factory` but are missing the development packages, STOP and tell the user to build the development image. This CANNOT be done by you if you are already running from inside a container, because `apptainer` is not available.
+- Cluster scripts use `apptainer` directly; interactive work via `cenv nf-env` or `cenv nf-dev`
 - Mandatory Slurm partition: `--partition=alma` on new cluster. Max duration: 1 day.
 - Filesystems: `/u` (home, 125 GB, backed up), `/ptmp/mpp/$USER` (6 TB, shared, no backup). Use `/ptmp` for repo, images, output, work. `/scratch` is NOT accessible inside containers.
-- outbound HTTPS works for downloading sources during container builds.
-- OpenCode agents: cannot run cluster code directly. Provide user with concise commands to run and report results.
 
 ## Architecture essentials
 - Entry point: `neutrino-factory` CLI (`src/neutrino_factory/cli.py`)

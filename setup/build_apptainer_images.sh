@@ -9,7 +9,8 @@
 # Usage:
 #   setup/build_apptainer_images.sh [--bootstrap] [--only genie,gibuu]
 #                                   [--code-version V] [--jobs N] [--force]
-#                                   [--compose-only] [--accept-defaults]
+#                                   [--compose-only] [--dev-tools]
+#                                   [--accept-defaults]
 #
 #   --bootstrap       Build only nf-base.sif (Python/bootstrap runtime only,
 #                     no generator payload composition). Works
@@ -27,6 +28,8 @@
 #   --force           Rebuild SIFs even if they already exist.
 #   --compose-only    Recompose nf-base.sif using currently available payload
 #                     SIFs only; skip all generator payload builds.
+#   --dev-tools       Build nf-dev.sif (development tools on top of nf-base).
+#                     Skips nf-base recompose unless --force is also passed.
 #   --accept-defaults Skip interactive prompts and use default values.
 
 set -euo pipefail
@@ -42,6 +45,7 @@ CODE_VERSION=""
 JOBS="${NF_BUILD_JOBS:-32}"
 FORCE=0
 COMPOSE_ONLY=0
+DEV_TOOLS=0
 ACCEPT_DEFAULTS=0
 
 prompt_image_root() {
@@ -120,9 +124,10 @@ while (($#)); do
     --jobs) JOBS="$2"; shift ;;
     --force) FORCE=1 ;;
     --compose-only) COMPOSE_ONLY=1 ;;
+    --dev-tools) DEV_TOOLS=1 ;;
     --accept-defaults) ACCEPT_DEFAULTS=1 ;;
     --help|-h)
-      sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) fail "Unknown argument: $1" ;;
@@ -369,57 +374,72 @@ else
   done
   cat "$SCRIPT_DIR/apptainer/nf-base.def" >> "$tmp_nf_base_def"
 
-  # Always recompose (do not honour the skip-if-exists in build_def): composition
-  # is cheap and must reflect the current payload set, so adding/removing a
-  # generator version takes effect without requiring --force.
-  log "Composing $NF_BASE_SIF from ${#PAYLOADS[@]} payload(s)"
-  nice -n 15 apptainer build --force "$NF_BASE_SIF" "$tmp_nf_base_def"
-  rm -f "$tmp_nf_base_def"
+  # When --dev-tools is passed without --force, skip recomposing nf-base if it exists
+  if [[ "$DEV_TOOLS" -eq 1 && "$FORCE" -ne 1 && -f "$NF_BASE_SIF" ]]; then
+    log "nf-base.sif exists and --dev-tools --force not specified; skipping recompose"
+  else
+    # Always recompose (do not honour the skip-if-exists in build_def): composition
+    # is cheap and must reflect the current payload set, so adding/removing a
+    # generator version takes effect without requiring --force.
+    log "Composing $NF_BASE_SIF from ${#PAYLOADS[@]} payload(s)"
+    nice -n 15 apptainer build --force "$NF_BASE_SIF" "$tmp_nf_base_def"
+    rm -f "$tmp_nf_base_def"
 
-  apptainer exec "$NF_BASE_SIF" python3 -c "import yaml, h5py, numpy" \
-    || fail "nf-base.sif (composed) failed its smoke test"
-  apptainer exec "$NF_BASE_SIF" bash -lc 'command -v nf-run' >/dev/null \
-    || fail "nf-base.sif (composed) is missing the nf-run dispatcher"
+    apptainer exec "$NF_BASE_SIF" python3 -c "import yaml, h5py, numpy" \
+      || fail "nf-base.sif (composed) failed its smoke test"
+    apptainer exec "$NF_BASE_SIF" bash -lc 'command -v nf-run' >/dev/null \
+      || fail "nf-base.sif (composed) is missing the nf-run dispatcher"
 
-  # Generic, descriptor-driven verification (no per-generator knowledge): every
-  # payload's declared binaries and smoke_paths must exist in the composed image,
-  # and each generator's default binary must be on $PATH (default symlink).
-  declare -A DEFAULT_SEEN=()
-  for entry in "${PAYLOADS[@]}"; do
-    IFS='|' read -r sif gen cv <<< "$entry"
-    cv_safe="$(tag_safe "$cv")"
-    root="/opt/nf/generators/$gen/$cv_safe"
-    desc="$root/nf-payload.json"
+    # Generic, descriptor-driven verification (no per-generator knowledge): every
+    # payload's declared binaries and smoke_paths must exist in the composed image,
+    # and each generator's default binary must be on $PATH (default symlink).
+    declare -A DEFAULT_SEEN=()
+    for entry in "${PAYLOADS[@]}"; do
+      IFS='|' read -r sif gen cv <<< "$entry"
+      cv_safe="$(tag_safe "$cv")"
+      root="/opt/nf/generators/$gen/$cv_safe"
+      desc="$root/nf-payload.json"
 
-    bins="$(json_field "$NF_BASE_SIF" "$desc" '" ".join(d["binaries"])')"
-    [[ -n "$bins" ]] || fail "nf-base.sif (composed) missing descriptor for $gen:$cv"
-    for b in $bins; do
-      apptainer exec "$NF_BASE_SIF" test -x "$root/bin/$b" \
-        || fail "nf-base.sif (composed) missing wrapper $root/bin/$b"
-    done
+      bins="$(json_field "$NF_BASE_SIF" "$desc" '" ".join(d["binaries"])')"
+      [[ -n "$bins" ]] || fail "nf-base.sif (composed) missing descriptor for $gen:$cv"
+      for b in $bins; do
+        apptainer exec "$NF_BASE_SIF" test -x "$root/bin/$b" \
+          || fail "nf-base.sif (composed) missing wrapper $root/bin/$b"
+      done
 
-    paths="$(json_field "$NF_BASE_SIF" "$desc" '" ".join(d.get("smoke_paths", []))')"
-    for p in $paths; do
-      apptainer exec "$NF_BASE_SIF" test -e "$root/$p" \
-        || fail "nf-base.sif (composed) missing smoke path $root/$p"
-    done
+      paths="$(json_field "$NF_BASE_SIF" "$desc" '" ".join(d.get("smoke_paths", []))')"
+      for p in $paths; do
+        apptainer exec "$NF_BASE_SIF" test -e "$root/$p" \
+          || fail "nf-base.sif (composed) missing smoke path $root/$p"
+      done
 
-    if [[ -z "${DEFAULT_SEEN[$gen]:-}" ]]; then
-      default_bin="$(json_field "$NF_BASE_SIF" "$desc" 'd.get("default_binary","")')"
-      if [[ -n "$default_bin" ]]; then
-        apptainer exec "$NF_BASE_SIF" bash -lc "command -v '$default_bin'" >/dev/null \
-          || fail "nf-base.sif (composed) missing default symlink for $gen ($default_bin)"
+      if [[ -z "${DEFAULT_SEEN[$gen]:-}" ]]; then
+        default_bin="$(json_field "$NF_BASE_SIF" "$desc" 'd.get("default_binary","")')"
+        if [[ -n "$default_bin" ]]; then
+          apptainer exec "$NF_BASE_SIF" bash -lc "command -v '$default_bin'" >/dev/null \
+            || fail "nf-base.sif (composed) missing default symlink for $gen ($default_bin)"
+        fi
+        DEFAULT_SEEN[$gen]=1
       fi
-      DEFAULT_SEEN[$gen]=1
-    fi
-  done
+    done
 
-  log "nf-base.sif (composed) OK"
-  log "Composed payloads:"
-  for entry in "${PAYLOADS[@]}"; do
-    IFS='|' read -r sif gen cv <<< "$entry"
-    log "  $gen:$cv"
-  done
+    log "nf-base.sif (composed) OK"
+    log "Composed payloads:"
+    for entry in "${PAYLOADS[@]}"; do
+      IFS='|' read -r sif gen cv <<< "$entry"
+      log "  $gen:$cv"
+    done
+  fi
+fi
+
+# ── Build nf-dev.sif (development tools) ──────────────────────────────────────
+if [[ "$DEV_TOOLS" -eq 1 ]]; then
+  NF_DEV_SIF="$NF_IMAGE_ROOT/nf-dev.sif"
+  NF_BASE_ABS="$(cd "$NF_IMAGE_ROOT" && pwd)/nf-base.sif"
+  build_def "$NF_DEV_SIF" "$SCRIPT_DIR/apptainer/nf-dev.def" --build-arg "CORE_IMAGE=$NF_BASE_ABS"
+  apptainer exec "$NF_DEV_SIF" bash -lc 'command -v git && command -v pytest' \
+    || fail "nf-dev.sif failed its smoke test"
+  log "nf-dev.sif OK"
 fi
 
 log "Check the catalog in your cenv session with: neutrino-factory list-generators --built"
