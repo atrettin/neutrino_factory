@@ -21,6 +21,14 @@ tune is "available" exactly when its splines are present. `list-generators` show
 it only then, and `ensure_compatible(require_available=True)` (real, non-stub
 runs) refuses a tune with no staged spline.
 
+The staged spline is a *necessary* but not *sufficient* condition: `gevgen` also
+needs the tune's physics-configuration directory inside the **code payload**
+(`$GENIE/config/<family>/<tune>`), and nothing checks that at config time.
+Observed (2026-09, ODSL): `N18_10j_02_11a` had its spline staged under
+R-3_04_00, passed validation, yet `gevgen` aborted at run start with
+`FATAL TuneId: No valid tune directory associated with N18_10j_02_11a` because
+the R-3_04_00 payload ships no `N18_10j` directory.
+
 The FNAL SciSoft tarballs name tunes with the underscores stripped
 (`G1810a0211a` for `G18_10a_02_11a`), so lookup falls back to a
 separator-insensitive match (`_normalize_tune`). `setup/download_genie_xsec.sh`
