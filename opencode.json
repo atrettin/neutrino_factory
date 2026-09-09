@@ -20,7 +20,12 @@
         "head *": "allow",
         "mktemp *": "allow",
         "sort *": "allow",
-        "uniq *": "allow"
+        "uniq *": "allow",
+        "date *": "allow",
+        "bc *": "allow",
+        "strings *": "allow",
+        "awk *": "allow",
+        "sleep *": "allow"
     },
     "edit": "allow"
   }
