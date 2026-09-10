@@ -10,14 +10,6 @@ Neutrino monte carlo event generator orchestration. Compare cross sections betwe
 - Container images derive from adapters' version catalogs — no manual image config key.
 - Bash scripts: Always run `bash -n <script>` to check syntax after editing.
 
-## Environment setup
-**Local (Docker) workflow only.** On the cluster, first-time setup can only be done from a bare host shell, which agents are not allowed to access — see `ENVIRONMENT.md`. Do not attempt cluster setup from inside a container.
-```bash
-python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
-neutrino-factory setup --pathway docker  # writes .env
-```
- purge venv and SIF files from version control.
-
 ## Developer commands
 Before running any of the commands below, ensure the correct environment is active. Follow this logic flow:
 
