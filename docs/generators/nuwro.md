@@ -292,6 +292,14 @@ nucleon that `e/in` reports.
 
 ## Known limitations
 
+- **NuWro 25.11 aborts with a ROOT buffer overflow on `numubar` × W184.**
+  The binary dies with `*** buffer overflow detected ***: terminated`
+  (SIGABRT) after finishing event generation, at every event count ≥ 3k
+  (2k happens to pass). Reproduced twice on the odslserv01 interactive node
+  (keystone_v2_sizing). The other three flavors and lighter nuclei are
+  unaffected at 10k — `nue`/`nuebar` on W184 and `numubar` on Fe56 all pass.
+  The cause is not diagnosed; the production grid therefore drops the
+  `nuwro/W184/numubar` combination.
 - `config_version` is `"default"` only; real parameter-set versions are not yet
   defined (tracked in `.claude/TODOS.md`).
 - `run.log_level` is ignored — only the GENIE adapter maps it (tracked in
