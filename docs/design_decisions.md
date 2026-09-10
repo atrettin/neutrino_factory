@@ -358,3 +358,32 @@ marks every resonant final state under the hybrid model (`res_kind = 2`, the
 default). Under `resevent2.cc` the below-PYTHIA-threshold branch leaves it false,
 which would label the entire Δ peak non-resonant — a silent, total inversion. The
 normalizer raises instead of filling the column from a run it cannot interpret.
+
+## Per-chunk sidecars record run progress and timing (2026-09)
+
+**The problem.** A chunk's only observable state used to be its HDF5 file: absent
+meant not-done, present meant done. That cannot tell whether a task has *started*
+but not finished (so a long-running job looks identical to one that crashed
+before writing anything), and a finished file carries no wall-clock cost.
+
+**The decision.** Each chunk writes a small JSON sidecar (`<chunk>.sidecar.json`)
+beside its normalized HDF5, through `local.run_task` — the single funnel every
+executor (local and Slurm) passes through. At task start it records the start
+time and the task's identity; at finish it is updated with the stop time,
+wall-clock duration and whether the normalized output validated. `check-status`
+rolls these up into a per-job table: started/finished/valid chunk counts, first
+start, last finish, and average/maximum chunk run time.
+
+**Why a sidecar rather than inferring from the HDF5.** Existence is a latching
+boolean: it can confirm a finish but never an in-flight start, and it is
+ambiguous between "still running" and "crashed". The sidecar is written before
+the generator runs, so a start is recorded independently of any output, and a
+task that raises still records `status="failed"` / `valid=False` instead of
+silently leaving nothing to inspect.
+
+**Why JSON beside the output, not in the HDF5.** The sidecar must be writable and
+readable independently of the generator and of HDF5 validity — a corrupt or
+missing output must not destroy the timing record that explains it. JSON also
+keeps `check-status` able to read progress without opening HDF5 at all. Writes
+are atomic (write-to-temp then rename) so a reader never sees a half-written
+sidecar.

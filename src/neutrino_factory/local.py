@@ -6,9 +6,10 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from . import catalog, layout
+from . import catalog, layout, status
 from .merge import merge_outputs
 from .slurm import build_task_manifest, write_manifest
+from .validate_output import validate_file
 from .generators.registry import get_adapter
 
 
@@ -82,16 +83,26 @@ def run_task(config: dict[str, Any], task: dict[str, Any], execution_mode: str =
     raw_path.parent.mkdir(parents=True, exist_ok=True)
     normalized_path.parent.mkdir(parents=True, exist_ok=True)
 
+    sidecar_path = status.write_sidecar_start(config, task)
+
     translated_config = adapter.translate_config(task)
     stub_mode = bool(config["run"].get("stub_mode", True))
 
-    if stub_mode or not adapter.is_available(task.get("code_version")):
-        adapter.run_stub(translated_config, raw_path, task)
-    else:
-        command = adapter.build_run_command(translated_config, raw_path.parent)
-        subprocess.run(command, check=True, cwd=raw_path.parent)
+    try:
+        if stub_mode or not adapter.is_available(task.get("code_version")):
+            adapter.run_stub(translated_config, raw_path, task)
+        else:
+            command = adapter.build_run_command(translated_config, raw_path.parent)
+            subprocess.run(command, check=True, cwd=raw_path.parent)
 
-    return adapter.normalize_output(raw_path, normalized_path, task, execution_mode)
+        normalized = adapter.normalize_output(raw_path, normalized_path, task, execution_mode)
+    except Exception:
+        status.finish_sidecar(sidecar_path, valid=False, status="failed")
+        raise
+
+    valid = bool(validate_file(normalized_path, expected_events=None)["valid"])
+    status.finish_sidecar(sidecar_path, valid=valid)
+    return normalized
 
 
 def run_local(config: dict[str, Any], manifest_path: str | Path | None = None) -> dict[str, Any]:

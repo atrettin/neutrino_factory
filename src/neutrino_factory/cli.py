@@ -5,6 +5,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from . import catalog
 from .common_output import MergeError
@@ -26,6 +27,7 @@ from .validate_output import (
     summarize,
     validate_file,
 )
+from .status import format_status_table, job_status_stats
 
 
 def _print_json(payload: dict) -> None:
@@ -410,12 +412,25 @@ def cmd_check_status(args: argparse.Namespace) -> int:
     ]
     chunks_summary = summarize(chunk_results)
 
+    # Per-job runtime status from the chunk sidecars: how many chunks have
+    # started/finished/validated, plus timing, even before any HDF5 exists.
+    chunks_by_job: dict[int, list[dict[str, Any]]] = {}
+    for entry in outputs["chunks"]:
+        chunks_by_job.setdefault(int(entry["job_index"]), []).append(entry)
+    job_stats = []
+    for merged in outputs["merged"]:
+        job_index = int(merged["job_index"])
+        stats = job_status_stats(chunks_by_job.get(job_index, []))
+        stats["job_label"] = merged["job_label"]
+        job_stats.append(stats)
+
     if args.json:
         _print_json(
             {
                 "merged": merged_results,
                 "chunks_summary": chunks_summary,
                 "chunks": chunk_results,
+                "jobs": job_stats,
             }
         )
     else:
@@ -425,6 +440,9 @@ def cmd_check_status(args: argparse.Namespace) -> int:
         print()
         print(f"Chunk files ({chunks_summary['total']}):")
         print(format_summary(chunks_summary))
+        print()
+        print(f"Per-job status ({len(job_stats)} jobs):")
+        print(format_status_table(job_stats))
 
     all_merged_valid = all(r["valid"] for r in merged_results)
     all_chunks_valid = chunks_summary["fraction_valid"] == 1.0
@@ -685,16 +703,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     check_status_parser = subparsers.add_parser(
         "check-status",
-        help="Validate the HDF5 outputs a config is expected to produce",
+        help="Report per-job run status and validate the HDF5 outputs",
         description=(
             "Given a run configuration, compute every HDF5 file the run should "
             "produce (per-chunk files plus the per-generator merged files) and "
             "validate each one: that it exists, opens, carries the required "
             "metadata and event columns, and holds approximately the expected "
-            "number of events. Prints full validation status for the merged files "
-            "and roll-up summary statistics (fraction existing/valid/with errors) "
-            "for the many per-chunk files. Exits non-zero if any merged file is "
-            "invalid or any chunk is invalid."
+            "number of events. Prints a per-job status table (how many of a "
+            "job's chunks have started/finished/validated, first start, last "
+            "finish, and average/maximum chunk run time — read from the per-chunk "
+            "sidecars, so a job's progress is visible before any output exists), "
+            "full validation status for the merged files, and roll-up summary "
+            "statistics for the many per-chunk files. Exits non-zero if any "
+            "merged file is invalid or any chunk is invalid."
         ),
         epilog=(
             "Example:\n"

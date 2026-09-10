@@ -50,6 +50,17 @@ def chunk_output_path(config: Mapping[str, Any], task: Mapping[str, Any]) -> Pat
     return Path(config["storage"]["output_root"]) / "chunks" / str(task["job_label"]) / f"{stem}.h5"
 
 
+def chunk_sidecar_path(config: Mapping[str, Any], task: Mapping[str, Any]) -> Path:
+    """The per-chunk sidecar recording start/finish times and output validity.
+
+    Sits beside the normalized chunk HDF5 (see :func:`chunk_output_path`), written
+    by ``local.run_task`` when a task starts and updated when it finishes, so a run's
+    progress and wall-clock cost can be read before (and without) any HDF5 existing.
+    """
+    stem = _stem_for_task(task)
+    return Path(config["storage"]["output_root"]) / "chunks" / str(task["job_label"]) / f"{stem}.sidecar.json"
+
+
 def merged_output_path(config: Mapping[str, Any], job: Mapping[str, Any]) -> Path:
     """The single HDF5 file all of ``job``'s chunks merge into."""
     run_name = safe_token(str(config["run"]["name"]))

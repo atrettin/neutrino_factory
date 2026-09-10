@@ -304,6 +304,7 @@ def expected_outputs(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
         chunks.append(
             {
                 "path": layout.chunk_output_path(config, task),
+                "sidecar_path": layout.chunk_sidecar_path(config, task),
                 "expected_events": int(task["event_count"]),
                 "chunk_id": int(task["chunk_id"]),
                 **identity,
