@@ -25,7 +25,11 @@
         "bc *": "allow",
         "strings *": "allow",
         "awk *": "allow",
-        "sleep *": "allow"
+        "sleep *": "allow",
+        "ps *": "allow",
+        "setsid *": "allow",
+        "disown *": "allow",
+        "du *": "allow"
     },
     "edit": "allow"
   }
