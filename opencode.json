@@ -29,7 +29,10 @@
         "ps *": "allow",
         "setsid *": "allow",
         "disown *": "allow",
-        "du *": "allow"
+        "du *": "allow",
+        "find *": "allow",
+        "sed *": "allow",
+        "rg *": "allow"
     },
     "edit": "allow"
   }
