@@ -41,6 +41,7 @@ From: {{ CORE_IMAGE }}
         gzip \
         bzip2 \
         xz-utils \
+        ripgrep \
         && rm -rf /var/lib/apt/lists/* \
         || { echo "nf-dev: apt install failed" >&2; exit 1; }
 
