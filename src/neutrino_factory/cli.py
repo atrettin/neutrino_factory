@@ -19,7 +19,15 @@ from .kinematics_report import (
 from .local import run_local, run_task_from_manifest
 from .merge import merge_outputs
 from .plots import DEFAULT_BINS, make_config_plots, make_plots
-from .slurm import build_task_manifest, write_manifest, write_sbatch_script
+from .slurm import (
+    build_task_manifest,
+    default_manifest_path,
+    format_slurm_array_spec,
+    identify_missing_chunks,
+    render_retry_sbatch_script,
+    write_manifest,
+    write_sbatch_script,
+)
 from .validate_output import (
     expected_outputs,
     format_report,
@@ -184,6 +192,126 @@ def cmd_submit(args: argparse.Namespace) -> int:
         {
             "manifest_path": manifest_path,
             "sbatch_path": sbatch_path,
+            "submitted": True,
+            "scheduler_output": completed.stdout.strip(),
+        }
+    )
+    return 0
+
+
+def cmd_retry(args: argparse.Namespace) -> int:
+    """Retry tasks whose chunk output files are missing.
+
+    Loads the existing manifest, checks which chunk files don't exist, and
+    resubmits only those tasks with the new time parameter.
+    """
+    config = load_config(args.config)
+    manifest_path = default_manifest_path(config)
+
+    if not manifest_path.exists():
+        raise RuntimeError(
+            f"Manifest not found at {manifest_path}. "
+            "Run 'neutrino-factory submit' or 'neutrino-factory plan' first."
+        )
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    # Identify tasks with missing chunk output files
+    missing_indices = identify_missing_chunks(config, manifest)
+
+    if not missing_indices:
+        print("All chunk output files exist. No tasks need to be retried.")
+        _print_json(
+            {
+                "config": args.config,
+                "manifest_path": str(manifest_path),
+                "total_tasks": len(manifest["tasks"]),
+                "missing_tasks": 0,
+                "status": "complete",
+            }
+        )
+        return 0
+
+    print(f"Found {len(missing_indices)} missing chunk(s) out of {len(manifest['tasks'])} total tasks")
+    print(f"Task indices to retry: {format_slurm_array_spec(missing_indices)}")
+
+    executor = args.executor or config["run"].get("executor", "slurm")
+
+    if executor == "local":
+        raise RuntimeError(
+            "Retry with --executor local is not supported. "
+            "Use 'neutrino-factory run-task' to manually re-run specific tasks."
+        )
+
+    # Generate retry sbatch script
+    retry_script = render_retry_sbatch_script(
+        config, manifest_path, missing_indices, args.time
+    )
+
+    work_root = Path(config["storage"]["work_root"])
+    slurm_dir = work_root / "slurm"
+    slurm_dir.mkdir(parents=True, exist_ok=True)
+    retry_script_path = slurm_dir / f"{config['run']['name']}_retry.sbatch"
+    retry_script_path.write_text(retry_script, encoding="utf-8")
+
+    if args.dry_run:
+        print(retry_script)
+        _print_json(
+            {
+                "config": args.config,
+                "manifest_path": str(manifest_path),
+                "sbatch_path": str(retry_script_path),
+                "total_tasks": len(manifest["tasks"]),
+                "missing_tasks": len(missing_indices),
+                "missing_task_indices": missing_indices,
+                "array_spec": format_slurm_array_spec(missing_indices),
+                "time_override": args.time,
+                "submitted": False,
+                "mode": "dry-run",
+            }
+        )
+        return 0
+
+    if shutil.which("sbatch") is None:
+        print(
+            "sbatch is not available in this environment. "
+            "The retry Slurm script has been rendered; submit it from a host shell "
+            "on the Slurm head node with:\n\n"
+            f"  sbatch {retry_script_path}\n"
+        )
+        _print_json(
+            {
+                "config": args.config,
+                "manifest_path": str(manifest_path),
+                "sbatch_path": str(retry_script_path),
+                "total_tasks": len(manifest["tasks"]),
+                "missing_tasks": len(missing_indices),
+                "missing_task_indices": missing_indices,
+                "array_spec": format_slurm_array_spec(missing_indices),
+                "time_override": args.time,
+                "submitted": False,
+                "mode": "rendered-only",
+            }
+        )
+        return 0
+
+    completed = subprocess.run(
+        ["sbatch", str(retry_script_path)], check=False, capture_output=True, text=True
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "sbatch failed")
+
+    print(f"Submitted retry job: {completed.stdout.strip()}")
+    _print_json(
+        {
+            "config": args.config,
+            "manifest_path": str(manifest_path),
+            "sbatch_path": str(retry_script_path),
+            "total_tasks": len(manifest["tasks"]),
+            "missing_tasks": len(missing_indices),
+            "missing_task_indices": missing_indices,
+            "array_spec": format_slurm_array_spec(missing_indices),
+            "time_override": args.time,
             "submitted": True,
             "scheduler_output": completed.stdout.strip(),
         }
@@ -620,6 +748,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="With --executor slurm, render the sbatch script but do not submit it",
     )
     submit_parser.set_defaults(func=cmd_submit)
+
+    retry_parser = subparsers.add_parser(
+        "retry",
+        help="Retry tasks whose chunk output files are missing",
+        description=(
+            "Relaunch tasks from a previous run where the chunk output files don't exist. "
+            "Loads the existing manifest, identifies missing chunks, and submits a new Slurm "
+            "array job with only those task indices. The time parameter must be provided "
+            "since a common cause for failures is insufficient time allocation. The original "
+            "manifest is reused, so task indices, seeds, and job configurations remain "
+            "identical to the original run."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  # Check which tasks need retry without submitting\n"
+            "  neutrino-factory retry --config configs/smoke/genie_c12.yaml --time 00:30:00 --dry-run\n"
+            "\n"
+            "  # Submit retry job with increased time\n"
+            "  neutrino-factory retry --config configs/smoke/genie_c12.yaml --time 01:00:00"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    retry_parser.add_argument("--config", required=True, help="Path to the run configuration YAML")
+    retry_parser.add_argument(
+        "--time",
+        required=True,
+        help="Slurm time limit for retry tasks (e.g., '01:00:00' for 1 hour)",
+    )
+    retry_parser.add_argument(
+        "--executor",
+        choices=["local", "slurm"],
+        help="Executor to use (default: slurm; local is not supported for retry)",
+    )
+    retry_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the retry sbatch script without submitting",
+    )
+    retry_parser.set_defaults(func=cmd_retry)
 
     run_task_parser = subparsers.add_parser(
         "run-task",
