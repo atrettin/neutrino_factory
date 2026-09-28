@@ -356,7 +356,7 @@ one (medians over `qel`, same 20k run):
 | Generator | stored initial `m_N` | `w_true_gev` | offset |
 |---|---|---|---|
 | GENIE | 0.9006 (off shell) | 0.9383 | exact |
-| NuWro | 0.8965 (off shell) | 0.9407 | +1 MeV, 1–99% spread 0.78–1.12 |
+| NuWro | 0.8965 (off shell) | 0.9407 from `e/in`; now 0.9383 (see below) | +1 MeV, 1–99% spread 0.78–1.12 |
 | NEUT | 0.9396 (**on shell**, = `m_n`) | 0.9922 | +53 MeV, 0.96–1.05 |
 | GiBUU | 0.8878 (bound, potential included) | 0.8963 | −43 MeV, 0.72–1.05 |
 
@@ -365,8 +365,12 @@ which is why its column is a delta. **NuWro's case has been traced to its
 source**: `qelevent1.cc` subtracts a *local-density-dependent* binding energy from
 the initial nucleon before solving the kinematics, so the vertex does not balance
 against the four-vectors it stores — see
-[nuwro.md](nuwro.md#why-w_true_gev-does-not-close-on-quasi-elastic-events) for the
-measured energy and momentum deficits. NEUT's and GiBUU's binding treatments have
+[nuwro.md](nuwro.md#why-the-quasi-elastic-vertex-does-not-close) for the
+measured energy and momentum deficits. NuWro's row is the `e/in`-based W. NuWro's
+`w_true_gev` is now built from the outgoing nucleon instead (see
+[nuwro.md](nuwro.md#w_true_gev-is-nuwros-own-w-taken-from-the-outgoing-hadrons)),
+so its column is a delta at `m_p` too, and the spread above describes NuWro's
+vertex rather than the column. NEUT's and GiBUU's binding treatments have
 **not** been read; that NEUT is the only one storing an on-shell nucleon and has
 the only upward offset, the largest, is suggestive but not established
 (`.claude/TODOS.md`).

@@ -345,7 +345,7 @@ is carried at all.
 | Column | Definition | Needs |
 |---|---|---|
 | `w_gev` | `W² = M_N² + 2 M_N ν − Q²`, the same fixed isoscalar `NUCLEON_MASS_GEV` Bjorken-x uses, with the nucleon taken at rest | the two four-vectors only |
-| `w_true_gev` | `W² = (p_ν + p_N − p_l)²`, against the per-event struck system | the struck nucleon, which each generator exposes differently |
+| `w_true_gev` | `W² = (p_ν + p_N − p_l)²`, against the per-event struck system | the struck nucleon, which each generator exposes differently (NuWro stores only the unbound one, so its `p_N` is inferred from the outgoing hadrons) |
 
 `w_gev` is the observable, experimental W: frame-dependent by construction, and
 smeared relative to the true one because Fermi motion and binding are not in the
@@ -503,14 +503,16 @@ these are cuts each generator applies internally:
   **[1.301, 2.000] GeV**, reproducing NEUT's own 1.3 < W < 2.0 window to the bin.
   In the by-channel figure NEUT's `dis` switches on abruptly at 1.3 and its `res`
   stops abruptly at 2.0.
-- **NuWro** splits at its `res_dis_cut` = **1.9 GeV**: `dis` has *zero* events
-  below it (minimum 1.9171), the two dynamics being disjoint by construction.
-  2.8% of `res` leaks above it in our variable, because NuWro samples an internal
-  W built from a binding-corrected effective mass rather than the struck
-  nucleon's four-vector — see
-  [nuwro.md](generators/nuwro.md#the-resdis-split-is-a-hard-cut-at-res_dis_cut-plus-a-blend-inside-res).
-  **How faithfully `w_true_gev` reproduces a generator's internal W is therefore
-  generator-dependent**: exact for GENIE, smeared by tens of MeV for NuWro.
+- **NuWro** splits at its `res_dis_cut` = **1.9 GeV**, exactly: `res` stops at
+  1.89997 and `dis` starts at 1.90054 GeV, the two dynamics being disjoint by
+  construction. This holds because NuWro's `w_true_gev` is the mass of the
+  outgoing pre-FSI hadrons, NuWro's own `event::W()`. A reconstruction from the
+  stored initial nucleon misses NuWro's binding energy and leaked 2.8% of `res`
+  above the cut — see
+  [nuwro.md](generators/nuwro.md#w_true_gev-is-nuwros-own-w-taken-from-the-outgoing-hadrons).
+  **`w_true_gev` reproduces a generator's internal W only when `p_N` is the
+  nucleon the generator solved the vertex against**, which for GENIE and NuWro
+  it is.
 - **GENIE**'s `res` terminates at **1.927742 GeV** with *zero* events above it —
   the tune's `Wcut` of **1.927862** GeV, matched to 1.2e-4 GeV, which is one
   event's sampling granularity. The RES/DIS joining scheme is therefore a hard

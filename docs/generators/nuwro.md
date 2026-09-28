@@ -121,13 +121,23 @@ Tree `treeout`. The particle branches are **jagged**:
   nucleon, and `mec` **two or three**. A handful of events (9 in 100k) carry an
   atomic *electron* there instead — the ν-e elastic channel, whose target is not
   a nucleon.
-  Because of that, `w_true_gev` selects on `e/in/in.pdg` (2112/2212) rather than
-  by index and sums whatever it finds, which gives the correlated pair for 2p2h;
-  events with no nucleon get the placeholder.
-- `e/out/out.{t,x,y,z}` — index 0 is the primary outgoing lepton, but the vector
-  **can be empty** for an event. Short entries are zero-padded and flagged by
-  `_has_leading`, which is passed to `derive_kinematics(valid=...)` so the whole
-  kinematic block is blanked rather than filled with zeros.
+  `e/in` is read only to decide *whether* an event has a struck-system W: it
+  must carry a nucleon (`e/in/in.pdg` 2112/2212, selected by PDG rather than
+  index), and events without one get the `w_true_gev` placeholder. The W itself
+  comes from `e/out`, for the reason given in
+  [`w_true_gev` is NuWro's own W](#w_true_gev-is-nuwros-own-w-taken-from-the-outgoing-hadrons).
+- `e/out/out.{t,x,y,z}` — index 0 is the primary outgoing lepton, then the
+  pre-FSI outgoing hadronic system, whose invariant mass is `w_true_gev`. The
+  vector **can be empty** for an event. Short entries are zero-padded and flagged
+  by `_has_leading`, which is passed to `derive_kinematics(valid=...)` so the
+  whole kinematic block is blanked rather than filled with zeros. With the
+  spectral function (`sf_method = 1`, which these runs use) a correlated QE event
+  also carries its SRC partner nucleon at index 2 (`sfevent.cc`: `out = [l, N1,
+  N2]`; 1642 of 8218 QE events on the 20k run, exactly those with
+  `flag.isCorrelated`). The partner is a spectator, not part of the vertex, so
+  for `qel` only index 1 is taken. `flag.isCorrelated` itself cannot be used as
+  the marker: it is set on 13424 of the 20k events, so outside QE it holds
+  garbage.
 - `e/weight`, `e/flag/flag.cc`, and the class flags
   `e/flag/flag.{qel,res,dis,coh,mec}`.
 
@@ -218,24 +228,53 @@ it, so the flag would read false across the entire Δ peak and invert the
 column's meaning. The normalizer raises rather than fill `resonant_primary` from
 a run that used another model.
 
-**Measured, and a caveat on `w_true_gev`.** On the 20k-event numu CC C12 run:
-`dis` has **zero** events below 1.9 GeV (minimum 1.9171), so the DIS side of the
-cut is exact. But 2.8% of `res` events (236 of 8400) land *above* it, out to
-1.9723 GeV. That leak is a property of our variable, not of NuWro: NuWro samples
-its internal W from an `effective_mass` (`Meff = min(sqrt(nuc0·nuc0), M12)`,
-binding-corrected) in a boosted frame, whereas `w_true_gev` is built from the
-struck nucleon's actual four-vector, whose invariant mass is essentially on shell
-(median 0.9383 GeV). So unlike GENIE — where `w_true_gev` reproduces the native
-`Ws` to 2e-13 GeV — **our W is not the W NuWro cut on**, and the boundary appears
-smeared by a few tens of MeV on the RES side.
+### `w_true_gev` is NuWro's own W, taken from the outgoing hadrons
 
-### Why `w_true_gev` does not close on quasi-elastic events
+NuWro's native W is `event::W()` (`src/event1.h`): the invariant mass of
+`e/out[1:]`, every pre-FSI outgoing particle except the lepton. It is a method,
+not a stored branch, but it is built from four-vectors the tree does store. For
+RES it is the W NuWro sampled and cut on: `res_kinematics::set_kinematics` itself
+sets `W = e.W()`.
+
+It is **not** `(p_nu + p_N - p_l)` with `p_N` from `e/in`. RES and DIS both solve
+the vertex against a *copy* of the struck nucleon with a binding energy subtracted
+from its energy alone (`target.t -= get_binding_energy(...)` in
+`res_kinematics.cc`; `nuc0.t -= _E_bind` in `disevent.cc`; for `nucleus_target =
+2`, `E_b = Ef(local k_F) + kaskada_w`, as for QE below). They then build the
+hadrons in that copy's rest frame with invariant mass W and boost them back. `e/in`
+keeps the unbound nucleon. Measured on the 20k-event numu CC C12 run, the residual
+`p_nu + p_N(e/in) - p_l - Σ e/out[1:]` is:
+
+| channel | ΔE (MeV) p1 / p50 / p99 | \|Δp\| (MeV) |
+|---|---|---|
+| `res` | 8.8 / 33.4 / 45.6 | ≤ 3e-4 |
+| `dis` | 8.5 / 33.4 / 45.6 | ≤ 5e-4 |
+| `mec` | 0 / 0 / 6.0 | ≤ 2e-4 |
+
+The three-momentum balances exactly and the energy is short by `E_b`, so the
+binding energy is the whole difference. Reconstructing from `e/in` put W a median
+42 MeV (`res`) and 54 MeV (`dis`) above NuWro's own, and 236 of 8400 `res` events
+(2.8%) above `res_dis_cut`, out to 1.972 GeV.
+
+`E_b` is not stored and depends on the local density at the vertex, so the
+normalizer reads the hadrons instead. It passes `derive_kinematics` the nucleon
+that balances them, `Σ e/out[1:] - p_nu + p_l` — the binding-corrected nucleon
+NuWro actually used — and the shared formula returns the hadrons' mass. On the
+same run `w_true_gev` then reproduces the cut exactly: `res` maximum **1.89997**
+GeV (0 events above 1.9), `dis` minimum **1.90054** GeV. A fresh 100k-event run under
+the same settings (numu CC C12, power law γ = −2 over 0.5–5 GeV) agrees: `res`
+maximum 1.89994 GeV and `dis` minimum 1.90005 GeV, with no event on the wrong side. `qel` is exactly the
+nucleon mass for every event, and `mec` is unchanged (its vertex already balanced).
+Coherent events stay blank: their `e/out[1:]` is the lone pion, and `m_π` is not a
+struck-system W.
+
+### Why the quasi-elastic vertex does not close
 
 For a quasi-elastic event `p_nu + p_N(initial) - p_l` should be exactly the
-outgoing nucleon, so `w_true_gev` should be a delta function at the nucleon mass.
-NuWro's own pre-FSI outgoing nucleon *is* exactly on shell (`e/out`, invariant
-mass 0.9383 at the 1st, 50th and 99th percentiles), but our reconstruction is
-not: 83% of QE events land within 30 MeV of `m_p`, 47% within 10 MeV.
+outgoing nucleon. NuWro's own pre-FSI outgoing nucleon *is* exactly on shell
+(`e/out`, invariant mass 0.9383 at the 1st, 50th and 99th percentiles), and that
+is what `w_true_gev` reports. A reconstruction from `e/in` does not reproduce it:
+83% of QE events land within 30 MeV of `m_p`, 47% within 10 MeV.
 
 The reason is that NuWro's QE vertex does not conserve four-momentum between the
 particles it stores. Measured over 6576 QE events on the 20k numu CC C12 run,
@@ -256,19 +295,21 @@ momentum, `_E_bind` varies event by event with the density where the interaction
 happened — roughly 7 to 32 MeV across carbon. That is the local density
 approximation of Juszczak, Nowak & Sobczyk (NuInt04, *Spectrum of recoil nucleons
 in quasi-elastic neutrino-nucleus interactions*) carried into the current code. It
-is a spread by construction, not a constant offset, which is why the reconstructed
-`w_true_gev` is a smeared distribution rather than a shifted delta.
+is a spread by construction, not a constant offset, which is why a W
+reconstructed from `e/in` is a smeared distribution rather than a shifted delta.
 
 Note that the *momentum-dependent optical potential* which is the other half of
 that paper is a different option — `nucleus_target = 6`, `momentum_dependent_potential_kinematics`
 — and is **not** what these runs use.
 
 **Not fully explained.** Two things do not follow from the above and remain open
-(`.claude/TODOS.md`): a 5% tail beyond 100 MeV (99th percentile 227 MeV, 99.9th
-458 MeV), far larger than any binding energy; and the missing three-momentum is
+(`.claude/TODOS.md`): a 5% tail beyond 100 MeV in the `e/in`-based W (99th
+percentile 227 MeV, 99.9th 458 MeV), far larger than any binding energy, and
+equally present with and without an SRC partner (4.9% and 5.4%), so the partner
+does not cause it; and the missing three-momentum is
 not a pure rescale along the outgoing nucleon's direction, which is what the
 paper's "exit from the nuclear potential" step would produce. The measured
-dependence of `w_true_gev` on the struck nucleon's momentum is also only ~3 MeV
+dependence of the `e/in`-based W on the struck nucleon's momentum is also only ~3 MeV
 across 0–300 MeV, much weaker than `_E_bind`'s own ~30 MeV variation, implying
 most of `_E_bind` is already reflected in the (off-shell, median mass 0.8965)
 nucleon that `e/in` reports.

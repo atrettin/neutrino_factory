@@ -20,6 +20,23 @@ from .base import (
 MEV_PER_GEV = 1000.0
 
 
+def _branch(tree, name: str, library: str):
+    """Read the one branch matching ``name``, whatever uproot calls its field.
+
+    The field is taken by position: uproot names it after the leaf (``in.t``) for
+    NuWro's split ``event`` object, but after the full path for a flat branch
+    whose name contains slashes, as the test fixtures write.
+    """
+    arrays = tree.arrays(filter_name=name, library=library)
+    if library == "np":
+        (values,) = arrays.values()
+    else:
+        import awkward as ak
+
+        (values,) = ak.unzip(arrays)
+    return values
+
+
 def _leading_component(values, ak) -> np.ndarray:
     """Take element 0 of each event's particle vector, as a dense float array.
 
@@ -39,29 +56,48 @@ def _has_leading(values, ak) -> np.ndarray:
 NUCLEON_PDGS = (2112, 2212)
 
 
-def _summed_nucleons(components, pdgs, ak) -> tuple[np.ndarray, np.ndarray]:
-    """Sum the initial-state nucleons in ``e/in``, and flag events that have one.
+def _has_nucleon(pdgs, ak) -> np.ndarray:
+    """Flag events with a nucleon among the struck initial state in ``e/in``.
 
-    ``e/in`` holds the beam neutrino at index 0 followed by the struck hadronic
-    system, whose size is *not* fixed: coherent events have none, qel/res/dis one,
-    and NuWro's MEC two or three (measured on a 100k-event Ar40 run). A few events
-    also carry an atomic *electron* there, which is not part of a nucleonic W.
-    So the selection is by PDG rather than by index, and the whole system is
-    summed -- for 2p2h the correlated pair is the struck system, matching the
-    two-nucleon cluster GENIE hands over for the same events.
-
-    Returns the ``(n, 4)`` summed four-vector and the mask of events that had at
-    least one nucleon.
+    ``e/in`` holds the beam neutrino at index 0 followed by the struck system:
+    none for coherent events, one nucleon for qel/res/dis, two or three for MEC,
+    and for a few events an atomic *electron*. Only events that scattered off a
+    nucleon have a struck-system W, so the selection is by PDG, not by index.
     """
     is_nucleon = ak.zeros_like(pdgs, dtype=bool)
     for code in NUCLEON_PDGS:
         is_nucleon = is_nucleon | (pdgs == code)
-    summed = [
-        np.asarray(ak.to_numpy(ak.sum(values[is_nucleon], axis=1)), dtype=np.float64)
-        for values in components
-    ]
-    count = np.asarray(ak.to_numpy(ak.sum(is_nucleon, axis=1)), dtype=np.int64)
-    return np.column_stack(summed), count > 0
+    return np.asarray(ak.to_numpy(ak.sum(is_nucleon, axis=1)), dtype=np.int64) > 0
+
+
+def _outgoing_hadrons(components, is_qel, ak) -> tuple[np.ndarray, np.ndarray]:
+    """Sum the pre-FSI outgoing hadronic system, ``e/out[1:]``.
+
+    This is what NuWro's own ``event::W()`` sums, and for RES it is the W NuWro
+    sampled and cut on at ``res_dis_cut``. The initial nucleon in ``e/in`` does not
+    give it: NuWro solves the RES/DIS vertex against a copy of that nucleon with a
+    binding energy subtracted from its energy only, and stores the unbound one. So
+    ``p_nu + p_N(e/in) - p_l`` exceeds these hadrons by exactly that binding energy
+    (three-momentum balances to 1e-3 MeV); see docs/generators/nuwro.md.
+
+    For qel only ``out[1]`` is taken. With the spectral function, a correlated
+    event also emits the SRC partner nucleon at ``out[2]`` (sfevent.cc), which is a
+    spectator and not part of the vertex.
+
+    Returns the ``(n, 4)`` summed four-vector and the mask of events that had at
+    least one outgoing hadron.
+    """
+    padded = [ak.fill_none(ak.pad_none(values, 2, axis=1), 0.0) for values in components]
+    summed = np.column_stack([
+        np.asarray(ak.to_numpy(ak.sum(values[:, 1:], axis=1)), dtype=np.float64)
+        for values in padded
+    ])
+    struck = np.column_stack([
+        np.asarray(ak.to_numpy(values[:, 1]), dtype=np.float64) for values in padded
+    ])
+    hadrons = np.where(np.asarray(is_qel, dtype=bool)[:, None], struck, summed)
+    count = np.asarray(ak.to_numpy(ak.num(components[0], axis=1)), dtype=np.int64)
+    return hadrons, count > 1
 
 
 # NuWro's RES model. Only the hybrid model (2, the default) sets flag.res_delta
@@ -142,17 +178,18 @@ class NuWroNormalizer(OutputNormalizer):
             tree = f["treeout"]
             try:
                 # e/in holds the beam neutrino at index 0, followed by the struck
-                # hadronic system (see _summed_nucleons); e/out holds the primary
-                # outgoing lepton at index 0. Components are (t, x, y, z) =
+                # initial state (see _has_nucleon); e/out holds the primary
+                # outgoing lepton at index 0, then the pre-FSI hadronic system
+                # (see _outgoing_hadrons). Components are (t, x, y, z) =
                 # (E, px, py, pz) in MeV.
                 in_arrays = [
-                    tree.arrays(filter_name=f"e/in/in.{c}", library="ak")[f"in.{c}"]
+                    _branch(tree, f"e/in/in.{c}", "ak")
                     for c in ("t", "x", "y", "z")
                 ]
                 nu_components = [_leading_component(values, ak) for values in in_arrays]
                 energies_mev = nu_components[0]
-                nucleon_p4_mev, has_nucleon = _summed_nucleons(
-                    in_arrays, tree.arrays(filter_name="e/in/in.pdg", library="ak")["in.pdg"], ak
+                has_nucleon = _has_nucleon(
+                    _branch(tree, "e/in/in.pdg", "ak"), ak
                 )
             except Exception as exc:
                 raise RuntimeError(
@@ -160,7 +197,7 @@ class NuWroNormalizer(OutputNormalizer):
                 ) from exc
             try:
                 out_arrays = [
-                    tree.arrays(filter_name=f"e/out/out.{c}", library="ak")[f"out.{c}"]
+                    _branch(tree, f"e/out/out.{c}", "ak")
                     for c in ("t", "x", "y", "z")
                 ]
                 lepton_components = [_leading_component(values, ak) for values in out_arrays]
@@ -170,7 +207,7 @@ class NuWroNormalizer(OutputNormalizer):
                     f"Cannot read outgoing lepton four-vector from branch 'e/out/out.*': {exc}"
                 ) from exc
             try:
-                weights = tree.arrays(filter_name="e/weight", library="np")["weight"]
+                weights = _branch(tree, "e/weight", "np")
             except Exception as exc:
                 raise RuntimeError(
                     f"Cannot read event weight from branch 'e/weight': {exc}"
@@ -178,7 +215,7 @@ class NuWroNormalizer(OutputNormalizer):
             try:
                 # The current is its own flag in the same struct; the class
                 # flags below (qel/res/...) span both currents.
-                flag_cc = tree.arrays(filter_name="e/flag/flag.cc", library="np")["flag.cc"]
+                flag_cc = _branch(tree, "e/flag/flag.cc", "np")
             except Exception as exc:
                 raise RuntimeError(
                     f"Cannot read the current flag from 'e/flag/flag.cc': {exc}"
@@ -197,19 +234,19 @@ class NuWroNormalizer(OutputNormalizer):
                 # nucleon-pion pair without setting it, so the flag would read
                 # false across the whole Delta peak and quietly invert the meaning
                 # of this column.
-                res_kind = tree.arrays(filter_name="e/par/par.res_kind", library="np")["par.res_kind"]
-                flag_res_delta = tree.arrays(filter_name="e/flag/flag.res_delta", library="np")["flag.res_delta"]
+                res_kind = _branch(tree, "e/par/par.res_kind", "np")
+                flag_res_delta = _branch(tree, "e/flag/flag.res_delta", "np")
             except Exception as exc:
                 raise RuntimeError(
                     "Cannot read 'e/par/par.res_kind' / 'e/flag/flag.res_delta', "
                     f"needed for the resonant_primary column: {exc}"
                 ) from exc
             try:
-                flag_qel = tree.arrays(filter_name="e/flag/flag.qel", library="np")["flag.qel"]
-                flag_res = tree.arrays(filter_name="e/flag/flag.res", library="np")["flag.res"]
-                flag_dis = tree.arrays(filter_name="e/flag/flag.dis", library="np")["flag.dis"]
-                flag_coh = tree.arrays(filter_name="e/flag/flag.coh", library="np")["flag.coh"]
-                flag_mec = tree.arrays(filter_name="e/flag/flag.mec", library="np")["flag.mec"]
+                flag_qel = _branch(tree, "e/flag/flag.qel", "np")
+                flag_res = _branch(tree, "e/flag/flag.res", "np")
+                flag_dis = _branch(tree, "e/flag/flag.dis", "np")
+                flag_coh = _branch(tree, "e/flag/flag.coh", "np")
+                flag_mec = _branch(tree, "e/flag/flag.mec", "np")
             except Exception as exc:
                 raise RuntimeError(
                     f"Cannot read interaction flags from 'e/flag/flag.*': {exc}"
@@ -231,13 +268,20 @@ class NuWroNormalizer(OutputNormalizer):
             )
         ]
         resonant_primary = _resonant_primary(interactions, flag_res_delta, res_kind)
+        hadrons_p4, has_hadrons = _outgoing_hadrons(
+            out_arrays, [itype == "qel" for itype in interactions], ak
+        )
+        # The binding-corrected struck nucleon NuWro solved the vertex against,
+        # which it does not store: it is whatever balances the outgoing hadrons,
+        # so derive_kinematics' w_true = |nu + N - l| is |sum of hadrons|.
+        bound_nucleon_p4 = hadrons_p4 / MEV_PER_GEV - nu_p4 + lepton_p4
         kinematics = derive_kinematics(
             nu_p4,
             lepton_p4,
             interactions,
             valid=has_lepton,
-            nucleon_p4=nucleon_p4_mev / MEV_PER_GEV,
-            nucleon_valid=has_nucleon,
+            nucleon_p4=bound_nucleon_p4,
+            nucleon_valid=has_nucleon & has_hadrons,
         )
 
         # Declare how much this chunk's estimate is worth, so merging averages

@@ -387,3 +387,27 @@ missing output must not destroy the timing record that explains it. JSON also
 keeps `check-status` able to read progress without opening HDF5 at all. Writes
 are atomic (write-to-temp then rename) so a reader never sees a half-written
 sidecar.
+
+## NuWro's `w_true_gev` is taken from the outgoing hadrons (2026-09)
+
+**The problem.** NuWro's `w_true_gev` was computed like every other generator's,
+`(p_ν + p_N − p_l)²` with `p_N` from the stored initial nucleon (`e/in`). It did
+not reproduce the W that NuWro cut on: 2.8% of `res` fell above `res_dis_cut`.
+NuWro solves its RES/DIS vertex against a copy of that nucleon with a binding
+energy taken off its energy. It stores the unbound nucleon, not the copy. The
+three-momentum balances exactly, so the whole difference is that binding energy
+(median 33 MeV).
+
+**The decision.** For NuWro, `p_N` is inferred as the nucleon that balances the
+pre-FSI outgoing hadrons, `Σ e/out[1:] − p_ν + p_l`, so `w_true_gev` is the
+hadrons' invariant mass. That is NuWro's own `event::W()`, and it reproduces
+`res_dis_cut` exactly. For `qel`, only `e/out[1]` is used, because the spectral
+function also emits a spectator SRC partner at `e/out[2]`. Coherent events stay
+blank.
+
+**What was ruled out.** Taking W from a generator-supplied number: there is none
+to take (`event::W()` is not stored), and the four-vector sum is ours anyway.
+Subtracting the binding energy ourselves: it depends on the local Fermi momentum
+at the vertex, which would mean reimplementing NuWro's density profile. Details
+and measurements are in
+[generators/nuwro.md](generators/nuwro.md#w_true_gev-is-nuwros-own-w-taken-from-the-outgoing-hadrons).

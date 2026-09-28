@@ -25,7 +25,7 @@ from neutrino_factory.normalizers.nuwro import NuWroNormalizer
 
 def _write_root_tree(
     path: Path, energies_mev, weights, qel, res, dis, coh, mec, out_counts=None, cc=None,
-    in_nucleons=None, res_delta=None, res_kind=2,
+    in_nucleons=None, res_delta=None, res_kind=2, binding_mev=0.0, spectators=None,
 ) -> None:
     """Write a synthetic ``treeout`` tree, all momenta in MeV as NuWro does.
 
@@ -52,9 +52,21 @@ def _write_root_tree(
     # reference_nucleon_p4 is in GeV; NuWro's tree is in MeV.
     nucleon_mev = reference_nucleon_p4(energies) * 1000.0
 
+    if spectators is None:
+        spectators = [0] * count
+    beam = np.column_stack([energies, zeros, zeros, energies])
+    hadrons = (
+        nucleon_mev * np.array([len(n) for n in in_nucleons])[:, None]
+        - np.column_stack([np.full(count, binding_mev), zeros, zeros, zeros])
+        + beam - lepton
+    )
+    spectator = reference_nucleon_p4(energies[:1])[0] * 1000.0
+
     def jagged(component: int):
         return ak.Array([
-            [float(lepton[i, component])] + [0.0] * (int(n) - 1) if int(n) > 0 else []
+            [float(lepton[i, component]), float(hadrons[i, component])]
+            + [float(spectator[component])] * spectators[i]
+            if int(n) > 0 else []
             for i, n in enumerate(out_counts)
         ])
 
@@ -269,7 +281,7 @@ class NuWroNormalizerRootTests(unittest.TestCase):
                     self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
 
     def test_mec_sums_the_whole_struck_hadronic_system(self) -> None:
-        """NuWro's MEC puts two or three nucleons in e/in; the pair is the system."""
+        """NuWro's MEC emits the struck pair in e/out; the pair is the system."""
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
             _write_sidecar(work_dir)
@@ -300,6 +312,71 @@ class NuWroNormalizerRootTests(unittest.TestCase):
             self.assertAlmostEqual(
                 events[1]["w_gev"], reference_kinematics(2.0)["w_gev"], places=9
             )
+
+    def test_true_w_is_the_outgoing_hadrons_not_the_unbound_nucleon(self) -> None:
+        """NuWro builds RES/DIS hadrons from a nucleon with E_b taken off its energy.
+
+        e/in keeps the unbound nucleon, so p_nu + p_N - p_l overshoots the hadrons
+        by E_b. w_true must follow the hadrons: that is NuWro's own event::W(),
+        the W it cut on at res_dis_cut.
+        """
+        binding_mev = 30.0
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.root"
+            _write_root_tree(
+                root_path,
+                energies_mev=[2000.0],
+                weights=[1e-38],
+                qel=[False],
+                res=[True],
+                dis=[False],
+                coh=[False],
+                mec=[False],
+                binding_mev=binding_mev,
+            )
+            out_path = work_dir / "out.h5"
+            task = {**_base_task(), "event_count": 1}
+
+            NuWroNormalizer().normalize(root_path, out_path, task, "local")
+
+            _, events = read_events(out_path)
+            unbound = reference_kinematics(2.0)["w_true_gev"]
+            # The hadrons are p_N - (E_b, 0) + q with p_N at rest, and q.t = E/2.
+            m_n = reference_nucleon_p4([2.0])[0, 0]
+            expected = np.sqrt(unbound**2 - 2 * (binding_mev / 1000.0) * (m_n + 1.0)
+                               + (binding_mev / 1000.0) ** 2)
+            self.assertAlmostEqual(events[0]["w_true_gev"], expected, places=9)
+            self.assertLess(events[0]["w_true_gev"], unbound - 0.02)
+
+    def test_qel_true_w_ignores_the_src_spectator(self) -> None:
+        """A correlated QE event also emits its SRC partner, at e/out[2]."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            root_path = work_dir / "events.root"
+            _write_root_tree(
+                root_path,
+                energies_mev=[2000.0, 2000.0],
+                weights=[1e-38] * 2,
+                qel=[True, False],
+                res=[False, True],
+                dis=[False] * 2,
+                coh=[False] * 2,
+                mec=[False] * 2,
+                spectators=[1, 1],
+            )
+            out_path = work_dir / "out.h5"
+            task = {**_base_task(), "event_count": 2}
+
+            NuWroNormalizer().normalize(root_path, out_path, task, "local")
+
+            _, events = read_events(out_path)
+            single = reference_kinematics(2.0)["w_true_gev"]
+            self.assertAlmostEqual(events[0]["w_true_gev"], single, places=9)
+            # Outside qel every outgoing hadron belongs to the system.
+            self.assertGreater(events[1]["w_true_gev"], single + 0.5)
 
     def test_events_without_a_nucleon_in_e_in_blank_only_the_true_w(self) -> None:
         """Coherent events carry no nucleon at all; an electron target is not one."""
