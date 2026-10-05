@@ -559,11 +559,26 @@ made on, and they fit the format as it stands.
 | GENIE | `gst` `pdgf`/`Ef`/`pxf`/`pyf`/`pzf` (the `f` family; `i` is pre-FSI) | the tune's `HadronTransp-Enable` / `HadronTransp-Model` in `config/<tune>/ModelConfiguration.xml`; the framework does not override it, and all 33 tunes in the R-3_06_00 source tree set it `true` |
 | NuWro | `e/post` ("particles leaving the nucleus"), not `e/out` | `FSI_on = 1`, pinned in `params.txt`; also NuWro's default (`params_all.h`, nuwro_25.11). With it off, NuWro copies `e/out` into `e/post` |
 | NEUT | the `NeutVect` particles with `fIsAlive && fStatus == 0`, selected in `nf_flatten.C` | `NEUT-NEFF 0` (pion FSI) and `NUCRES-RESCAT 1` (nucleon rescattering), pinned in the card; both are NEUT's defaults per `necard.h` and the shipped `neut_5.4.0_*` cards |
-| GiBUU | the perturbative particles `write_pert` writes after transport | `numTimeSteps = 150`, `delta_T = 0.2` fm (30 fm) — see [generators/gibuu.md](generators/gibuu.md#final-state-interactions-are-switched-on) |
+| GiBUU | the perturbative particles `write_pert` writes after transport, minus the nucleons still bound in the nucleus (see below) | `numTimeSteps = 150`, `delta_T = 0.2` fm (30 fm) — see [generators/gibuu.md](generators/gibuu.md#final-state-interactions-are-switched-on) |
 
 NEUT's array is filtered on its own flags rather than by index because it also
 holds the initial-state nucleons (status −1) and particles killed or replaced
 during the cascade.
+
+**GiBUU's list needs one more step, because it is a snapshot rather than a list
+of escaped particles.** At the end of transport some nucleons are still inside
+the mean-field potential, which GiBUU folds into their energy, so their
+four-vectors are off shell. On a 3435-event numu CC Ar40 run, 25% of the listed
+nucleons had `E < m_N` and sat inside the nucleus (median radius 3.7 fm): bound,
+and never leaving it. Another 12% were unbound but still inside (four-vector mass
+~0.90 GeV). Escaped nucleons come out exactly on shell at GiBUU's single nucleon
+mass, 0.938 GeV. The normalizer (`normalizers/gibuu._leave_nucleus`) therefore
+drops nucleons with `E < m_N`, which is GiBUU's own
+`neutrinoAnalysis/IsBound` test (kinetic energy plus potential below zero). It
+puts the remaining nucleons on shell at their energy, which a static potential
+conserves on the way out, so their kinetic energy is the asymptotic `E − m_N`.
+GENIE's, NuWro's and NEUT's final-state nucleons and pions are all exactly on
+shell at their vacuum masses in the same run, and none has `E < m`.
 
 ### Conventions
 
@@ -582,7 +597,9 @@ one from NuWro means:
   would otherwise dominate `hadronic_energy_gev`.
 * **Mass from the four-vector**, `m = sqrt(E² − |p|²)`, never a lookup table.
   All four generators supply full four-vectors, so a table would only add a way
-  to disagree with the generator about what it produced.
+  to disagree with the generator about what it produced. The one exception is
+  GiBUU's in-medium nucleons, put on shell at GiBUU's own `m_N` as described
+  above.
 * `hadronic_kinetic_energy_gev` is **not** the energy transfer ν. It runs ~85% of
   ν on average and exceeds it for a minority of events, because FSI-ejected
   nucleons carry Fermi motion that did not come from the neutrino. Nor is it
@@ -610,14 +627,35 @@ for antineutrinos.
 
 ### Verification
 
-300-event Docker runs of all four generators (2026-07-30; GiBUU then still ran
-without transport). The GENIE multiplicities and `native_interaction_code`
-agree *exactly*, event by event, with `gst`'s own independently filled `nfp`,
-`nfn`, `nfpip`, `nfpim`, `nfpi0` and `neut_code`. In every generator
-`hadronic_kinetic_energy_gev ≤ hadronic_energy_gev` holds for every event;
-quasi-elastic events are 97–100% zero-pion with at least one outgoing nucleon;
-GiBUU's 2p2h events come out with exactly two nucleons; and NuWro's `dyn` maps
-one-to-one onto the common labels (0→qel, 2→res, 4→dis, 6→coh, 8→mec).
+**With FSI on (2026-10-05).** numu CC on Ar40, E^-2 power law over 0.5–5 GeV,
+local Docker: 2000 events each from GENIE (G18_10a_02_11b), NuWro and NEUT, and
+a 4000-ensemble GiBUU run giving 3435 events. FSI demonstrably ran in each: GENIE's
+`gst` has a post-FSI list differing from the pre-FSI one (`ni` ≠ `nf`) in 70% of
+events; NuWro's `e/post` differs from `e/out` in 47%; 1251 of 2000 NEUT events
+carry FSI status codes (3 = absorbed, 7 = cascade products, …); and GiBUU's
+particles per event rose from 1.87 without transport to 4.57 with it, on the same
+seed. The GENIE multiplicities agree *exactly*, event by event, with `gst`'s own
+independently filled `nfp`, `nfn`, `nfpip`, `nfpim` and `nfpi0`, and
+`hadronic_kinetic_energy_gev ≤ hadronic_energy_gev` holds for every event in all
+four. Per quasi-elastic event, after the GiBUU bound-nucleon step:
+
+| | GENIE | NuWro | NEUT | GiBUU |
+|---|---|---|---|---|
+| 0π fraction | 0.981 | 0.969 | 0.978 | 0.990 |
+| ⟨n_proton⟩ | 2.04 | 1.35 | 1.52 | 1.03 |
+| ⟨n_neutron⟩ | 1.43 | 0.37 | 0.80 | 0.45 |
+| no nucleon out | 0.3% | 2.2% | 0% | 9.1% |
+
+The spread is model physics: GENIE's hA cascade knocks out the most nucleons,
+and GiBUU's potential captures the most slow ones. Without the bound-nucleon
+step GiBUU would have read 1.37 protons and 0.63 neutrons, and no QE event would
+have lost its nucleon.
+
+**Before FSI was enabled in GiBUU (2026-07-30).** 300-event Docker runs of all
+four generators. The GENIE multiplicities and `native_interaction_code` agreed
+exactly with `gst`'s `nfp`/`nfn`/`nfpip`/`nfpim`/`nfpi0`/`neut_code`, and NuWro's
+`dyn` maps one-to-one onto the common labels (0→qel, 2→res, 4→dis, 6→coh,
+8→mec).
 
 ## Weighted statistics and weight efficiency
 

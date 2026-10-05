@@ -70,6 +70,44 @@ MAX_RESONANCE_EVTYPE = 31
 TWO_NUCLEON_EVTYPES = (35, 36)
 
 
+# GiBUU's nucleon mass, one value for protons and neutrons: every nucleon that
+# has left the nuclear potential comes out of the RootTuple with exactly this
+# four-vector mass.
+GIBUU_NUCLEON_MASS_GEV = 0.938
+NUCLEON_PDGS = (2212, 2112)
+
+
+def _leave_nucleus(
+    pdg: np.ndarray, energy: np.ndarray, momentum: np.ndarray, counts: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Reduce GiBUU's end-of-transport particle list to what leaves the nucleus.
+
+    Unlike the other generators' post-FSI lists, GiBUU's perturbative list is a
+    snapshot at the end of the time evolution, with nucleons still inside the
+    mean-field potential. Their energy includes the potential, so their
+    four-vector mass is off shell (~0.90 GeV on Ar40), and since the potential is
+    static that energy is conserved on the way out:
+
+    * ``E < m_N``: bound, the nucleon never escapes. Dropped -- the same test as
+      GiBUU's own ``neutrinoAnalysis/IsBound`` (kinetic energy plus potential
+      below zero). 25% of the nucleons of a 3435-event Ar40 CC run.
+    * ``E >= m_N``: escapes with this energy. Put on shell by rescaling the
+      momentum to ``sqrt(E^2 - m_N^2)``, so the kinetic energy derived from the
+      four-vector is the asymptotic ``E - m_N`` rather than ``E - m_eff``.
+    """
+    nucleon = np.isin(pdg, NUCLEON_PDGS)
+    keep = ~(nucleon & (energy < GIBUU_NUCLEON_MASS_GEV))
+    event_index = np.repeat(np.arange(counts.size), counts)
+    counts = np.bincount(event_index[keep], minlength=counts.size).astype(np.int64)
+    pdg, energy, momentum, nucleon = pdg[keep], energy[keep], momentum[keep], nucleon[keep]
+
+    p_abs = np.linalg.norm(momentum, axis=1)
+    on_shell = np.sqrt(np.maximum(energy**2 - GIBUU_NUCLEON_MASS_GEV**2, 0.0))
+    scale = np.divide(on_shell, p_abs, out=np.ones_like(p_abs), where=p_abs > 0)
+    momentum = np.where(nucleon[:, None], momentum * scale[:, None], momentum)
+    return pdg, energy, momentum, counts
+
+
 def _interaction_from_evtype(ev_type: int) -> str:
     """Map GiBUU's ``evType`` event-class code to the common interaction label.
 
@@ -195,10 +233,12 @@ class GiBUUNormalizer(OutputNormalizer):
                 # because the jobcard sets WritePerturbativeParticles (see
                 # translators.gibuu). GiBUU calls the PDG code "barcode"; any
                 # lepton in the list is filtered out by summarize_final_state.
-                fs_pdg, fs_energy, fs_momentum, fs_counts = flatten_particle_arrays(
-                    ak,
-                    branch("barcode", "ak"),
-                    *(branch(b, "ak") for b in ("E", "Px", "Py", "Pz")),
+                fs_pdg, fs_energy, fs_momentum, fs_counts = _leave_nucleus(
+                    *flatten_particle_arrays(
+                        ak,
+                        branch("barcode", "ak"),
+                        *(branch(b, "ak") for b in ("E", "Px", "Py", "Pz")),
+                    )
                 )
                 columns["fs_pdg"].append(fs_pdg)
                 columns["fs_energy"].append(fs_energy)

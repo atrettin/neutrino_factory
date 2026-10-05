@@ -107,8 +107,23 @@ state.
 **The event count is the one thing transport could change.** `write_pert`
 skips an event with no perturbative particle left (`if (NUP == 0) cycle`; its
 header notes that such events "are not included in the list and thus produce no
-output"), which would drop that event's weight from the cross-section sum. The
-C12 run above lost none (821 both ways).
+output"), which would drop that event's weight from the cross-section sum. Neither
+the C12 run above (821 both ways) nor a heavier target lost any: a 4000-ensemble
+numu CC Ar40 run (2026-10-05, same seed both ways) wrote 3435 events with and
+without transport, with `weight`, `evType` and `lepOut_E` bit-identical and
+`sum(weight)` = 1.131102 both times. The list holds no leptons at all, only the
+hadrons.
+
+**The list is a snapshot, so it holds bound nucleons.** In that Ar40 run, 25% of
+the nucleons at the end of transport had `E < m_N`. They were still inside the
+nucleus, and so were 12% more that were unbound but had not yet left the
+potential, which shows in their off-shell four-vector mass. The normalizer
+drops the first group and puts the second on shell, as GiBUU's own
+`neutrinoAnalysis/IsBound` does — see
+[physics.md](../physics.md#the-particle-list-is-post-fsi-and-fsi-is-on-in-every-generator).
+
+**Transport costs about 4× the wall clock**: 65.6 s against 15.9 s for that
+Ar40 run (Apple Silicon, Docker under Rosetta).
 
 ### Ensemble sizing
 

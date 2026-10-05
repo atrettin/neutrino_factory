@@ -410,8 +410,16 @@ GENIE is the exception: hadron transport is part of the tune
 (`HadronTransp-Enable` / `HadronTransp-Model` in each tune's
 `ModelConfiguration.xml`), so the framework leaves it to the tune.
 
-**What it costs.** GiBUU's runtime grows with transport; the figures in
-[performance.md](performance.md) predate it. The inclusive cross section does not
+**GiBUU's bound nucleons are dropped in the normalizer, not in GiBUU.** Its
+end-of-transport list includes nucleons still in the potential, a quarter of
+them bound on Ar40. GiBUU can cut these itself (`applyCuts = 2` in
+`&neutrinoAnalysis`), but only for its `FinalEvents.dat` text output, not for the
+RootTuple the framework reads. `_leave_nucleus` therefore applies GiBUU's own
+`IsBound` criterion, `E < m_N`, to the RootTuple and puts the rest on shell; see
+[physics.md](physics.md#the-particle-list-is-post-fsi-and-fsi-is-on-in-every-generator).
+
+**What it costs.** GiBUU's wall clock grew about 4× with transport on Ar40 (65.6 s
+against 15.9 s); the figures in [performance.md](performance.md) predate it. The inclusive cross section does not
 change — `weight` is fixed at the vertex and inherited through transport, and
 a same-seed C12 run gave bit-identical weights both ways.
 

@@ -19,7 +19,9 @@ sizing Slurm time limits, not as portable constants.
 - GiBUU ran with `numTimeSteps = 0`, i.e. **without FSI transport**, the jobcard
   setting at the time. The jobcards now transport for 150 steps (see
   [generators/gibuu.md](generators/gibuu.md#final-state-interactions-are-switched-on)),
-  so the GiBUU numbers below are a lower bound until re-measured.
+  so the GiBUU numbers below are a lower bound. Transport cost about 4× the wall
+  clock in one Ar40 comparison on a different machine (65.6 s against 15.9 s,
+  same seed, Apple Silicon under Docker); this table has not been re-measured.
 - Executed 2026-09-08 (UTC) on the machine described below.
 
 ## Machine
