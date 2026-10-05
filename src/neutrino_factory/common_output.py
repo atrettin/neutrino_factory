@@ -83,6 +83,14 @@ VERSION_IDENTITY_KEYS = ("generator", "code_version", "config_version")
 XSEC_NORM_COUNT_KEY = "xsec_norm_count"
 
 
+# Optional 2D event dataset of reweight-universe weights, shape
+# (n_events, n_universes): sigma_universe / sigma_central per event (see
+# universes.py). Ratios, so merging concatenates them and never rescales them.
+# The ``universes`` metadata key describes the columns.
+UNIVERSE_WEIGHTS_KEY = "universe_weights"
+UNIVERSES_METADATA_KEY = "universes"
+
+
 class MergeError(ValueError):
     """Raised when attempting to merge HDF5 files with inconsistent version metadata."""
 
@@ -154,6 +162,8 @@ def _read_event_columns(handle: h5py.File) -> dict[str, np.ndarray]:
 
     for key in EVENT_STRING_FIELDS:
         columns[key] = _decode_text_array(np.asarray(event_group[key][()]))
+    if UNIVERSE_WEIGHTS_KEY in event_group:
+        columns[UNIVERSE_WEIGHTS_KEY] = np.asarray(event_group[UNIVERSE_WEIGHTS_KEY][()])
     return columns
 
 
@@ -186,7 +196,19 @@ def _concat_event_columns(chunks: list[dict[str, np.ndarray]]) -> dict[str, np.n
     return merged
 
 
-def write_common_hdf5(output_path: str | Path, metadata: dict[str, Any], events: list[dict[str, Any]]) -> str:
+def write_common_hdf5(
+    output_path: str | Path,
+    metadata: dict[str, Any],
+    events: list[dict[str, Any]],
+    universe_weights: np.ndarray | None = None,
+) -> str:
+    if universe_weights is not None and (
+        universe_weights.ndim != 2 or len(universe_weights) != len(events)
+    ):
+        raise ValueError(
+            f"universe_weights has shape {universe_weights.shape}; expected "
+            f"({len(events)}, n_universes), one row per event"
+        )
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -231,6 +253,10 @@ def write_common_hdf5(output_path: str | Path, metadata: dict[str, Any], events:
             event_group.create_dataset(key, data=values)
         for key, values in string_columns.items():
             event_group.create_dataset(key, data=values, dtype=STRING_DTYPE)
+        if universe_weights is not None:
+            event_group.create_dataset(
+                UNIVERSE_WEIGHTS_KEY, data=np.asarray(universe_weights, dtype=np.float32)
+            )
 
     return str(output)
 
@@ -264,6 +290,36 @@ def _xsec_norm_count(metadata: dict[str, Any]) -> float | None:
     except (TypeError, ValueError):
         return None
     return value if value > 0.0 else None
+
+
+def _merge_universe_weights(
+    read_files: list[tuple[str, dict[str, Any], dict[str, np.ndarray], float | None]],
+) -> np.ndarray | None:
+    """Concatenate the inputs' universe weights, or None if none carry them.
+
+    Universe ``k`` must mean the same parameter values in every input, so the
+    inputs must agree on the ``universes`` metadata exactly; and either all of
+    them carry weights or none does, since a merged column with holes could not
+    be told apart from a real one.
+    """
+    carrying = [path for path, _, columns, _ in read_files if UNIVERSE_WEIGHTS_KEY in columns]
+    if not carrying:
+        return None
+    if len(carrying) != len(read_files):
+        missing = [path for path, _, columns, _ in read_files if UNIVERSE_WEIGHTS_KEY not in columns]
+        raise MergeError(
+            f"Only {len(carrying)} of {len(read_files)} inputs carry universe weights; "
+            f"missing from {_summarize_paths(missing)}"
+        )
+    reference_path, reference_metadata = read_files[0][0], read_files[0][1]
+    reference = reference_metadata.get(UNIVERSES_METADATA_KEY)
+    for path, metadata, _, _ in read_files[1:]:
+        if metadata.get(UNIVERSES_METADATA_KEY) != reference:
+            raise MergeError(
+                f"Refusing to merge universe weights drawn differently: the "
+                f"'{UNIVERSES_METADATA_KEY}' metadata of {path} differs from {reference_path}"
+            )
+    return np.concatenate([columns[UNIVERSE_WEIGHTS_KEY] for _, _, columns, _ in read_files])
 
 
 def merge_hdf5_files(
@@ -384,6 +440,7 @@ def merge_hdf5_files(
             assert count is not None
             columns["xsec_weight"] = columns["xsec_weight"] * (count / norm_count_total)
 
+    universe_weights = _merge_universe_weights(read_files)
     merged_columns = _concat_event_columns(merged_chunks)
     merged_events = _rows_from_event_columns(merged_columns)
 
@@ -411,5 +468,9 @@ def merge_hdf5_files(
     # Carry the combined denominator so a merged file can itself be merged.
     if norm_count_total:
         metadata[XSEC_NORM_COUNT_KEY] = norm_count_total
+    if universe_weights is not None:
+        metadata[UNIVERSES_METADATA_KEY] = first_file_metadata[UNIVERSES_METADATA_KEY]
 
-    return write_common_hdf5(output_path, metadata, merged_events)
+    return write_common_hdf5(
+        output_path, metadata, merged_events, universe_weights=universe_weights
+    )

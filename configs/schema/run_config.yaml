@@ -123,6 +123,29 @@ jobs:
       # — see docs/configuration.md.
       current: cc
 
+  # Optional reweight universes (NuWro only): per-event weights
+  # sigma_universe/sigma_central for `count` throws of the listed parameters,
+  # written as events/universe_weights with the throws in metadata.
+  # See docs/configuration.md and docs/generators/nuwro.md.
+  - name: nuwro_universes_c12
+    generator: nuwro
+    code_version: "nuwro_25.11"
+    config_version: "default"
+    events: 20000
+    chunks: 2
+    flux: {type: power_law, particle: numu, emin_gev: 0.5, emax_gev: 5.0, gamma: -2.0}
+    target: {nucleus: C12}
+    physics: {mode: inclusive, current: cc}
+    nuwro:
+      universes:
+        seed: 20261005      # explicit: universe k is identical in every job with this seed
+        count: 100
+        parameters:         # central = the generation's own value; only sigma is given
+          # MINERvA axial FF 1-sigma band (NuWro's default qel_axial_ff_set = 8)
+          qel_minerva_ff_scale: {sigma: 1.0}
+          # flat channel factors (central 1); log: sigma is the std of ln(value)
+          mecNorm: {sigma: 0.25, log: true, source: "illustrative"}
+
 storage:
   software_root: ${NF_SOFTWARE_ROOT:-./software}
   output_root: ${NF_OUTPUT_ROOT:-./output}

@@ -15,6 +15,7 @@ from ..final_state import (
 from ..flux import build_flux
 from ..kinematics import KINEMATIC_FIELDS, derive_kinematics
 from ..translators.nuwro import NuWroTranslator
+from .. import universes
 from .base import (
     OutputNormalizer,
     interaction_from_flags,
@@ -132,6 +133,62 @@ def _resonant_primary(interactions, res_delta, res_kind) -> list[int]:
         resonant_primary_from_interaction(itype, bool(is_delta))
         for itype, is_delta in zip(interactions, delta)
     ]
+
+
+def _universe_weights(
+    work_dir: Path, flags: dict[str, np.ndarray], antineutrino: bool, n_events: int
+) -> tuple[dict, np.ndarray]:
+    """The resolved universes metadata and the ``(n_events, count)`` weights.
+
+    The product of ``nf_reweight``'s per-universe ratios (for NuWro-reweighted
+    parameters) and the channel norm factors (applied here; NuWro's own norm
+    engine never runs). Non-finite weights are an error: nf_reweight writes them
+    as they are instead of hiding them as 0 the way reweight_to does.
+    """
+    from ..generators.nuwro import UNIVERSE_WEIGHTS, UNIVERSES_RESOLVED
+
+    resolved_path = work_dir / UNIVERSES_RESOLVED
+    if not resolved_path.exists():
+        raise RuntimeError(
+            f"The job defines universes but {resolved_path} is missing; the reweighting "
+            "stage (NuWroAdapter._run_reweight) did not run."
+        )
+    resolved = json.loads(resolved_path.read_text(encoding="utf-8"))
+    count = int(resolved["count"])
+    reweighted = [name for name in resolved["parameters"] if name in universes.REWEIGHT_PARAMS]
+
+    weights = np.ones((n_events, count))
+    if reweighted:
+        import uproot
+
+        with uproot.open(work_dir / UNIVERSE_WEIGHTS) as f:
+            weights = np.asarray(f["weights"]["weights"].array(library="np"), dtype=np.float64)
+        if weights.shape != (n_events, count):
+            raise RuntimeError(
+                f"{UNIVERSE_WEIGHTS} has shape {weights.shape}, expected ({n_events}, {count})"
+            )
+        if np.all(weights == 1.0):
+            raise RuntimeError(
+                f"No universe moved any event's weight off 1 for {reweighted}: none of them "
+                "acts on this sample (e.g. a strange-axial parameter in a CC-only run). "
+                "Refusing to store weights that carry no uncertainty."
+            )
+
+    norms = {
+        name: np.asarray(resolved["values"][name])
+        for name in resolved["parameters"]
+        if name in universes.NORM_PARAMS
+    }
+    if norms:
+        weights = weights * universes.norm_factors(norms, flags, antineutrino)
+
+    bad = ~np.isfinite(weights)
+    if bad.any():
+        raise RuntimeError(
+            f"{int(bad.any(axis=1).sum())} of {n_events} events have a non-finite universe "
+            "weight (a zero nominal cross section, or a NaN from NuWro's reweighting)."
+        )
+    return resolved, weights.astype(np.float32)
 
 
 class NuWroNormalizer(OutputNormalizer):
@@ -350,4 +407,15 @@ class NuWroNormalizer(OutputNormalizer):
             event.update(event_fields(final_state, i))
             events.append(event)
 
-        return write_common_hdf5(out_path, metadata, events)
+        universe_weights = None
+        if translated.get("universes"):
+            flags = {
+                "qel": flag_qel, "res": flag_res, "dis": flag_dis, "coh": flag_coh,
+                "mec": flag_mec, "cc": flag_cc,
+            }
+            antineutrino = int(translated["nuwro_params"]["beam_particle"]) < 0
+            metadata["universes"], universe_weights = _universe_weights(
+                root_path.parent, flags, antineutrino, len(events)
+            )
+
+        return write_common_hdf5(out_path, metadata, events, universe_weights=universe_weights)

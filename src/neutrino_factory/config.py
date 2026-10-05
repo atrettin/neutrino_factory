@@ -13,6 +13,7 @@ from . import catalog
 from . import flux as flux_module
 from . import jobs as jobs_module
 from . import particles
+from . import universes
 from .jobs import JobExpansionError, deep_merge
 
 
@@ -190,6 +191,9 @@ def _validate_job(
             f"{where}: log_level must be one of {', '.join(LOG_LEVELS)} (got '{log_level}')"
         )
 
+    if "nuwro" in job:
+        errors.extend(_validate_nuwro_block(job["nuwro"], generator, where))
+
     nucleus = str(job.get("target", {}).get("nucleus", ""))
     try:
         derived_pdg = particles.nucleus_pdg(nucleus)
@@ -207,6 +211,22 @@ def _validate_job(
                 derived_pdg,
             )
 
+    return errors
+
+
+def _validate_nuwro_block(block: Any, generator: str, where: str) -> list[str]:
+    """The optional per-job ``nuwro:`` section (currently only ``universes``)."""
+    if generator != "nuwro":
+        return [f"{where}: a 'nuwro' section is only valid on a nuwro job (got '{generator}')"]
+    if not isinstance(block, dict):
+        return [f"{where}: nuwro must be a mapping"]
+    errors = [
+        f"{where}: unknown key 'nuwro.{key}' (supported: universes)"
+        for key in block
+        if key != "universes"
+    ]
+    if "universes" in block:
+        errors += universes.validate_universes(block["universes"], f"{where}: nuwro.universes")
     return errors
 
 

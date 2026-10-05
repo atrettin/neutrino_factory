@@ -423,3 +423,41 @@ against 15.9 s); the figures in [performance.md](performance.md) predate it. The
 change — `weight` is fixed at the vertex and inherited through transport, and
 a same-seed C12 run gave bit-identical weights both ways.
 
+## Reweight universes for NuWro (2026-10)
+
+**The problem.** We want cross-section uncertainties and bin-to-bin correlations
+(including between jobs) without regenerating MC, by reweighting each event under
+many parameter throws.
+
+**The decisions.**
+
+- **Explicit, shared seed; one stream per parameter.** Seeding from the job label
+  would give each job its own universe *k* and destroy cross-job correlations.
+  Per-parameter streams keep existing throws stable when a parameter is added or
+  `count` is raised.
+- **Central from generation, not config.** Writing a configurable central into
+  `params.txt` would make the central MC drift from its `config_version` while
+  keeping the same version identity. That identity is what the merge checks, so
+  such chunks would merge silently. The block therefore gives only sigma.
+- **Optional log-space sampling per parameter**, so that a covariance can be
+  formed in log space (Peelle's Pertinent Puzzle).
+- **`nf_reweight` instead of `reweight_to`.** The latter spends ~12.5 s of fixed
+  setup per universe, ~21 min per chunk at 100 universes. The single-pass driver
+  over the same engines takes 2.3 s and gives identical weights.
+- **2D float32 `universe_weights` dataset** rather than N scalar columns: one
+  optional key for writer, reader, merger and validator. float32 is ample for
+  ratios.
+- **No weighted generation.** NuWro's `save_test_events = 2` was considered as a
+  way to cover phase space better. The parameters that can be reweighted leave
+  the region where σ is non-zero unchanged, so ratio weights on
+  rejection-sampled events are already unbiased. The weighted mode drops
+  zero-weight events anyway, and its normalization is a running estimate
+  (upstream issue 7 in [generators/nuwro.md](generators/nuwro.md)). It would buy
+  tail statistics at the cost of effective sample size.
+
+**What was ruled out.** RES parameters (`pion_axial_mass`, `pion_C5A`): broken in
+the hybrid model (all RES weights NaN), and the hybrid model's generation does
+not depend on them either. Correlated priors are deferred (tracked in
+`.claude/TODOS.md`). Details and measurements are in
+[generators/nuwro.md](generators/nuwro.md#reweight-universes).
+

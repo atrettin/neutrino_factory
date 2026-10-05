@@ -179,6 +179,34 @@ the chunk's own identity, so inserting or removing a job never shifts another
 job's random stream, and there is no chunk count at which the layout collides.
 `build_task_manifest` still asserts that all seeds in a manifest are distinct.
 
+## Reweight universes: `nuwro.universes`
+
+An optional per-job section, valid only on a NuWro job. With it, the chunk gets
+an `events/universe_weights` dataset and a `universes` metadata entry (see
+[physics.md](physics.md#reweight-universes)). Without it, nothing changes.
+
+```yaml
+nuwro:
+  universes:
+    seed: 20261005        # required; universe k is identical in every job using it
+    count: 100
+    parameters:
+      qel_minerva_ff_scale: {sigma: 1.0}
+      mecNorm: {sigma: 0.25, log: true, source: "<citation>"}
+```
+
+- **`seed`** is required and independent of `run.seed`. Jobs whose correlations
+  are wanted must share it.
+- **`parameters`** gives only `sigma`, an optional `log` flag and a free-text
+  `source`. The central value is not configurable: it is the generation's own
+  value, read from the output, so the central MC is always the `config_version`'s
+  tune. A different central value is a different `config_version`.
+- **Allowed names** are the ones listed in
+  [generators/nuwro.md](generators/nuwro.md#which-parameters-are-supported).
+  Known-broken NuWro parameters fail validation with the reason.
+- **Not part of the job label.** Two jobs that differ only in their universes
+  need distinct `name:`s, otherwise they collide.
+
 ## Weak current: `physics.current`
 
 | Value | What is generated |

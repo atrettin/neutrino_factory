@@ -96,6 +96,11 @@ class NuWroTranslator(ConfigTranslator):
             "config_version": task["config_version"],
             "generator_version_id": task.get("generator_version_id"),
             "nuwro_params": nuwro_params,
+            # Reweight universes (optional): the validated config block, resolved
+            # against the generation's own parameter values after the run (see
+            # NuWroAdapter._run_reweight). params.txt is deliberately left alone,
+            # so the central MC stays the config_version's tune.
+            "universes": config.get("job", {}).get("nuwro", {}).get("universes"),
         }
 
     @staticmethod
