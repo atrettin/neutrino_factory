@@ -461,3 +461,46 @@ not depend on them either. Correlated priors are deferred (tracked in
 `.claude/TODOS.md`). Details and measurements are in
 [generators/nuwro.md](generators/nuwro.md#reweight-universes).
 
+## Reweight universes for GENIE, and switch variations (2026-10)
+
+**The problem.** NuWro's own reweighting turned out narrow: only the QE axial
+form factor works, plus channel norms applied in Python (see the entry above).
+GENIE Reweight covers more of the model, so it was added as a second backend
+with the same output contract.
+
+**The decisions.**
+
+- **One generic sampler, per-generator tables.** `universes.py` draws the
+  throws, writes the binary's input and reads its output for both generators.
+  What is generator-specific is only the allowlist and the binary. The config
+  key mirrors NuWro's (`genie.universes`, same schema), so no existing config
+  changed.
+- **GENIE dials are fractional scales with central 1, and GENIE's own 1σ table
+  is overridden to 1.** The dial then equals the fractional change exactly,
+  and the config's `sigma` is the only prior. This also gives `log: true` the
+  same meaning as for NuWro's norms. GENIE's table, with its asymmetric
+  NormCCQE entry, never enters, so the metadata fully describes the prior.
+- **Switch-type knobs are variations, not universes.** Interpolations between
+  two models on [0, 1] (RPA on/off, MEC decay angle, …) have no Gaussian prior.
+  Each gets one deterministic column in a separate `variation_weights` dataset,
+  so a covariance built from `universe_weights` can never mix them in.
+- **Own driver (`nf_genie_reweight`), not the shipped apps.** `grwght1p` scans
+  one dial; `grwghtnp` covers a subset of engines and miswires `NormCCRES`.
+  The driver adopts only the engines the dials need, because the hA2018 FSI
+  engine exits on any other tune. It fails loudly on a dial the tune's model
+  does not handle.
+- **The nominal dσ is recomputed, not read from the event.** For
+  G18_10a_02_11a's RES and COH models the stored dσ differs from the model's
+  own by event-dependent factors up to ~38×, which turned every weight into
+  noise (upstream issue 1 in [generators/genie.md](generators/genie.md)).
+- **The allowlist is what passed a per-dial check on a real sample.** Each dial
+  was checked for nominal weight exactly 1, finite weights, the right channel,
+  and a plausible sign and size; MaCCQE also passed closure against a directly
+  generated sample. The rest fail validation until checked.
+
+**What was ruled out.** `FormZone` and the AGKY dials, which are not
+σ-preserving and log FATAL errors or give single weights up to 5. NC and
+antineutrino variants, the z-expansion dials for AR23_20i, and tunes without
+hA2018 FSI are not ruled out, only unchecked, and are tracked in
+`.claude/TODOS.md`. Details and measurements are in
+[generators/genie.md](generators/genie.md#reweight-universes-and-variations).

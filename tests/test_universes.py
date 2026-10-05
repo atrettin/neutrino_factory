@@ -30,11 +30,10 @@ class SamplingTests(unittest.TestCase):
 
     def test_each_parameter_has_its_own_stream(self) -> None:
         # Adding a parameter must not change another parameter's throws.
-        alone = universes.resolve_universes(
-            _block(mecNorm={"sigma": 0.2}), {"qel_axial_ff_set": 8}
-        )
+        alone = universes.resolve_universes(_block(mecNorm={"sigma": 0.2}), {"mecNorm": 1.0})
         together = universes.resolve_universes(
-            _block(mecNorm={"sigma": 0.2}, qelNorm={"sigma": 0.1}), {"qel_axial_ff_set": 8}
+            _block(mecNorm={"sigma": 0.2}, qelNorm={"sigma": 0.1}),
+            {"mecNorm": 1.0, "qelNorm": 1.0},
         )
         self.assertEqual(alone["z"]["mecNorm"], together["z"]["mecNorm"])
         self.assertNotEqual(together["z"]["mecNorm"], together["z"]["qelNorm"])
@@ -66,10 +65,11 @@ class SamplingTests(unittest.TestCase):
             universes.universe_values("qel_minerva_ff_scale", 0.0, 1.0, True, np.array([0.0]))
 
     def test_central_comes_from_generation(self) -> None:
-        resolved = universes.resolve_universes(
-            _block(qel_minerva_ff_scale={"sigma": 1.0}),
-            {"qel_axial_ff_set": 8, "qel_minerva_ff_scale": 0.25},
+        block = _block(qel_minerva_ff_scale={"sigma": 1.0})
+        centrals = universes.nuwro_centrals(
+            block["parameters"], {"qel_axial_ff_set": 8, "qel_minerva_ff_scale": 0.25}
         )
+        resolved = universes.resolve_universes(block, centrals)
         spec = resolved["parameters"]["qel_minerva_ff_scale"]
         self.assertEqual((spec["central"], spec["sigma"], spec["log"]), (0.25, 1.0, False))
         np.testing.assert_allclose(
@@ -79,9 +79,8 @@ class SamplingTests(unittest.TestCase):
 
     def test_parameter_without_effect_under_the_form_factor_fails(self) -> None:
         with self.assertRaisesRegex(ValueError, "no effect"):
-            universes.resolve_universes(
-                _block(qel_cc_axial_mass={"sigma": 100}),
-                {"qel_axial_ff_set": 8, "qel_cc_axial_mass": 1030.0},
+            universes.nuwro_centrals(
+                ["qel_cc_axial_mass"], {"qel_axial_ff_set": 8, "qel_cc_axial_mass": 1030.0}
             )
 
 
@@ -176,7 +175,7 @@ class MergeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             a = _chunk(Path(tmp) / "a.h5", 1, np.ones((1, 2)), self.META)
             b = _chunk(Path(tmp) / "b.h5", 1, None, None)
-            with self.assertRaisesRegex(MergeError, "carry universe weights"):
+            with self.assertRaisesRegex(MergeError, "carry universe_weights"):
                 merge_hdf5_files([a, b], Path(tmp) / "m.h5")
 
     def test_shape_must_match_the_events(self) -> None:
@@ -193,11 +192,16 @@ class NormalizerUniverseWeightsTests(unittest.TestCase):
     }
 
     def _write(self, tmp: Path, parameters: dict, weights: np.ndarray | None) -> None:
-        resolved = universes.resolve_universes(
-            {"seed": 7, "count": 2, "parameters": parameters},
-            {"qel_axial_ff_set": 8, "qel_minerva_ff_scale": 0.0},
+        centrals = universes.nuwro_centrals(
+            parameters, {"qel_axial_ff_set": 8, "qel_minerva_ff_scale": 0.0}
         )
-        (tmp / "universes.json").write_text(json.dumps(resolved))
+        resolved = universes.resolve_universes(
+            {"seed": 7, "count": 2, "parameters": parameters}, centrals
+        )
+        binary = any(name in universes.NUWRO_REWEIGHT_PARAMS for name in parameters)
+        (tmp / "universes.json").write_text(
+            json.dumps({"universes": resolved, "binary_universes": binary})
+        )
         if weights is not None:
             import uproot
 
@@ -237,6 +241,157 @@ class NormalizerUniverseWeightsTests(unittest.TestCase):
             self._write(tmp, {"qel_minerva_ff_scale": {"sigma": 1.0}}, np.full((2, 2), 1.1))
             with self.assertRaisesRegex(RuntimeError, "shape"):
                 _universe_weights(tmp, self.FLAGS, False, 3)
+
+
+GENIE_JOB = {"generator": "genie", "code_version": "R-3_06_00", "config_version": "G18_10a_02_11a"}
+
+
+class GenieValidationTests(unittest.TestCase):
+    def _config(self, **section) -> None:
+        run_config([job(**GENIE_JOB, genie=section)])
+
+    def test_valid_universes_and_variations(self) -> None:
+        self._config(
+            universes=_block(MaCCQE={"sigma": 0.15, "log": True}, MFP_pi={"sigma": 0.2}),
+            variations={"RPA_CCQE": {"value": 1, "source": "x"}, "DecayAngMEC": None},
+        )
+
+    def test_broken_dial_says_why(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "not cross-section preserving"):
+            self._config(universes=_block(FormZone={"sigma": 0.1}))
+
+    def test_switch_is_not_a_gaussian_parameter(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "variations"):
+            self._config(universes=_block(RPA_CCQE={"sigma": 0.5}))
+
+    def test_gaussian_parameter_is_not_a_switch(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "universes"):
+            self._config(variations={"MaCCQE": {}})
+
+    def test_variation_value_range(self) -> None:
+        with self.assertRaisesRegex(ConfigError, r"\(0, 1\]"):
+            self._config(variations={"RPA_CCQE": {"value": 1.5}})
+
+    def test_exclusive_engine_modes(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "incompatible"):
+            self._config(universes=_block(MaCCQE={"sigma": 0.1}, NormCCQE={"sigma": 0.1}))
+
+    def test_one_fate_stays_the_cushion(self) -> None:
+        fates = {f: {"sigma": 0.2} for f in ("FrCEx_pi", "FrInel_pi", "FrAbs_pi", "FrPiProd_pi")}
+        with self.assertRaisesRegex(ConfigError, "cushion"):
+            self._config(universes=_block(**fates))
+
+    def test_nuwro_has_no_variations(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "unknown key 'nuwro.variations'"):
+            run_config([job(**NUWRO_JOB, nuwro={"variations": {"RPA_CCQE": {}}})])
+
+    def test_genie_section_only_on_genie_jobs(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "only valid on a genie job"):
+            run_config([job(**NUWRO_JOB, genie={"universes": _block(MaCCQE={"sigma": 0.1})})])
+
+    def test_driver_table_matches_the_allowlist(self) -> None:
+        # nf_genie_reweight must accept exactly the dials the config accepts.
+        source = (Path(__file__).parent.parent / "setup/genie/nf_genie_reweight.cc").read_text()
+        table = source[source.index("table = {"):source.index("};", source.index("table = {"))]
+        import re
+
+        driver = set(re.findall(r'\{"(\w+)", "\w+"\}', table))
+        self.assertEqual(
+            driver, set(universes.GENIE_SCALE_DIALS) | set(universes.GENIE_SWITCH_DIALS)
+        )
+
+
+class LoadWeightsTests(unittest.TestCase):
+    def _write(self, tmp: Path, weights: np.ndarray, count: int, switches: list[str]) -> dict:
+        block = {"seed": 1, "count": count, "parameters": {"MaCCQE": {"sigma": 0.1, "log": True}}}
+        resolved = {
+            "universes": universes.resolve_universes(block, {"MaCCQE": 1.0}),
+            "variations": universes.resolve_variations(dict.fromkeys(switches), "genie")
+            if switches
+            else None,
+            "binary_universes": True,
+        }
+        import uproot
+
+        with uproot.recreate(tmp / universes.WEIGHTS_FILE) as f:
+            f["weights"] = {"weights": weights}
+        return resolved
+
+    def test_universe_then_variation_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            tmp = Path(name)
+            w = np.array([[1.1, 0.9, 1.3], [1.0, 1.0, 0.5]])
+            resolved = self._write(tmp, w, 2, ["RPA_CCQE"])
+            uw, vw = universes.load_weights(tmp, resolved, 2)
+            assert uw is not None and vw is not None
+            np.testing.assert_allclose(uw, w[:, :2], rtol=1e-6)
+            np.testing.assert_allclose(vw, w[:, 2:], rtol=1e-6)
+            self.assertEqual(vw.dtype, np.float32)
+
+    def test_inert_variation_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            tmp = Path(name)
+            resolved = self._write(tmp, np.array([[1.1, 1.0], [0.9, 1.0]]), 1, ["RPA_CCQE"])
+            with self.assertRaisesRegex(RuntimeError, "RPA_CCQE"):
+                universes.load_weights(tmp, resolved, 2)
+
+    def test_variation_metadata(self) -> None:
+        meta = universes.resolve_variations({"RPA_CCQE": {"value": 0.5}, "DecayAngMEC": None}, "genie")
+        self.assertEqual(meta["columns"], ["RPA_CCQE", "DecayAngMEC"])
+        self.assertEqual(meta["parameters"]["RPA_CCQE"]["value"], 0.5)
+        self.assertEqual(meta["parameters"]["DecayAngMEC"]["value"], 1.0)
+        self.assertIn("RPA off", meta["parameters"]["RPA_CCQE"]["meaning"])
+
+
+class VariationMergeTests(unittest.TestCase):
+    def test_variation_weights_are_concatenated(self) -> None:
+        meta = {"columns": ["RPA_CCQE"]}
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = []
+            for i, rows in enumerate(([[1.5], [0.5]], [[2.0]])):
+                metadata = {
+                    "generator": "genie", "code_version": "R-3_06_00",
+                    "config_version": "G18_10a_02_11a", "run_name": "t", "chunk_id": i,
+                    "seed": 1, "xsec_norm_count": float(len(rows)), "variations": meta,
+                }
+                events = [
+                    {"event_id": j, "seed": 1, "energy_gev": 1.0, "is_cc": True, "interaction": "qel"}
+                    for j in range(len(rows))
+                ]
+                paths.append(write_common_hdf5(
+                    Path(tmp) / f"{i}.h5", metadata, events, variation_weights=np.array(rows)
+                ))
+            out = merge_hdf5_files(paths, Path(tmp) / "m.h5")
+            with h5py.File(out, "r") as f:
+                np.testing.assert_array_equal(f["events/variation_weights"][()], [[1.5], [0.5], [2.0]])
+                self.assertNotIn("universe_weights", f["events"])
+                self.assertEqual(json.loads(f["metadata"].attrs["variations"]), meta)
+
+
+class GenieSpecTests(unittest.TestCase):
+    def test_rows_hold_universes_then_one_row_per_variation(self) -> None:
+        from unittest import mock
+
+        from neutrino_factory.generators.genie import GenieAdapter
+
+        with tempfile.TemporaryDirectory() as name:
+            tmp = Path(name)
+            (tmp / "translated_config.json").write_text(json.dumps({
+                "config_version": "G18_10a_02_11a",
+                "universes": {"seed": 3, "count": 2, "parameters": {"MaCCQE": {"sigma": 0.1}}},
+                "variations": {"RPA_CCQE": {"value": 0.5}, "DecayAngMEC": None},
+            }))
+            adapter = GenieAdapter.__new__(GenieAdapter)
+            with mock.patch.object(GenieAdapter, "_run_reweight_binary") as run:
+                adapter._run_reweight(tmp, "R-3_06_00")
+            run.assert_called_once_with(tmp, "R-3_06_00", "G18_10a_02_11a")
+            lines = (tmp / universes.SPEC_FILE).read_text().splitlines()
+            self.assertEqual(lines[0], "MaCCQE:scale RPA_CCQE:raw DecayAngMEC:raw")
+            ma = 1.0 + 0.1 * universes.draw_z(3, "MaCCQE", 2)
+            rows = [list(map(float, line.split())) for line in lines[1:]]
+            np.testing.assert_allclose(rows, [[ma[0], 0, 0], [ma[1], 0, 0], [1, 0.5, 0], [1, 0, 1]])
+            resolved = json.loads((tmp / universes.RESOLVED_FILE).read_text())
+            self.assertEqual(resolved["universes"]["parameters"]["MaCCQE"]["central"], 1.0)
 
 
 if __name__ == "__main__":

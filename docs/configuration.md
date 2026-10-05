@@ -179,11 +179,13 @@ the chunk's own identity, so inserting or removing a job never shifts another
 job's random stream, and there is no chunk count at which the layout collides.
 `build_task_manifest` still asserts that all seeds in a manifest are distinct.
 
-## Reweight universes: `nuwro.universes`
+## Reweight universes and variations
 
-An optional per-job section, valid only on a NuWro job. With it, the chunk gets
-an `events/universe_weights` dataset and a `universes` metadata entry (see
-[physics.md](physics.md#reweight-universes)). Without it, nothing changes.
+Optional per-job sections, `nuwro:` on a NuWro job and `genie:` on a GENIE job;
+either on any other job is a validation error. With them, the chunk gets an
+`events/universe_weights` dataset and a `universes` metadata entry, and on GENIE
+optionally `events/variation_weights` with a `variations` entry (see
+[physics.md](physics.md#reweight-universes)). Without them, nothing changes.
 
 ```yaml
 nuwro:
@@ -195,15 +197,39 @@ nuwro:
       mecNorm: {sigma: 0.25, log: true, source: "<citation>"}
 ```
 
+```yaml
+genie:
+  universes:              # same schema; GENIE Reweight dial names
+    seed: 20261005
+    count: 100
+    parameters:
+      MaCCQE: {sigma: 0.15, log: true}   # a scale on the tune's value: sigma is fractional
+      MFP_pi: {sigma: 0.2}
+  variations:             # switch-type knobs, one weight column each; no seed
+    RPA_CCQE: {}          # value defaults to 1, the alternative model
+    DecayAngMEC: {value: 0.5, source: "<citation>"}
+```
+
 - **`seed`** is required and independent of `run.seed`. Jobs whose correlations
   are wanted must share it.
 - **`parameters`** gives only `sigma`, an optional `log` flag and a free-text
-  `source`. The central value is not configurable: it is the generation's own
-  value, read from the output, so the central MC is always the `config_version`'s
-  tune. A different central value is a different `config_version`.
-- **Allowed names** are the ones listed in
-  [generators/nuwro.md](generators/nuwro.md#which-parameters-are-supported).
-  Known-broken NuWro parameters fail validation with the reason.
+  `source`. The central value is not configurable. On NuWro it is the
+  generation's own value, read from the output. On GENIE every dial is a scale on
+  the generation tune's own value, so its central is 1 and `sigma` is a
+  fractional error. Either way the central MC is the `config_version`'s; a
+  different central value is a different `config_version`.
+- **`variations`** (GENIE only) lists switch-type dials, which interpolate
+  between the tune's model (0) and an alternative (1). They have no Gaussian
+  prior, so each gets one deterministic weight column at `value` (in (0, 1],
+  default 1) with every other dial at nominal. They never enter the universes.
+- **Allowed names** are listed in
+  [generators/nuwro.md](generators/nuwro.md#which-parameters-are-supported) and
+  [generators/genie.md](generators/genie.md#which-dials-are-supported).
+  Known-broken parameters fail validation with the reason. A switch listed under
+  `universes`, or a Gaussian dial under `variations`, is refused. GENIE also
+  refuses dial combinations that select incompatible engine modes (`MaCCQE`
+  with `NormCCQE`; `MaCCRES`/`MvCCRES` with `NormCCRES`), and all four hA2018
+  fates of one hadron type at once.
 - **Not part of the job label.** Two jobs that differ only in their universes
   need distinct `name:`s, otherwise they collide.
 

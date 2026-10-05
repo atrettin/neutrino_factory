@@ -17,9 +17,6 @@ from ..translators.nuwro import NuWroTranslator
 # setup/nuwro/nf_reweight.cc, and the files it reads and writes in the task's
 # work directory.
 REWEIGHT_BINARY = "nf_reweight"
-UNIVERSES_SPEC = "universes.txt"
-UNIVERSES_RESOLVED = "universes.json"
-UNIVERSE_WEIGHTS = "universe_weights.root"
 
 
 def generation_parameters(root_path: Path, names: list[str]) -> dict[str, float]:
@@ -116,29 +113,32 @@ class NuWroAdapter(GeneratorAdapter):
         """
         translated = json.loads((work_dir / "translated_config.json").read_text(encoding="utf-8"))
         block = translated.get("universes")
-        for stale in (UNIVERSES_RESOLVED, UNIVERSE_WEIGHTS):
+        for stale in (universes.RESOLVED_FILE, universes.WEIGHTS_FILE):
             (work_dir / stale).unlink(missing_ok=True)
         if not block:
             return
 
-        reweighted = [name for name in block["parameters"] if name in universes.REWEIGHT_PARAMS]
+        reweighted = [n for n in block["parameters"] if n in universes.NUWRO_REWEIGHT_PARAMS]
         generation = generation_parameters(
             work_dir / "events.root", [*reweighted, "qel_axial_ff_set"]
         )
-        resolved = universes.resolve_universes(block, generation)
+        centrals = universes.nuwro_centrals(block["parameters"], generation)
+        resolved = universes.resolve_universes(block, centrals)
         if reweighted:
-            rows = zip(*(resolved["values"][name] for name in reweighted))
-            (work_dir / UNIVERSES_SPEC).write_text(
-                " ".join(reweighted) + "\n"
-                + "".join(" ".join(repr(v) for v in row) + "\n" for row in rows),
-                encoding="utf-8",
+            universes.write_spec(
+                work_dir / universes.SPEC_FILE,
+                reweighted,
+                zip(*(resolved["values"][name] for name in reweighted)),
             )
             self._run_reweight_binary(work_dir, code_version)
-        (work_dir / UNIVERSES_RESOLVED).write_text(json.dumps(resolved), encoding="utf-8")
+        (work_dir / universes.RESOLVED_FILE).write_text(
+            json.dumps({"universes": resolved, "binary_universes": bool(reweighted)}),
+            encoding="utf-8",
+        )
 
     def _run_reweight_binary(self, work_dir: Path, code_version: str | None) -> None:
         # Same native-first branch order as generation (see build_run_command).
-        args = ["events.root", UNIVERSES_SPEC, UNIVERSE_WEIGHTS]
+        args = ["events.root", universes.SPEC_FILE, universes.WEIGHTS_FILE]
         if shutil.which(REWEIGHT_BINARY):
             command = containers.apptainer_dispatch(
                 self.name, code_version, [REWEIGHT_BINARY, *args]

@@ -191,8 +191,9 @@ def _validate_job(
             f"{where}: log_level must be one of {', '.join(LOG_LEVELS)} (got '{log_level}')"
         )
 
-    if "nuwro" in job:
-        errors.extend(_validate_nuwro_block(job["nuwro"], generator, where))
+    for section in GENERATOR_SECTIONS:
+        if section in job:
+            errors.extend(_validate_generator_section(section, job[section], generator, where))
 
     nucleus = str(job.get("target", {}).get("nucleus", ""))
     try:
@@ -214,19 +215,34 @@ def _validate_job(
     return errors
 
 
-def _validate_nuwro_block(block: Any, generator: str, where: str) -> list[str]:
-    """The optional per-job ``nuwro:`` section (currently only ``universes``)."""
-    if generator != "nuwro":
-        return [f"{where}: a 'nuwro' section is only valid on a nuwro job (got '{generator}')"]
+# Optional per-job generator sections, each only valid on its own generator's
+# jobs. Their keys: ``universes`` (Gaussian reweight universes) and, where the
+# generator has switch-type knobs, ``variations``.
+GENERATOR_SECTIONS = {"nuwro": ("universes",), "genie": ("universes", "variations")}
+
+
+def _validate_generator_section(section: str, block: Any, generator: str, where: str) -> list[str]:
+    """An optional per-job ``nuwro:`` / ``genie:`` section."""
+    if generator != section:
+        return [
+            f"{where}: a '{section}' section is only valid on a {section} job (got '{generator}')"
+        ]
     if not isinstance(block, dict):
-        return [f"{where}: nuwro must be a mapping"]
+        return [f"{where}: {section} must be a mapping"]
+    supported = GENERATOR_SECTIONS[section]
     errors = [
-        f"{where}: unknown key 'nuwro.{key}' (supported: universes)"
+        f"{where}: unknown key '{section}.{key}' (supported: {', '.join(supported)})"
         for key in block
-        if key != "universes"
+        if key not in supported
     ]
     if "universes" in block:
-        errors += universes.validate_universes(block["universes"], f"{where}: nuwro.universes")
+        errors += universes.validate_universes(
+            block["universes"], f"{where}: {section}.universes", section
+        )
+    if "variations" in block and "variations" in supported:
+        errors += universes.validate_variations(
+            block["variations"], f"{where}: {section}.variations", section
+        )
     return errors
 
 

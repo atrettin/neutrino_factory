@@ -145,50 +145,17 @@ def _universe_weights(
     engine never runs). Non-finite weights are an error: nf_reweight writes them
     as they are instead of hiding them as 0 the way reweight_to does.
     """
-    from ..generators.nuwro import UNIVERSE_WEIGHTS, UNIVERSES_RESOLVED
-
-    resolved_path = work_dir / UNIVERSES_RESOLVED
-    if not resolved_path.exists():
-        raise RuntimeError(
-            f"The job defines universes but {resolved_path} is missing; the reweighting "
-            "stage (NuWroAdapter._run_reweight) did not run."
-        )
-    resolved = json.loads(resolved_path.read_text(encoding="utf-8"))
-    count = int(resolved["count"])
-    reweighted = [name for name in resolved["parameters"] if name in universes.REWEIGHT_PARAMS]
-
-    weights = np.ones((n_events, count))
-    if reweighted:
-        import uproot
-
-        with uproot.open(work_dir / UNIVERSE_WEIGHTS) as f:
-            weights = np.asarray(f["weights"]["weights"].array(library="np"), dtype=np.float64)
-        if weights.shape != (n_events, count):
-            raise RuntimeError(
-                f"{UNIVERSE_WEIGHTS} has shape {weights.shape}, expected ({n_events}, {count})"
-            )
-        if np.all(weights == 1.0):
-            raise RuntimeError(
-                f"No universe moved any event's weight off 1 for {reweighted}: none of them "
-                "acts on this sample (e.g. a strange-axial parameter in a CC-only run). "
-                "Refusing to store weights that carry no uncertainty."
-            )
-
+    resolved = universes.read_resolved(work_dir)
+    univ = resolved["universes"]
     norms = {
-        name: np.asarray(resolved["values"][name])
-        for name in resolved["parameters"]
-        if name in universes.NORM_PARAMS
+        name: np.asarray(univ["values"][name])
+        for name in univ["parameters"]
+        if name in universes.NUWRO_NORM_PARAMS
     }
-    if norms:
-        weights = weights * universes.norm_factors(norms, flags, antineutrino)
-
-    bad = ~np.isfinite(weights)
-    if bad.any():
-        raise RuntimeError(
-            f"{int(bad.any(axis=1).sum())} of {n_events} events have a non-finite universe "
-            "weight (a zero nominal cross section, or a NaN from NuWro's reweighting)."
-        )
-    return resolved, weights.astype(np.float32)
+    factors = universes.norm_factors(norms, flags, antineutrino) if norms else None
+    weights, _ = universes.load_weights(work_dir, resolved, n_events, factors)
+    assert weights is not None
+    return univ, weights
 
 
 class NuWroNormalizer(OutputNormalizer):

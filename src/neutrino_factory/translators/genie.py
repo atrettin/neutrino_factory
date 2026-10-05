@@ -123,6 +123,10 @@ class GenieTranslator(ConfigTranslator):
                 Path(config["storage"]["software_root"]).expanduser().resolve()
             ),
             "generator_version_id": task.get("generator_version_id"),
+            # Reweight universes and switch variations (optional): the validated
+            # config blocks, weighted after the run by GenieAdapter._run_reweight.
+            "universes": config.get("job", {}).get("genie", {}).get("universes"),
+            "variations": config.get("job", {}).get("genie", {}).get("variations"),
         }
 
     @staticmethod

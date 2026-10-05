@@ -175,6 +175,41 @@ RUN PYTHIA6_LIBDIR="$(find /opt/pythia6 -maxdepth 4 -name 'libPythia6.so' \
     test -d /opt/genie/config && test -d /opt/genie/data && \
     test -x /opt/genie/bin/gevgen
 
+# ── GENIE Reweight + nf_genie_reweight ────────────────────────────────────────
+# neutrino-factory's universe reweighter (genie/nf_genie_reweight.cc), a driver
+# over GENIE Reweight's engines. R-1_04_02 is R-1_04_00 (released with Generator
+# R-3_06_00) plus the fix that makes the RES/COH/DIS engines use the phase space
+# stored in the event. Reweight has no configure step: its Make.include reads
+# $GENIE's Make.config. `make install` is skipped (it requires Professor2).
+# The driver is linked exactly like grwght1p, so its Makefile rule is grwght1p's
+# with the names swapped. The Reweight libraries and the driver are then copied
+# into $GENIE/lib and $GENIE/bin, so the runtime stage, the Apptainer payload and
+# its wrapper pick them up with no further paths; nothing reads $GENIE_REWEIGHT
+# at run time. Its headers go to $GENIE/src beside GENIE's own: the libraries'
+# ROOT dictionaries look them up when loaded, and print cling "Missing
+# FileEntry" errors for every Reweight class if they are absent.
+ARG GENIE_REWEIGHT_TAG=R-1_04_02
+COPY genie/nf_genie_reweight.cc /tmp/nf_genie_reweight.cc
+RUN PYTHIA6_LIBDIR="$(find /opt/pythia6 -maxdepth 4 -name 'libPythia6.so' \
+        -exec dirname {} \; | head -1)" && \
+    export ROOTSYS=/opt/root && \
+    export PATH="/opt/root/bin:${PATH}" && \
+    export LD_LIBRARY_PATH="/opt/genie/lib:/opt/root/lib:/opt/lhapdf6/lib:${PYTHIA6_LIBDIR}" && \
+    export GENIE=/opt/genie GENIE_REWEIGHT=/opt/genie-reweight && \
+    git clone --depth 1 --branch "${GENIE_REWEIGHT_TAG}" \
+      https://github.com/GENIE-MC/Reweight.git /opt/genie-reweight && \
+    cd /opt/genie-reweight && make && \
+    cp /tmp/nf_genie_reweight.cc src/Apps/nf_genie_reweight.cxx && \
+    cd src/Apps && \
+    sed -n '/^\$(GENIE_REWEIGHT_BIN_PATH)\/grwght1p:/,/\$(LD)/p' Makefile \
+      | sed 's#grwght1p#nf_genie_reweight#g; s#gRwght1Param#nf_genie_reweight#g' >> Makefile && \
+    make /opt/genie-reweight/bin/nf_genie_reweight && \
+    cp -a /opt/genie-reweight/lib/. /opt/genie/lib/ && \
+    cp -a /opt/genie-reweight/src/RwFramework /opt/genie-reweight/src/RwCalculators \
+      /opt/genie-reweight/src/RwIO /opt/genie/src/ && \
+    cp /opt/genie-reweight/bin/nf_genie_reweight /opt/genie/bin/ && \
+    test -x /opt/genie/bin/nf_genie_reweight
+
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 FROM --platform=linux/amd64 ubuntu:22.04
 

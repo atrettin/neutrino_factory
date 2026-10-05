@@ -327,7 +327,7 @@ nucleon that `e/in` reports.
 ## Reweight universes
 
 A job with a `nuwro.universes` block (schema in
-[../configuration.md](../configuration.md#reweight-universes-nuwrouniverses))
+[../configuration.md](../configuration.md#reweight-universes-and-variations))
 gets a second stage after generation. It writes one weight per event per
 universe, σ_universe/σ_central at the event's stored kinematics, into
 `events/universe_weights`. The sampling conventions are in

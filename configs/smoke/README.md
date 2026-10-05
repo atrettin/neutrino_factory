@@ -8,6 +8,7 @@ confirm the composed `nf-base.sif` actually works after (re)building images.
 | Config | Generator | Events | Notes |
 |---|---|---|---|
 | `genie_c12.yaml` | GENIE `R-3_06_00` / `G18_10a_02_11a` | 50 | needs the tune's xsec spline staged |
+| `genie_c12_universes.yaml` | GENIE `R-3_06_00` / `G18_10a_02_11a` | 500 | three-stage: `gevgen`, `gntpc`, then `nf_genie_reweight`; 10 reweight universes in `events/universe_weights` and 2 switch variations in `events/variation_weights` |
 | `nuwro_c12.yaml` | NuWro `nuwro_25.11` | 50 | |
 | `nuwro_c12_universes.yaml` | NuWro `nuwro_25.11` | 1000 | two-stage: `nuwro` then `nf_reweight`; 10 reweight universes in `events/universe_weights` |
 | `gibuu_c12.yaml` | GiBUU `release2025` | 1000 | more events on purpose: GiBUU weights uniformly-sampled events by cross section (no rejection sampling), so a representative dataset needs many events — and it's fast |

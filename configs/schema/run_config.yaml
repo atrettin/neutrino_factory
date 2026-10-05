@@ -123,7 +123,7 @@ jobs:
       # — see docs/configuration.md.
       current: cc
 
-  # Optional reweight universes (NuWro only): per-event weights
+  # Optional reweight universes (NuWro and GENIE): per-event weights
   # sigma_universe/sigma_central for `count` throws of the listed parameters,
   # written as events/universe_weights with the throws in metadata.
   # See docs/configuration.md and docs/generators/nuwro.md.
@@ -145,6 +145,31 @@ jobs:
           qel_minerva_ff_scale: {sigma: 1.0}
           # flat channel factors (central 1); log: sigma is the std of ln(value)
           mecNorm: {sigma: 0.25, log: true, source: "illustrative"}
+
+  # GENIE: the same universes schema, with GENIE Reweight dials. Every dial is a
+  # scale on the tune's own value (central 1), so sigma is a fractional error.
+  # Switch-type dials (interpolations between two models) are not Gaussian and
+  # go under `variations`: one weight column each, in events/variation_weights.
+  # See docs/configuration.md and docs/generators/genie.md.
+  - name: genie_universes_c12
+    generator: genie
+    code_version: "R-3_06_00"
+    config_version: "G18_10a_02_11a"
+    events: 20000
+    chunks: 4
+    flux: {type: power_law, particle: numu, emin_gev: 0.5, emax_gev: 5.0, gamma: -2.0}
+    target: {nucleus: C12}
+    physics: {mode: inclusive, current: cc}
+    genie:
+      universes:
+        seed: 20261005      # the same seed as other jobs keeps universe k shared
+        count: 100
+        parameters:
+          MaCCQE: {sigma: 0.15, log: true, source: "illustrative"}
+          MaCCRES: {sigma: 0.2, log: true, source: "illustrative"}
+          MFP_pi: {sigma: 0.2, log: true, source: "illustrative"}
+      variations:
+        RPA_CCQE: {}        # value defaults to 1, the alternate model
 
 storage:
   software_root: ${NF_SOFTWARE_ROOT:-./software}
