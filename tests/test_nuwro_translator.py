@@ -34,6 +34,8 @@ class NuWroTranslatorFluxTests(unittest.TestCase):
         translated = NuWroTranslator().translate(self._config(), _task())
         params = translated["nuwro_params"]
         self.assertEqual(params["beam_type"], 0)
+        # The cascade fills e/post, which the final-state columns are read from.
+        self.assertEqual(params["FSI_on"], 1)
 
         beam_energy = params["beam_energy"]
         self.assertTrue(beam_energy.startswith("500.0 5000.0 "))

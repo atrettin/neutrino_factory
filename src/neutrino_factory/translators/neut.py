@@ -210,6 +210,14 @@ class NeutTranslator(ConfigTranslator):
             "NEUT-NUMATOM": protons + neutrons,
             "NEUT-MODE": 0,
             "NEUT-RAND": 0,
+            # Final-state interactions -- pion (NEUT-NEFF 0 = on, despite
+            # necard.h's "in O16" name) and nucleon (NUCRES-RESCAT 1 = on)
+            # cascades -- which shape the post-FSI list the final-state
+            # columns are read from. Both are NEUT's defaults per necard.h and
+            # the shipped neut_5.4.0_* cards; pinned so the columns do not
+            # depend on them.
+            "NEUT-NEFF": 0,
+            "NUCRES-RESCAT": 1,
         }
         if current != "inclusive":
             card["NEUT-MODE"] = -1

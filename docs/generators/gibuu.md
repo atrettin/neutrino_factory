@@ -51,25 +51,31 @@ Fortran namelist, rendered by `_render_jobcard`:
 | `version` | the release year | GiBUU **refuses to run** unless the jobcard version matches the code release |
 | `eventtype` | 5 | neutrino induced |
 | `EventFormat` | 4 | RootTuple ROOT output |
-| `numTimeSteps` | 0 | no FSI transport — GiBUU's documented setting for inclusive cross sections, see below |
+| `numTimeSteps` / `delta_T` | 150 / 0.2 fm | FSI transport out to 30 fm, as in the shipped neutrino cards — see below |
 | `densitySwitch` / `pauliSwitch` | 2 / 2 | static density and Pauli blocking (fixed target) |
 | `process_ID` | ±2 (CC) / ±3 (NC) | negative for antineutrinos, from the **PDG sign**, not the name |
 | `flavor_ID` | 1/2/3 | e/μ/τ, independent of ν vs ν̄ |
 
-### Final-state interactions are switched off, deliberately
+### Final-state interactions are switched on
 
-`numTimeSteps = 0` disables GiBUU's FSI transport entirely:
-`inputGeneral.f90:514` sets `time_max = numTimeSteps * delta_T`, so
-`GiBUU.f90`'s `PhaseSpaceEvolution : do while (time < time_max - delta_T/2.)`
-loop never executes. No hadron is propagated, rescattered or absorbed.
+The jobcard runs FSI transport for `numTimeSteps × delta_T = 150 × 0.2 fm =
+30 fm`, the values the shipped neutrino jobcards use (e.g.
+`testRun/jobCards/005_Neutrino_SBND_nu.job`, whose comment asks that the
+distance "significantly exceed the radius of the target nucleus").
+`inputGeneral.f90:514` sets `time_max = numTimeSteps * delta_T`, and
+`GiBUU.f90`'s `PhaseSpaceEvolution` loop propagates, rescatters and absorbs the
+hadrons until then.
 
-**This is GiBUU's own documented setting for inclusive cross sections, not a
-shortcut.** Every shipped neutrino jobcard in `testRun/jobCards/` carries the
-comment *"for inclusive cross sections set numTimeSteps = 0"* next to the value
-it uses, and `005_Neutrino_FASERnu.job` ships with `numTimeSteps = 0`.
+Transport is what makes the final-state columns post-FSI: `EventOutput`'s
+`write_pert` writes the perturbative particle list as it stands at the end of
+the evolution, which is the `barcode`/`E`/`Px`/`Py`/`Pz` list the normalizer
+summarizes (see [physics.md](../physics.md#final-state-content)). The jobcards
+used to set `numTimeSteps = 0` — GiBUU's documented setting for *inclusive*
+cross sections, correct while the common output recorded no hadronic
+observable — and with that setting the list is the primary-vertex one.
 
-It is exact for what this framework records, because **the cross section is
-fixed at the initial vertex**:
+**Transport leaves the cross section and the vertex columns alone**, because
+they are fixed at the initial vertex:
 
 - `weight`, `evType`, `lepIn_*`, `lepOut_*` and `nuc_*` are all written from
   `neutrinoProdInfo` — a module whose own header says it "stores information
@@ -79,8 +85,8 @@ fixed at the initial vertex**:
   `init/` (in `collisionTerm.f90`, `master_1Body.f90`) *inherits* the parent's
   weight into the final state.
 - The outgoing lepton does not interact strongly, so every kinematic column the
-  common output derives — Q², x, y, the lepton angles — is an initial-vertex
-  quantity.
+  common output derives — Q², x, y, the lepton angles, both W columns — is an
+  initial-vertex quantity.
 
 **Verified empirically** (release2025, local Docker, 1000-event C12 CC run,
 E^-2 flux over 0.5–5 GeV, same jobcard and same seed run both ways):
@@ -93,25 +99,16 @@ E^-2 flux over 0.5–5 GeV, same jobcard and same seed run both ways):
 | `weight`, `evType`, `lepIn_*`, `lepOut_*` | — | **bit-identical** |
 | Hadrons per event | 1.867 | 3.077 |
 
-FSI demonstrably did real work — it raised the hadron multiplicity by 65% — and
-changed the inclusive cross section by exactly nothing.
+FSI raised the hadron multiplicity by 65% and changed the inclusive cross
+section by exactly nothing. `evType` is a *production* label (GiBUU's
+`prod_id`): it describes the interaction at the vertex, not the observed final
+state.
 
-**When this stops being true.** The equivalence holds *only* because the common
-output records no hadronic observables. Enabling FSI becomes mandatory the
-moment any are added — pion multiplicities, knocked-out nucleons, calorimetric
-or visible energy, or an experiment-style "CCQE-like" topology classification,
-all of which FSI reshapes. Note also that `evType` is a *production* label
-(GiBUU's `prod_id`), so it describes the interaction at the vertex rather than
-the observed final state, with or without transport.
-
-If FSI is ever enabled, two things follow: `numTimeSteps * delta_T` must
-comfortably exceed the nuclear radius (the shipped cards use 150 × 0.2 fm =
-30 fm), and `EventOutput.f90`'s `write_pert` notes that *"events with no
-particles in the output … are not included in the list and thus produce no
-output"* — so an event whose hadrons are all absorbed would drop out of the file
-and take its weight with it. That did not occur in the run above (both counts
-were 821), but it would need checking before trusting a summed cross section
-from an FSI-enabled run.
+**The event count is the one thing transport could change.** `write_pert`
+skips an event with no perturbative particle left (`if (NUP == 0) cycle`; its
+header notes that such events "are not included in the list and thus produce no
+output"), which would drop that event's weight from the cross-section sum. The
+C12 run above lost none (821 both ways).
 
 ### Ensemble sizing
 

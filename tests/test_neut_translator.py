@@ -60,6 +60,9 @@ class NeutTranslatorTests(unittest.TestCase):
         # (see the current tests below), with a reproducible seed from $RANFILE.
         self.assertEqual(card["NEUT-MODE"], -1)
         self.assertEqual(card["NEUT-RAND"], 0)
+        # Pion and nucleon FSI on, for the post-FSI final-state columns.
+        self.assertEqual(card["NEUT-NEFF"], 0)
+        self.assertEqual(card["NUCRES-RESCAT"], 1)
         # Letting NEUT-CRSPATH default keeps $NEUT_CRSPATH authoritative.
         self.assertNotIn("NEUT-CRSPATH", card)
 

@@ -73,6 +73,11 @@ class NuWroTranslator(ConfigTranslator):
             "nucleus_n": neutrons,
             "target_type": 0,
             **self._dynamics(current),
+            # The intranuclear cascade, which fills e/post -- the post-FSI list
+            # the final-state columns are read from. On in NuWro's own default
+            # (params_all.h) too; pinned so the columns never silently fall
+            # back to the pre-FSI copy NuWro writes into e/post when it is off.
+            "FSI_on": 1,
         }
 
         return {
