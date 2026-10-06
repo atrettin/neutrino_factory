@@ -10,7 +10,13 @@ from unittest.mock import patch
 from neutrino_factory.cli import build_parser
 from neutrino_factory.config import load_config
 from neutrino_factory.local import run_task_from_manifest
-from neutrino_factory.slurm import build_task_manifest, chunk_ranges, render_sbatch_script
+from neutrino_factory.slurm import (
+    build_task_manifest,
+    chunk_ranges,
+    format_slurm_array_spec,
+    identify_missing_chunks,
+    render_sbatch_script,
+)
 
 
 class SlurmPlanningTests(unittest.TestCase):
@@ -227,6 +233,100 @@ class RunTaskCliTests(unittest.TestCase):
 
         self.assertEqual(result, "/tmp/output.h5")
         self.assertEqual(run_task.call_args.kwargs["execution_mode"], "local")
+
+
+class RetryTests(unittest.TestCase):
+    def test_format_slurm_array_spec_with_consecutive_ranges(self) -> None:
+        """Test that consecutive indices are grouped into ranges."""
+        self.assertEqual(format_slurm_array_spec([0, 1, 2, 5, 7, 8, 9]), "0-2,5,7-9")
+
+    def test_format_slurm_array_spec_with_single_index(self) -> None:
+        """Test a single index."""
+        self.assertEqual(format_slurm_array_spec([5]), "5")
+
+    def test_format_slurm_array_spec_with_sparse_indices(self) -> None:
+        """Test non-consecutive indices."""
+        self.assertEqual(format_slurm_array_spec([0, 2, 4, 6]), "0,2,4,6")
+
+    def test_format_slurm_array_spec_with_empty_list(self) -> None:
+        """Test empty list returns empty string."""
+        self.assertEqual(format_slurm_array_spec([]), "")
+
+    def test_format_slurm_array_spec_with_unsorted_input(self) -> None:
+        """Test that unsorted input is handled correctly."""
+        self.assertEqual(format_slurm_array_spec([9, 0, 5, 1, 2]), "0-2,5,9")
+
+    def test_format_slurm_array_spec_with_full_range(self) -> None:
+        """Test a complete consecutive range."""
+        self.assertEqual(format_slurm_array_spec([0, 1, 2, 3, 4]), "0-4")
+
+    def test_identify_missing_chunks_with_all_present(self) -> None:
+        """Test when all chunk files exist."""
+        repo_root = Path(__file__).resolve().parents[1]
+        config_path = repo_root / "configs" / "examples" / "power_law_numu_Ar.yaml"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = {
+                "NF_OUTPUT_ROOT": f"{tmpdir}/output",
+                "NF_WORK_ROOT": f"{tmpdir}/work",
+            }
+            with patch.dict(os.environ, env, clear=False):
+                config = load_config(config_path)
+                manifest = build_task_manifest(config)
+
+                # Create all expected chunk files
+                for task in manifest["tasks"]:
+                    from neutrino_factory.layout import chunk_output_path
+                    chunk_path = chunk_output_path(config, task)
+                    chunk_path.parent.mkdir(parents=True, exist_ok=True)
+                    chunk_path.write_text("dummy", encoding="utf-8")
+
+                missing = identify_missing_chunks(config, manifest)
+                self.assertEqual(missing, [])
+
+    def test_identify_missing_chunks_with_some_missing(self) -> None:
+        """Test when some chunk files are missing."""
+        repo_root = Path(__file__).resolve().parents[1]
+        config_path = repo_root / "configs" / "examples" / "power_law_numu_Ar.yaml"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = {
+                "NF_OUTPUT_ROOT": f"{tmpdir}/output",
+                "NF_WORK_ROOT": f"{tmpdir}/work",
+            }
+            with patch.dict(os.environ, env, clear=False):
+                config = load_config(config_path)
+                manifest = build_task_manifest(config)
+
+                # Create only even-indexed chunk files
+                for task in manifest["tasks"]:
+                    if task["task_index"] % 2 == 0:
+                        from neutrino_factory.layout import chunk_output_path
+                        chunk_path = chunk_output_path(config, task)
+                        chunk_path.parent.mkdir(parents=True, exist_ok=True)
+                        chunk_path.write_text("dummy", encoding="utf-8")
+
+                missing = identify_missing_chunks(config, manifest)
+                expected_missing = [t["task_index"] for t in manifest["tasks"] if t["task_index"] % 2 == 1]
+                self.assertEqual(missing, expected_missing)
+
+    def test_identify_missing_chunks_with_all_missing(self) -> None:
+        """Test when all chunk files are missing."""
+        repo_root = Path(__file__).resolve().parents[1]
+        config_path = repo_root / "configs" / "examples" / "power_law_numu_Ar.yaml"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = {
+                "NF_OUTPUT_ROOT": f"{tmpdir}/output",
+                "NF_WORK_ROOT": f"{tmpdir}/work",
+            }
+            with patch.dict(os.environ, env, clear=False):
+                config = load_config(config_path)
+                manifest = build_task_manifest(config)
+
+                missing = identify_missing_chunks(config, manifest)
+                expected_missing = [t["task_index"] for t in manifest["tasks"]]
+                self.assertEqual(missing, expected_missing)
 
 
 if __name__ == "__main__":
