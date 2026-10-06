@@ -354,7 +354,8 @@ class GiBUUNormalizer(OutputNormalizer):
             nucleon_valid=~np.isin(ev_types, TWO_NUCLEON_EVTYPES),
         )
         final_state = summarize_final_state(
-            merged["fs_pdg"], merged["fs_energy"], merged["fs_momentum"], merged["fs_counts"]
+            merged["fs_pdg"], merged["fs_energy"], merged["fs_momentum"], merged["fs_counts"],
+            nu_p4[:, 1:],
         )
 
         # Declare how much this chunk's estimate is worth, so merging averages

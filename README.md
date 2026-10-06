@@ -186,6 +186,9 @@ and an `events` group holding one 1-D dataset per column.
 | `lepton_costheta` | – | cosine of the lepton scattering angle |
 | `n_proton`, `n_neutron` | – | post-FSI nucleon multiplicities |
 | `n_pi_plus`, `n_pi_minus`, `n_pi_zero` | – | post-FSI pion multiplicities |
+| `n_other_mesons` | – | post-FSI count of all mesons that are not pions (kaons, η, …) |
+| `leading_pion_kinetic_energy_gev` | GeV | kinetic energy of the highest-T pion of any charge |
+| `leading_pion_costheta` | – | cosine of that pion's angle to the beam |
 | `hadronic_energy_gev` | GeV | Σ E over non-leptonic final-state particles |
 | `hadronic_kinetic_energy_gev` | GeV | Σ (E − m) over the same particles |
 | `native_interaction_code` | – | the generator's own channel code (**not** universal) |

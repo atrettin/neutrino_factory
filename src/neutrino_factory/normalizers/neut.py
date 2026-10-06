@@ -268,7 +268,7 @@ class NeutNormalizer(OutputNormalizer):
             nucleon_p4=nucleon_p4,
             nucleon_valid=np.asarray(nucleon_count) > 0,
         )
-        final_state = summarize_final_state(*final_state_arrays)
+        final_state = summarize_final_state(*final_state_arrays, nu_p4[:, 1:])
 
         # Declare how much this chunk's estimate is worth, so merging averages
         # the chunks instead of summing them (see ConfigTranslator.xsec_norm_count

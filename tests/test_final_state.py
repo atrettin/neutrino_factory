@@ -11,19 +11,22 @@ from neutrino_factory.final_state import (
     FINAL_STATE_FIELDS,
     MISSING_COUNT,
     MISSING_ENERGY,
+    MISSING_SIGNED,
+    is_meson,
     missing_final_state,
     summarize_final_state,
 )
 
 
 def _summarize(particles: list[list[tuple[int, float, float, float, float]]]) -> dict:
-    """Summarize a per-event list of ``(pdg, E, px, py, pz)`` tuples."""
+    """Summarize a per-event list of ``(pdg, E, px, py, pz)`` tuples, beam along +z."""
     flat = [p for event in particles for p in event]
     counts = np.array([len(event) for event in particles], dtype=np.int64)
     pdg = np.array([p[0] for p in flat], dtype=np.int64)
     energy = np.array([p[1] for p in flat], dtype=np.float64)
     momentum = np.array([p[2:] for p in flat], dtype=np.float64).reshape(-1, 3)
-    return summarize_final_state(pdg, energy, momentum, counts)
+    beam = np.tile([0.0, 0.0, 1.0], (len(particles), 1))
+    return summarize_final_state(pdg, energy, momentum, counts, beam)
 
 
 class MultiplicityTests(unittest.TestCase):
@@ -119,6 +122,72 @@ class HadronicEnergyTests(unittest.TestCase):
         self.assertAlmostEqual(columns["hadronic_kinetic_energy_gev"][0], 0.7)
 
 
+class OtherMesonTests(unittest.TestCase):
+    def test_meson_classification(self) -> None:
+        mesons = [211, -211, 111, 321, -321, 311, 130, 310, 221, 223, 331, 411, 9000111]
+        others = [2212, 2112, 3122, 3222, 22, 11, 13, 14, 2103, 1000180400, 0]
+        self.assertTrue(np.all(is_meson(mesons)))
+        self.assertFalse(np.any(is_meson(others)))
+
+    def test_counts_non_pion_mesons_only(self) -> None:
+        columns = _summarize([
+            [(321, 1.0, 0.0, 0.0, 0.0), (-311, 1.0, 0.0, 0.0, 0.0), (221, 1.0, 0.0, 0.0, 0.0),
+             (211, 1.0, 0.0, 0.0, 0.0), (111, 1.0, 0.0, 0.0, 0.0), (3122, 1.0, 0.0, 0.0, 0.0)],
+            [(211, 1.0, 0.0, 0.0, 0.0)],
+        ])
+        self.assertEqual(list(columns["n_other_mesons"]), [3, 0])
+
+
+class LeadingPionTests(unittest.TestCase):
+    def test_picks_highest_kinetic_energy_pion_of_any_charge(self) -> None:
+        # pi- (T = 0.2) beats pi+ (T = 0.1) and pi0 (T = 0.1); the more energetic
+        # proton and kaon are not pions.
+        columns = _summarize([[
+            (211, 1.3, 0.5, 0.0, 0.0),
+            (-211, 1.0, 0.0, 0.0, -0.6),
+            (111, 1.3, 0.0, 0.5, 0.0),
+            (2212, 5.0, 4.0, 0.0, 0.0),
+            (321, 5.0, 4.0, 0.0, 0.0),
+        ]])
+        self.assertAlmostEqual(columns["leading_pion_kinetic_energy_gev"][0], 0.2)
+        self.assertAlmostEqual(columns["leading_pion_costheta"][0], -1.0)
+
+    def test_angle_is_measured_against_each_events_beam(self) -> None:
+        pdg = np.array([211, 211], dtype=np.int64)
+        energy = np.array([5.0, 5.0])
+        momentum = np.array([[0.0, 0.0, 4.0], [0.0, 0.0, 4.0]])
+        beam = np.array([[0.0, 0.0, 2.0], [0.0, 3.0, 4.0]])
+        columns = summarize_final_state(pdg, energy, momentum, np.array([1, 1]), beam)
+        self.assertAlmostEqual(columns["leading_pion_costheta"][0], 1.0)
+        self.assertAlmostEqual(columns["leading_pion_costheta"][1], 0.8)
+
+    def test_pion_at_rest_has_no_angle(self) -> None:
+        columns = _summarize([[(111, 0.135, 0.0, 0.0, 0.0)]])
+        self.assertAlmostEqual(columns["leading_pion_kinetic_energy_gev"][0], 0.0)
+        self.assertEqual(columns["leading_pion_costheta"][0], MISSING_SIGNED)
+
+    def test_leading_pion_is_attributed_to_the_right_events(self) -> None:
+        columns = _summarize([
+            [(211, 1.3, 0.0, 0.0, 0.5)],
+            [(2212, 1.0, 0.0, 0.0, 0.0)],
+            [(111, 1.0, 0.0, 0.0, -0.6), (211, 5.0, 0.0, 0.0, 4.0)],
+        ])
+        self.assertEqual(
+            [round(float(t), 9) for t in columns["leading_pion_kinetic_energy_gev"]],
+            [0.1, MISSING_ENERGY, 2.0],
+        )
+        self.assertEqual(
+            [round(float(c), 9) for c in columns["leading_pion_costheta"]],
+            [1.0, MISSING_SIGNED, 1.0],
+        )
+
+    def test_beam_count_must_match_events(self) -> None:
+        with self.assertRaises(ValueError):
+            summarize_final_state(
+                np.array([211]), np.array([1.0]), np.zeros((1, 3)), np.array([1]), np.zeros((2, 3))
+            )
+
+
 class EmptyAndDegenerateInputTests(unittest.TestCase):
     def test_empty_final_state_is_zero_not_missing(self) -> None:
         # An event with nothing hadronic out is a measurement; only an absent
@@ -128,6 +197,9 @@ class EmptyAndDegenerateInputTests(unittest.TestCase):
             self.assertEqual(columns[field][0], 0, msg=field)
         for field in ENERGY_FIELDS:
             self.assertEqual(columns[field][0], 0.0, msg=field)
+        # ...except that there is no leading pion to describe.
+        self.assertEqual(columns["leading_pion_kinetic_energy_gev"][0], MISSING_ENERGY)
+        self.assertEqual(columns["leading_pion_costheta"][0], MISSING_SIGNED)
 
     def test_no_events(self) -> None:
         columns = summarize_final_state(
@@ -135,6 +207,7 @@ class EmptyAndDegenerateInputTests(unittest.TestCase):
             np.array([], dtype=np.float64),
             np.zeros((0, 3), dtype=np.float64),
             np.array([], dtype=np.int64),
+            np.zeros((0, 3), dtype=np.float64),
         )
         for field in FINAL_STATE_FIELDS:
             self.assertEqual(len(columns[field]), 0, msg=field)
@@ -146,6 +219,7 @@ class EmptyAndDegenerateInputTests(unittest.TestCase):
                 np.array([1.0, 1.0], dtype=np.float64),
                 np.zeros((2, 3), dtype=np.float64),
                 np.array([3], dtype=np.int64),
+                np.zeros((1, 3), dtype=np.float64),
             )
 
     def test_missing_block_is_all_placeholders(self) -> None:
@@ -160,8 +234,7 @@ class ReferenceFinalStateTests(unittest.TestCase):
     """The same list the four normalizer test modules assert against."""
 
     def test_matches_the_shared_reference(self) -> None:
-        pdg, energy, momentum, counts = reference_flat_arrays(3)
-        columns = summarize_final_state(pdg, energy, momentum, counts)
+        columns = summarize_final_state(*reference_flat_arrays(3))
         expected = reference_final_state()
         for index in range(3):
             for field in FINAL_STATE_FIELDS:

@@ -316,7 +316,8 @@ class NuWroNormalizer(OutputNormalizer):
             nucleon_valid=has_nucleon & has_hadrons,
         )
         final_state = summarize_final_state(
-            fs_pdg, fs_energy / MEV_PER_GEV, fs_momentum / MEV_PER_GEV, fs_counts
+            fs_pdg, fs_energy / MEV_PER_GEV, fs_momentum / MEV_PER_GEV, fs_counts,
+            nu_p4[:, 1:],
         )
 
         # Declare how much this chunk's estimate is worth, so merging averages

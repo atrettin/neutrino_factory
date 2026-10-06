@@ -540,17 +540,23 @@ event rather than asserted.
 
 ## Final-state content
 
-Seven columns summarize the particles that leave the nucleus, derived by one
+Ten columns summarize the particles that leave the nucleus, derived by one
 shared function, `final_state.summarize_final_state`, from each generator's
 post-FSI particle list: `n_proton`, `n_neutron`, `n_pi_plus`, `n_pi_minus`,
-`n_pi_zero`, `hadronic_energy_gev` (Σ E) and `hadronic_kinetic_energy_gev`
-(Σ (E − m)). An eighth, `native_interaction_code`, carries the generator's own
-channel code.
+`n_pi_zero`, `n_other_mesons`, `hadronic_energy_gev` (Σ E),
+`hadronic_kinetic_energy_gev` (Σ (E − m)), and the kinetic energy and beam angle
+of the leading pion, `leading_pion_kinetic_energy_gev` and
+`leading_pion_costheta`. An eleventh, `native_interaction_code`, carries the
+generator's own channel code.
 
 **Summaries, not particle lists.** The common format is strictly rectangular —
-one 1-D dataset per column (see `common_output.py`). Multiplicities and energy
-sums are what selections such as CC0π, CC1π⁺ or a hadronic-energy threshold are
-made on, and they fit the format as it stands.
+one 1-D dataset per column (see `common_output.py`). Multiplicities, energy sums
+and the leading pion are what selections such as CC0π, CC1π⁺ or a
+hadronic-energy threshold are made on, and they fit the format as it stands. They
+are enough to apply MINERvA's CC1π⁺ signal definition at the generator level —
+one π⁺, no other meson, W_exp < 1.4 GeV (`w_gev`, whose formula is the paper's
+Eqs. 1–3), 1.5 < p_μ < 20 GeV, θ_μ < 20°, T_π < 350 MeV (Granados 2026,
+arXiv:2605.24224, §5).
 
 ### The particle list is post-FSI, and FSI is on in every generator
 
@@ -587,6 +593,14 @@ one from NuWro means:
 
 * **Counts are by exact, signed PDG code**: π⁺ and π⁻ are separate columns, and
   `n_proton` does not count antiprotons.
+* **`n_other_mesons` is every meson except π⁺, π⁻ and π⁰**, of either sign, by the
+  PDG numbering scheme's meson digits (`final_state.is_meson`: first quark digit
+  0, the other two nonzero). That takes in K±, K⁰/K̄⁰, K⁰_L (130), K⁰_S, η, η′,
+  ω, charmed mesons and excited states, and no baryon, lepton, photon or nucleus.
+* **The leading pion is the highest-kinetic-energy pion of any charge**, so
+  together with the `n_pi_*` counts it is the π⁺ of a CC1π⁺ event or the π⁰ of a
+  CC1π⁰ event. `leading_pion_costheta` is measured against the event's own
+  incoming-neutrino three-momentum, the same axis as `lepton_costheta`.
 * **"Hadronic" means non-leptonic**: every particle except `|pdg|` in 11..16.
   Photons and kaons therefore count toward the energy sums — a slight abuse of
   the name, chosen over silently dropping species that carry energy out of the
@@ -607,7 +621,10 @@ one from NuWro means:
 
 **Placeholders.** The counts default to `-1` and the energies to `-1.0`, both
 unmistakably "not available"; an event with nothing hadronic out is a real zero.
-Stub mode leaves them at their placeholders.
+The leading-pion columns are the exception: an event without a pion has no
+leading pion, so it keeps `-1.0` for the kinetic energy and `-999.0` for the
+cosine (−1 is a physical cosine), as does a pion at rest for its angle. Stub
+mode leaves every column at its placeholder.
 
 ### `native_interaction_code` is the one non-universal column
 
@@ -650,6 +667,15 @@ The spread is model physics: GENIE's hA cascade knocks out the most nucleons,
 and GiBUU's potential captures the most slow ones. Without the bound-nucleon
 step GiBUU would have read 1.37 protons and 0.63 neutrons, and no QE event would
 have lost its nucleon.
+
+**Other mesons and the leading pion (2026-10-06), on the same four runs.** The
+leading-pion columns are set exactly for the events with `n_pi_* > 0` in every
+generator, `cos θ` stays within [−1, 1], and the leading pion's T never exceeds
+`hadronic_kinetic_energy_gev`. In GENIE's 502 one-pion events it equals
+`gst`'s `Ef − m_π` (PDG mass) to 3.4 × 10⁻⁶ GeV, and `n_other_mesons` equals
+`gst`'s own kaon counters `nfkp + nfkm + nfk0` in all 2000 events (24 have a
+kaon, none another meson). Events with a non-pion meson: GENIE 1.2%, NuWro 1.2%,
+NEUT 3.8%, GiBUU 0.3%.
 
 **Before FSI was enabled in GiBUU (2026-07-30).** 300-event Docker runs of all
 four generators. The GENIE multiplicities and `native_interaction_code` agreed

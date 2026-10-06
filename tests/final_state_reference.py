@@ -11,6 +11,9 @@ The list deliberately contains the cases the summary has to get right:
 * one pi+ and one pi- (signed counting -- a pi- must not land in ``n_pi_plus``),
 * a pi0 and a neutron (neutral species),
 * a photon, which counts as hadronic under the non-leptonic convention,
+* a K+, the one non-pion meson (``n_other_mesons``),
+* a pi+ that is the leading pion (highest T) and is tilted off the +z beam of
+  ``kinematics_reference``, so its cos(theta) is not a trivial 0 or 1,
 * the outgoing muon, which must be excluded,
 * the residual argon nucleus, which must be excluded (its rest mass alone would
   otherwise dominate the energy sums).
@@ -31,10 +34,11 @@ REFERENCE_PARTICLES: tuple[tuple[int, float, float, float, float], ...] = (
     (2212, 1.0, 0.0, 0.6, 0.0),          # m = 0.8, T = 0.2
     (2212, 1.3, 0.0, 0.0, 0.5),          # m = 1.2, T = 0.1
     (2112, 0.5, 0.3, 0.0, 0.0),          # m = 0.4, T = 0.1
-    (211, 5.0, 0.0, 4.0, 0.0),           # m = 3.0, T = 2.0
+    (211, 5.0, 0.0, 2.4, 3.2),           # m = 3.0, T = 2.0, cos(theta) = 0.8
     (-211, 1.3, 0.5, 0.0, 0.0),          # m = 1.2, T = 0.1
     (111, 1.0, 0.6, 0.0, 0.0),           # m = 0.8, T = 0.2
     (22, 0.5, 0.0, 0.0, 0.5),            # m = 0.0, T = 0.5
+    (321, 1.3, 0.0, 0.5, 0.0),           # m = 1.2, T = 0.1
     (1000180400, 40.0, 0.0, 0.0, 0.3),   # residual argon -- excluded (nucleus)
 )
 
@@ -49,10 +53,13 @@ def reference_final_state() -> dict[str, float]:
         "n_pi_plus": 1,
         "n_pi_minus": 1,
         "n_pi_zero": 1,
-        # 1.0 + 1.3 + 0.5 + 5.0 + 1.3 + 1.0 + 0.5
-        "hadronic_energy_gev": 10.6,
-        # 0.2 + 0.1 + 0.1 + 2.0 + 0.1 + 0.2 + 0.5
-        "hadronic_kinetic_energy_gev": 3.2,
+        "n_other_mesons": 1,
+        # 1.0 + 1.3 + 0.5 + 5.0 + 1.3 + 1.0 + 0.5 + 1.3
+        "hadronic_energy_gev": 11.9,
+        # 0.2 + 0.1 + 0.1 + 2.0 + 0.1 + 0.2 + 0.5 + 0.1
+        "hadronic_kinetic_energy_gev": 3.3,
+        "leading_pion_kinetic_energy_gev": 2.0,
+        "leading_pion_costheta": 0.8,
     }
 
 
@@ -79,12 +86,15 @@ def reference_awkward_branches(n_events: int, momentum_scale: float = 1.0):
     return (ak.Array(pdg_lists), *components)
 
 
-def reference_flat_arrays(n_events: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """``(pdg, energy, momentum, counts)`` in the flattened form the summarizer takes."""
+def reference_flat_arrays(
+    n_events: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """``(pdg, energy, momentum, counts, beam)`` in the form the summarizer takes."""
     pdg_lists, p4_lists = reference_particle_lists(n_events)
     pdg = np.array([code for event in pdg_lists for code in event], dtype=np.int64)
     p4 = np.array(
         [particle for event in p4_lists for particle in event], dtype=np.float64
     ).reshape(-1, 4)
     counts = np.full(n_events, REFERENCE_PARTICLE_COUNT, dtype=np.int64)
-    return pdg, p4[:, 0], p4[:, 1:], counts
+    beam = np.tile([0.0, 0.0, 1.0], (n_events, 1))
+    return pdg, p4[:, 0], p4[:, 1:], counts, beam
