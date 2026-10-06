@@ -12,8 +12,9 @@ The list deliberately contains the cases the summary has to get right:
 * a pi0 and a neutron (neutral species),
 * a photon, which counts as hadronic under the non-leptonic convention,
 * a K+, the one non-pion meson (``n_other_mesons``),
-* a pi+ that is the leading pion (highest T) and is tilted off the +z beam of
-  ``kinematics_reference``, so its cos(theta) is not a trivial 0 or 1,
+* a pi+ that is the leading charged pion (T = 2.0 against the pi-'s 0.1),
+  and a pi0, each tilted off the +z beam of ``kinematics_reference`` by its
+  own angle, so a mix-up between the two leading-pion pairs shows,
 * a leading proton (T = 0.2 against 0.1) tilted off both the beam and the
   reference lepton direction (0.6, 0, 0.8), so its two cosines differ,
 * the outgoing muon, which must be excluded,
@@ -38,7 +39,7 @@ REFERENCE_PARTICLES: tuple[tuple[int, float, float, float, float], ...] = (
     (2112, 0.5, 0.3, 0.0, 0.0),          # m = 0.4, T = 0.1
     (211, 5.0, 0.0, 2.4, 3.2),           # m = 3.0, T = 2.0, cos(theta) = 0.8
     (-211, 1.3, 0.5, 0.0, 0.0),          # m = 1.2, T = 0.1
-    (111, 1.0, 0.6, 0.0, 0.0),           # m = 0.8, T = 0.2
+    (111, 1.0, 0.48, 0.0, 0.36),         # m = 0.8, T = 0.2, cos(theta) = 0.6
     (22, 0.5, 0.0, 0.0, 0.5),            # m = 0.0, T = 0.5
     (321, 1.3, 0.0, 0.5, 0.0),           # m = 1.2, T = 0.1
     (1000180400, 40.0, 0.0, 0.0, 0.3),   # residual argon -- excluded (nucleus)
@@ -60,8 +61,10 @@ def reference_final_state() -> dict[str, float]:
         "hadronic_energy_gev": 11.9,
         # 0.2 + 0.1 + 0.1 + 2.0 + 0.1 + 0.2 + 0.5 + 0.1
         "hadronic_kinetic_energy_gev": 3.3,
-        "leading_pion_kinetic_energy_gev": 2.0,
-        "leading_pion_costheta": 0.8,
+        "leading_pi_charged_kinetic_energy_gev": 2.0,
+        "leading_pi_charged_costheta": 0.8,
+        "leading_pi_zero_kinetic_energy_gev": 0.2,
+        "leading_pi_zero_costheta": 0.6,
         "leading_proton_kinetic_energy_gev": 0.2,
         "leading_proton_costheta": 0.8,
         "leading_proton_lepton_costheta": 0.64,

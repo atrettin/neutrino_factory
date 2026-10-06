@@ -187,8 +187,10 @@ and an `events` group holding one 1-D dataset per column.
 | `n_proton`, `n_neutron` | – | post-FSI nucleon multiplicities |
 | `n_pi_plus`, `n_pi_minus`, `n_pi_zero` | – | post-FSI pion multiplicities |
 | `n_other_mesons` | – | post-FSI count of all mesons that are not pions (kaons, η, …) |
-| `leading_pion_kinetic_energy_gev` | GeV | kinetic energy of the highest-T pion of any charge |
-| `leading_pion_costheta` | – | cosine of that pion's angle to the beam |
+| `leading_pi_charged_kinetic_energy_gev` | GeV | kinetic energy of the highest-T charged pion |
+| `leading_pi_charged_costheta` | – | cosine of that pion's angle to the beam |
+| `leading_pi_zero_kinetic_energy_gev` | GeV | kinetic energy of the highest-T π⁰ |
+| `leading_pi_zero_costheta` | – | cosine of that π⁰'s angle to the beam |
 | `leading_proton_kinetic_energy_gev` | GeV | kinetic energy of the highest-T proton |
 | `leading_proton_costheta` | – | cosine of that proton's angle to the beam |
 | `leading_proton_lepton_costheta` | – | cosine of the opening angle between that proton and the outgoing lepton |

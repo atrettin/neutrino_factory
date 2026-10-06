@@ -540,31 +540,36 @@ event rather than asserted.
 
 ## Final-state content
 
-Thirteen columns summarize the particles that leave the nucleus, derived by one
+Fifteen columns summarize the particles that leave the nucleus, derived by one
 shared function, `final_state.summarize_final_state`, from each generator's
 post-FSI particle list: `n_proton`, `n_neutron`, `n_pi_plus`, `n_pi_minus`,
 `n_pi_zero`, `n_other_mesons`, `hadronic_energy_gev` (Σ E),
 `hadronic_kinetic_energy_gev` (Σ (E − m)); the kinetic energy and beam angle of
-the leading pion, `leading_pion_kinetic_energy_gev` and `leading_pion_costheta`;
-and the kinetic energy, beam angle and lepton opening angle of the leading
-proton, `leading_proton_kinetic_energy_gev`, `leading_proton_costheta` and
-`leading_proton_lepton_costheta`. A fourteenth, `native_interaction_code`,
+the leading charged pion (`leading_pi_charged_kinetic_energy_gev`,
+`leading_pi_charged_costheta`) and of the leading π⁰
+(`leading_pi_zero_kinetic_energy_gev`, `leading_pi_zero_costheta`); and the
+kinetic energy, beam angle and lepton opening angle of the leading proton,
+`leading_proton_kinetic_energy_gev`, `leading_proton_costheta` and
+`leading_proton_lepton_costheta`. A sixteenth, `native_interaction_code`,
 carries the generator's own channel code.
 
 **Summaries, not particle lists.** The common format is strictly rectangular —
 one 1-D dataset per column (see `common_output.py`). Multiplicities, energy sums
-and the leading pion are what selections such as CC0π, CC1π⁺ or a
+and the leading particles are what selections such as CC0π, CC1π⁺ or a
 hadronic-energy threshold are made on, and they fit the format as it stands. They
 are enough to apply MINERvA's CC1π⁺ signal definition at the generator level —
 one π⁺, no other meson, W_exp < 1.4 GeV (`w_gev`, whose formula is the paper's
 Eqs. 1–3), 1.5 < p_μ < 20 GeV, θ_μ < 20°, T_π < 350 MeV (Granados 2026,
 arXiv:2605.24224, §5) — and MicroBooNE's νe CC0π one, whose 1eNp0π / 1e0p0π split
 is a cut at 50 MeV on the leading proton's T, whose charged-pion veto
-(T_π± < 40 MeV, no π⁰) is `n_pi_zero == 0` plus a cut on the then necessarily
-charged leading pion, and whose five unfolded variables are E_e, cos θ_e, T_p,
-cos θ_p and cos θ_ep (MicroBooNE 2026, arXiv:2603.13593, §3.2). Comparing to
-its Wiener-SVD unfolded results additionally takes the paper's published A_c
-regularization matrices, applied to the binned prediction.
+(T_π± < 40 MeV, no π⁰) is `n_pi_zero == 0` plus a cut on the leading charged
+pion's T, and whose five unfolded variables are E_e, cos θ_e, T_p, cos θ_p and
+cos θ_ep (MicroBooNE 2026, arXiv:2603.13593, §3.2) — and NOvA's ν̄_μ CCπ⁰ one,
+at least one π⁰ with 0.5 ≤ p_μ < 2.5 GeV and θ_μ < 60°, unfolded in p_π⁰, θ_π⁰,
+p_μ, θ_μ, Q² and W_EXP (`w_gev` again, Eq. 3) (NOvA 2025, arXiv:2511.05807, §2,
+§3.4). Comparing to MicroBooNE's Wiener-SVD unfolded results additionally takes
+the paper's published A_c regularization matrices, applied to the binned
+prediction.
 
 ### The particle list is post-FSI, and FSI is on in every generator
 
@@ -605,9 +610,12 @@ one from NuWro means:
   PDG numbering scheme's meson digits (`final_state.is_meson`: first quark digit
   0, the other two nonzero). That takes in K±, K⁰/K̄⁰, K⁰_L (130), K⁰_S, η, η′,
   ω, charmed mesons and excited states, and no baryon, lepton, photon or nucleus.
-* **The leading pion is the highest-kinetic-energy pion of any charge**, so
-  together with the `n_pi_*` counts it is the π⁺ of a CC1π⁺ event or the π⁰ of a
-  CC1π⁰ event. **The leading proton is the highest-kinetic-energy proton.** Both
+* **The leading charged pion, the leading π⁰ and the leading proton are each
+  the highest-kinetic-energy particle of their species.** Charged and neutral
+  pions lead separately because selections treat them separately: a CCNπ⁰
+  signal admits charged pions, and in 11–26% of π⁰ events (by generator, in the
+  runs below) a charged pion carries more kinetic energy than the leading π⁰, so
+  one leading pion of either charge would describe the wrong particle. All
   `*_costheta` columns are measured against the event's own incoming-neutrino
   three-momentum, the same axis as `lepton_costheta`;
   `leading_proton_lepton_costheta` against the outgoing lepton's. It cannot be
@@ -681,11 +689,15 @@ and GiBUU's potential captures the most slow ones. Without the bound-nucleon
 step GiBUU would have read 1.37 protons and 0.63 neutrons, and no QE event would
 have lost its nucleon.
 
-**Other mesons and the leading pion (2026-10-06), on the same four runs.** The
-leading-pion columns are set exactly for the events with `n_pi_* > 0` in every
-generator, `cos θ` stays within [−1, 1], and the leading pion's T never exceeds
-`hadronic_kinetic_energy_gev`. In GENIE's 502 one-pion events it equals
-`gst`'s `Ef − m_π` (PDG mass) to 3.4 × 10⁻⁶ GeV, and `n_other_mesons` equals
+**Other mesons and the leading particles (2026-10-06), on the same four runs.**
+The leading charged-pion and π⁰ columns are set exactly for the events with
+`n_pi_plus + n_pi_minus > 0` and `n_pi_zero > 0` respectively in every
+generator, `cos θ` stays within [−1, 1], and the leading T never exceeds
+`hadronic_kinetic_energy_gev`. An independent per-event loop over GENIE's `gst`
+(`Ef − m_π` at the PDG mass, direction against `p*v`) reproduces them to
+3.4 × 10⁻⁶ GeV and 3 × 10⁻¹⁶ in its 636 charged-pion and 414 π⁰ events. The π⁰
+events that also hold a harder charged pion number 108/414 (GENIE), 68/327
+(NuWro), 72/341 (NEUT) and 33/300 (GiBUU). `n_other_mesons` equals
 `gst`'s own kaon counters `nfkp + nfkm + nfk0` in all 2000 events (24 have a
 kaon, none another meson). Events with a non-pion meson: GENIE 1.2%, NuWro 1.2%,
 NEUT 3.8%, GiBUU 0.3%. The leading-proton columns are likewise set exactly for

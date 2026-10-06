@@ -69,7 +69,8 @@ COUNTED_PDG: dict[str, int] = {
     "n_pi_zero": PDG_PI_ZERO,
 }
 
-PION_PDGS = tuple(COUNTED_PDG[name] for name in ("n_pi_plus", "n_pi_minus", "n_pi_zero"))
+CHARGED_PION_PDGS = (PDG_PI_PLUS, PDG_PI_MINUS)
+PION_PDGS = (*CHARGED_PION_PDGS, PDG_PI_ZERO)
 
 # Every meson that is not a pion (kaons, eta, ...), summed into one column, so a
 # "single pion, no other mesons" signal definition can be applied exactly.
@@ -78,12 +79,19 @@ OTHER_MESONS_FIELD = "n_other_mesons"
 COUNT_FIELDS = (*COUNTED_PDG, OTHER_MESONS_FIELD)
 ENERGY_FIELDS = ("hadronic_energy_gev", "hadronic_kinetic_energy_gev")
 
-# The highest-kinetic-energy pion of any charge, with its angle to the beam.
-# Combined with the n_pi_* counts this selects e.g. the pi+ of a CC1pi+ event.
+# The highest-kinetic-energy charged pion and pi0, each with its angle to the
+# beam. Kept apart because selections treat them apart: a CC1pi+ signal needs
+# the pi+ whatever pi0 accompanies it, a CCNpi0 one the pi0 whatever charged
+# pions do, and a charged-pion veto is a cut on the leading charged pion's T.
 # The highest-kinetic-energy proton, with its angles to the beam and to the
 # outgoing lepton; a proton visibility threshold is a cut on its T. An event
 # without such a particle carries the placeholders: there is nothing leading.
-LEADING_PION_FIELDS = ("leading_pion_kinetic_energy_gev", "leading_pion_costheta")
+LEADING_CHARGED_PION_FIELDS = (
+    "leading_pi_charged_kinetic_energy_gev",
+    "leading_pi_charged_costheta",
+)
+LEADING_PI_ZERO_FIELDS = ("leading_pi_zero_kinetic_energy_gev", "leading_pi_zero_costheta")
+LEADING_PION_FIELDS = (*LEADING_CHARGED_PION_FIELDS, *LEADING_PI_ZERO_FIELDS)
 LEADING_PROTON_FIELDS = (
     "leading_proton_kinetic_energy_gev",
     "leading_proton_costheta",
@@ -261,7 +269,9 @@ def summarize_final_state(
     ).astype(np.int64)
 
     flat = (energy_flat, momentum_flat, event_index)
-    _fill_leading(columns, "leading_pion", np.isin(pdg_flat, PION_PDGS), *flat,
+    _fill_leading(columns, "leading_pi_charged", np.isin(pdg_flat, CHARGED_PION_PDGS), *flat,
+                  {"costheta": beam})
+    _fill_leading(columns, "leading_pi_zero", pdg_flat == PDG_PI_ZERO, *flat,
                   {"costheta": beam})
     _fill_leading(columns, "leading_proton", pdg_flat == PDG_PROTON, *flat,
                   {"costheta": beam, "lepton_costheta": lepton})

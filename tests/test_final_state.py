@@ -140,9 +140,10 @@ class OtherMesonTests(unittest.TestCase):
 
 
 class LeadingPionTests(unittest.TestCase):
-    def test_picks_highest_kinetic_energy_pion_of_any_charge(self) -> None:
-        # pi- (T = 0.2) beats pi+ (T = 0.1) and pi0 (T = 0.1); the more energetic
-        # proton and kaon are not pions.
+    def test_charged_and_neutral_pions_lead_separately(self) -> None:
+        # pi- (T = 0.2) beats pi+ (T = 0.1) among the charged pions; the pi0
+        # (T = 0.1) leads its own pair although it is less energetic. The more
+        # energetic proton and kaon are not pions.
         columns = _summarize([[
             (211, 1.3, 0.5, 0.0, 0.0),
             (-211, 1.0, 0.0, 0.0, -0.6),
@@ -150,35 +151,48 @@ class LeadingPionTests(unittest.TestCase):
             (2212, 5.0, 4.0, 0.0, 0.0),
             (321, 5.0, 4.0, 0.0, 0.0),
         ]])
-        self.assertAlmostEqual(columns["leading_pion_kinetic_energy_gev"][0], 0.2)
-        self.assertAlmostEqual(columns["leading_pion_costheta"][0], -1.0)
+        self.assertAlmostEqual(columns["leading_pi_charged_kinetic_energy_gev"][0], 0.2)
+        self.assertAlmostEqual(columns["leading_pi_charged_costheta"][0], -1.0)
+        self.assertAlmostEqual(columns["leading_pi_zero_kinetic_energy_gev"][0], 0.1)
+        self.assertAlmostEqual(columns["leading_pi_zero_costheta"][0], 0.0)
+
+    def test_a_pi0_does_not_fill_the_charged_columns_or_vice_versa(self) -> None:
+        columns = _summarize([[(111, 1.0, 0.0, 0.0, 0.6)], [(211, 1.0, 0.0, 0.0, 0.6)]])
+        self.assertEqual(
+            [round(float(t), 9) for t in columns["leading_pi_zero_kinetic_energy_gev"]],
+            [0.2, MISSING_ENERGY],
+        )
+        self.assertEqual(
+            [round(float(t), 9) for t in columns["leading_pi_charged_kinetic_energy_gev"]],
+            [MISSING_ENERGY, 0.2],
+        )
 
     def test_angle_is_measured_against_each_events_beam(self) -> None:
-        pdg = np.array([211, 211], dtype=np.int64)
+        pdg = np.array([211, 111], dtype=np.int64)
         energy = np.array([5.0, 5.0])
         momentum = np.array([[0.0, 0.0, 4.0], [0.0, 0.0, 4.0]])
         beam = np.array([[0.0, 0.0, 2.0], [0.0, 3.0, 4.0]])
         columns = summarize_final_state(pdg, energy, momentum, np.array([1, 1]), beam, beam)
-        self.assertAlmostEqual(columns["leading_pion_costheta"][0], 1.0)
-        self.assertAlmostEqual(columns["leading_pion_costheta"][1], 0.8)
+        self.assertAlmostEqual(columns["leading_pi_charged_costheta"][0], 1.0)
+        self.assertAlmostEqual(columns["leading_pi_zero_costheta"][1], 0.8)
 
     def test_pion_at_rest_has_no_angle(self) -> None:
         columns = _summarize([[(111, 0.135, 0.0, 0.0, 0.0)]])
-        self.assertAlmostEqual(columns["leading_pion_kinetic_energy_gev"][0], 0.0)
-        self.assertEqual(columns["leading_pion_costheta"][0], MISSING_SIGNED)
+        self.assertAlmostEqual(columns["leading_pi_zero_kinetic_energy_gev"][0], 0.0)
+        self.assertEqual(columns["leading_pi_zero_costheta"][0], MISSING_SIGNED)
 
     def test_leading_pion_is_attributed_to_the_right_events(self) -> None:
         columns = _summarize([
             [(211, 1.3, 0.0, 0.0, 0.5)],
             [(2212, 1.0, 0.0, 0.0, 0.0)],
-            [(111, 1.0, 0.0, 0.0, -0.6), (211, 5.0, 0.0, 0.0, 4.0)],
+            [(-211, 1.0, 0.0, 0.0, -0.6), (211, 5.0, 0.0, 0.0, 4.0)],
         ])
         self.assertEqual(
-            [round(float(t), 9) for t in columns["leading_pion_kinetic_energy_gev"]],
+            [round(float(t), 9) for t in columns["leading_pi_charged_kinetic_energy_gev"]],
             [0.1, MISSING_ENERGY, 2.0],
         )
         self.assertEqual(
-            [round(float(c), 9) for c in columns["leading_pion_costheta"]],
+            [round(float(c), 9) for c in columns["leading_pi_charged_costheta"]],
             [1.0, MISSING_SIGNED, 1.0],
         )
 
@@ -234,7 +248,7 @@ class EmptyAndDegenerateInputTests(unittest.TestCase):
         for field in ENERGY_FIELDS:
             self.assertEqual(columns[field][0], 0.0, msg=field)
         # ...except that there is no leading pion or proton to describe.
-        for prefix in ("leading_pion", "leading_proton"):
+        for prefix in ("leading_pi_charged", "leading_pi_zero", "leading_proton"):
             self.assertEqual(columns[f"{prefix}_kinetic_energy_gev"][0], MISSING_ENERGY)
             self.assertEqual(columns[f"{prefix}_costheta"][0], MISSING_SIGNED)
         self.assertEqual(columns["leading_proton_lepton_costheta"][0], MISSING_SIGNED)
