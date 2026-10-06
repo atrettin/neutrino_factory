@@ -43,7 +43,7 @@ MISSING_COUNT = -1
 # Placeholder for the hadronic energy columns, matching kinematics.MISSING.
 MISSING_ENERGY = -1.0
 
-# Placeholder for the leading-pion cos(theta), matching kinematics.MISSING_SIGNED:
+# Placeholder for the leading-particle cosines, matching kinematics.MISSING_SIGNED:
 # -1 is a physical value of a cosine.
 MISSING_SIGNED = -999.0
 
@@ -80,8 +80,15 @@ ENERGY_FIELDS = ("hadronic_energy_gev", "hadronic_kinetic_energy_gev")
 
 # The highest-kinetic-energy pion of any charge, with its angle to the beam.
 # Combined with the n_pi_* counts this selects e.g. the pi+ of a CC1pi+ event.
-# An event without a pion carries the placeholders: there is no leading pion.
+# The highest-kinetic-energy proton, with its angles to the beam and to the
+# outgoing lepton; a proton visibility threshold is a cut on its T. An event
+# without such a particle carries the placeholders: there is nothing leading.
 LEADING_PION_FIELDS = ("leading_pion_kinetic_energy_gev", "leading_pion_costheta")
+LEADING_PROTON_FIELDS = (
+    "leading_proton_kinetic_energy_gev",
+    "leading_proton_costheta",
+    "leading_proton_lepton_costheta",
+)
 
 # The columns derived from the final-state particle list, with the placeholder
 # each falls back to when the list is unavailable (stub mode, or a file written
@@ -89,8 +96,10 @@ LEADING_PION_FIELDS = ("leading_pion_kinetic_energy_gev", "leading_pion_costheta
 FIELD_DEFAULTS: dict[str, Any] = {
     **{name: MISSING_COUNT for name in COUNT_FIELDS},
     **{name: MISSING_ENERGY for name in ENERGY_FIELDS},
-    "leading_pion_kinetic_energy_gev": MISSING_ENERGY,
-    "leading_pion_costheta": MISSING_SIGNED,
+    **{
+        name: MISSING_ENERGY if name.endswith("_gev") else MISSING_SIGNED
+        for name in (*LEADING_PION_FIELDS, *LEADING_PROTON_FIELDS)
+    },
 }
 
 FINAL_STATE_FIELDS = tuple(FIELD_DEFAULTS)
@@ -183,6 +192,7 @@ def summarize_final_state(
     momentum: Any,
     counts: Any,
     beam_momentum: Any,
+    lepton_momentum: Any,
 ) -> dict[str, np.ndarray]:
     """Summarize per-event final-state particle lists into the scalar columns.
 
@@ -196,13 +206,15 @@ def summarize_final_state(
     * ``counts`` — ``(n_events,)`` array giving how many particles each event
       contributed, in order; must sum to ``n_particles``.
     * ``beam_momentum`` — ``(n_events, 3)`` incoming-neutrino three-momentum,
-      the per-event axis for ``leading_pion_costheta`` (as in ``kinematics``).
+      the per-event axis for the ``*_costheta`` columns (as in ``kinematics``).
+    * ``lepton_momentum`` — ``(n_events, 3)`` outgoing-lepton three-momentum,
+      the axis for ``leading_proton_lepton_costheta``.
 
     Returns a dict keyed by ``FINAL_STATE_FIELDS``. Events with an empty final
     state get zero counts and zero energies -- that is a measurement, not a
     missing value; use ``missing_final_state`` when the list itself is absent.
-    The leading-pion columns are the exception: without a pion they keep their
-    placeholders.
+    The leading-particle columns are the exception: without such a particle
+    they keep their placeholders.
     """
     event_counts = np.asarray(counts, dtype=np.int64).reshape(-1)
     n_events = int(event_counts.size)
@@ -210,9 +222,11 @@ def summarize_final_state(
     energy_flat = np.asarray(energy, dtype=np.float64).reshape(-1)
     momentum_flat = np.asarray(momentum, dtype=np.float64).reshape(-1, 3)
     beam = np.asarray(beam_momentum, dtype=np.float64).reshape(-1, 3)
-    if beam.shape[0] != n_events:
+    lepton = np.asarray(lepton_momentum, dtype=np.float64).reshape(-1, 3)
+    if beam.shape[0] != n_events or lepton.shape[0] != n_events:
         raise ValueError(
-            f"Got {beam.shape[0]} beam momenta for {n_events} events."
+            f"Got {beam.shape[0]} beam and {lepton.shape[0]} lepton momenta "
+            f"for {n_events} events."
         )
 
     total = int(event_counts.sum())
@@ -230,7 +244,7 @@ def summarize_final_state(
     columns.update({name: np.zeros(n_events, dtype=np.float64) for name in ENERGY_FIELDS})
     columns.update({
         name: np.full(n_events, FIELD_DEFAULTS[name], dtype=np.float64)
-        for name in LEADING_PION_FIELDS
+        for name in (*LEADING_PION_FIELDS, *LEADING_PROTON_FIELDS)
     })
     if n_events == 0 or total == 0:
         return columns
@@ -246,7 +260,11 @@ def summarize_final_state(
         event_index[is_meson(pdg_flat) & ~np.isin(pdg_flat, PION_PDGS)], minlength=n_events
     ).astype(np.int64)
 
-    _fill_leading_pion(columns, pdg_flat, energy_flat, momentum_flat, event_index, beam)
+    flat = (energy_flat, momentum_flat, event_index)
+    _fill_leading(columns, "leading_pion", np.isin(pdg_flat, PION_PDGS), *flat,
+                  {"costheta": beam})
+    _fill_leading(columns, "leading_proton", pdg_flat == PDG_PROTON, *flat,
+                  {"costheta": beam, "lepton_costheta": lepton})
 
     abs_pdg = np.abs(pdg_flat)
     hadronic = ~(
@@ -275,33 +293,39 @@ def summarize_final_state(
     return columns
 
 
-def _fill_leading_pion(
+def _fill_leading(
     columns: dict[str, np.ndarray],
-    pdg: np.ndarray,
+    prefix: str,
+    selected: np.ndarray,
     energy: np.ndarray,
     momentum: np.ndarray,
     event_index: np.ndarray,
-    beam: np.ndarray,
+    axes: dict[str, np.ndarray],
 ) -> None:
-    """Write the leading-pion columns in place, for events that have a pion."""
-    pion = np.isin(pdg, PION_PDGS)
-    if not pion.any():
-        return
-    events = event_index[pion]
-    p = momentum[pion]
-    p2 = np.einsum("ij,ij->i", p, p)
-    kinetic = energy[pion] - np.sqrt(np.maximum(energy[pion] ** 2 - p2, 0.0))
+    """Write ``<prefix>_kinetic_energy_gev`` and ``<prefix>_<axis name>`` in place.
 
-    # Sort by (event, T) and keep each event's last entry: its highest-T pion.
+    The leading particle is the ``selected`` one with the highest kinetic
+    energy in each event; ``axes`` maps a column suffix to the per-event
+    ``(n_events, 3)`` direction its cosine is taken against.
+    """
+    if not selected.any():
+        return
+    events = event_index[selected]
+    p = momentum[selected]
+    p2 = np.einsum("ij,ij->i", p, p)
+    kinetic = energy[selected] - np.sqrt(np.maximum(energy[selected] ** 2 - p2, 0.0))
+
+    # Sort by (event, T) and keep each event's last entry: its highest-T particle.
     order = np.lexsort((kinetic, events))
     last = np.append(events[order][1:] != events[order][:-1], True)
     chosen = order[last]
     chosen_events = events[chosen]
-    columns["leading_pion_kinetic_energy_gev"][chosen_events] = kinetic[chosen]
+    columns[f"{prefix}_kinetic_energy_gev"][chosen_events] = kinetic[chosen]
 
-    axis = beam[chosen_events]
-    norm = np.sqrt(p2[chosen] * np.einsum("ij,ij->i", axis, axis))
-    defined = norm > 0.0
-    columns["leading_pion_costheta"][chosen_events[defined]] = (
-        np.einsum("ij,ij->i", p[chosen][defined], axis[defined]) / norm[defined]
-    )
+    for suffix, directions in axes.items():
+        axis = directions[chosen_events]
+        norm = np.sqrt(p2[chosen] * np.einsum("ij,ij->i", axis, axis))
+        defined = norm > 0.0
+        columns[f"{prefix}_{suffix}"][chosen_events[defined]] = (
+            np.einsum("ij,ij->i", p[chosen][defined], axis[defined]) / norm[defined]
+        )

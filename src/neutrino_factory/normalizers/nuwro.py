@@ -317,7 +317,7 @@ class NuWroNormalizer(OutputNormalizer):
         )
         final_state = summarize_final_state(
             fs_pdg, fs_energy / MEV_PER_GEV, fs_momentum / MEV_PER_GEV, fs_counts,
-            nu_p4[:, 1:],
+            nu_p4[:, 1:], lepton_p4[:, 1:],
         )
 
         # Declare how much this chunk's estimate is worth, so merging averages

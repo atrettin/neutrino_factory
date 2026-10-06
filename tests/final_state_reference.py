@@ -14,6 +14,8 @@ The list deliberately contains the cases the summary has to get right:
 * a K+, the one non-pion meson (``n_other_mesons``),
 * a pi+ that is the leading pion (highest T) and is tilted off the +z beam of
   ``kinematics_reference``, so its cos(theta) is not a trivial 0 or 1,
+* a leading proton (T = 0.2 against 0.1) tilted off both the beam and the
+  reference lepton direction (0.6, 0, 0.8), so its two cosines differ,
 * the outgoing muon, which must be excluded,
 * the residual argon nucleus, which must be excluded (its rest mass alone would
   otherwise dominate the energy sums).
@@ -31,7 +33,7 @@ import numpy as np
 # (pdg, E, px, py, pz) in GeV.
 REFERENCE_PARTICLES: tuple[tuple[int, float, float, float, float], ...] = (
     (13, 2.5, 1.5, 0.0, 0.0),            # outgoing muon -- excluded (lepton)
-    (2212, 1.0, 0.0, 0.6, 0.0),          # m = 0.8, T = 0.2
+    (2212, 1.0, 0.0, 0.36, 0.48),        # m = 0.8, T = 0.2, cos to beam 0.8, to lepton 0.64
     (2212, 1.3, 0.0, 0.0, 0.5),          # m = 1.2, T = 0.1
     (2112, 0.5, 0.3, 0.0, 0.0),          # m = 0.4, T = 0.1
     (211, 5.0, 0.0, 2.4, 3.2),           # m = 3.0, T = 2.0, cos(theta) = 0.8
@@ -60,6 +62,9 @@ def reference_final_state() -> dict[str, float]:
         "hadronic_kinetic_energy_gev": 3.3,
         "leading_pion_kinetic_energy_gev": 2.0,
         "leading_pion_costheta": 0.8,
+        "leading_proton_kinetic_energy_gev": 0.2,
+        "leading_proton_costheta": 0.8,
+        "leading_proton_lepton_costheta": 0.64,
     }
 
 
@@ -88,8 +93,8 @@ def reference_awkward_branches(n_events: int, momentum_scale: float = 1.0):
 
 def reference_flat_arrays(
     n_events: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """``(pdg, energy, momentum, counts, beam)`` in the form the summarizer takes."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """``(pdg, energy, momentum, counts, beam, lepton)`` as the summarizer takes them."""
     pdg_lists, p4_lists = reference_particle_lists(n_events)
     pdg = np.array([code for event in pdg_lists for code in event], dtype=np.int64)
     p4 = np.array(
@@ -97,4 +102,5 @@ def reference_flat_arrays(
     ).reshape(-1, 4)
     counts = np.full(n_events, REFERENCE_PARTICLE_COUNT, dtype=np.int64)
     beam = np.tile([0.0, 0.0, 1.0], (n_events, 1))
-    return pdg, p4[:, 0], p4[:, 1:], counts, beam
+    lepton = np.tile([0.6, 0.0, 0.8], (n_events, 1))
+    return pdg, p4[:, 0], p4[:, 1:], counts, beam, lepton

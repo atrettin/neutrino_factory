@@ -540,14 +540,16 @@ event rather than asserted.
 
 ## Final-state content
 
-Ten columns summarize the particles that leave the nucleus, derived by one
+Thirteen columns summarize the particles that leave the nucleus, derived by one
 shared function, `final_state.summarize_final_state`, from each generator's
 post-FSI particle list: `n_proton`, `n_neutron`, `n_pi_plus`, `n_pi_minus`,
 `n_pi_zero`, `n_other_mesons`, `hadronic_energy_gev` (Σ E),
-`hadronic_kinetic_energy_gev` (Σ (E − m)), and the kinetic energy and beam angle
-of the leading pion, `leading_pion_kinetic_energy_gev` and
-`leading_pion_costheta`. An eleventh, `native_interaction_code`, carries the
-generator's own channel code.
+`hadronic_kinetic_energy_gev` (Σ (E − m)); the kinetic energy and beam angle of
+the leading pion, `leading_pion_kinetic_energy_gev` and `leading_pion_costheta`;
+and the kinetic energy, beam angle and lepton opening angle of the leading
+proton, `leading_proton_kinetic_energy_gev`, `leading_proton_costheta` and
+`leading_proton_lepton_costheta`. A fourteenth, `native_interaction_code`,
+carries the generator's own channel code.
 
 **Summaries, not particle lists.** The common format is strictly rectangular —
 one 1-D dataset per column (see `common_output.py`). Multiplicities, energy sums
@@ -556,7 +558,13 @@ hadronic-energy threshold are made on, and they fit the format as it stands. The
 are enough to apply MINERvA's CC1π⁺ signal definition at the generator level —
 one π⁺, no other meson, W_exp < 1.4 GeV (`w_gev`, whose formula is the paper's
 Eqs. 1–3), 1.5 < p_μ < 20 GeV, θ_μ < 20°, T_π < 350 MeV (Granados 2026,
-arXiv:2605.24224, §5).
+arXiv:2605.24224, §5) — and MicroBooNE's νe CC0π one, whose 1eNp0π / 1e0p0π split
+is a cut at 50 MeV on the leading proton's T, whose charged-pion veto
+(T_π± < 40 MeV, no π⁰) is `n_pi_zero == 0` plus a cut on the then necessarily
+charged leading pion, and whose five unfolded variables are E_e, cos θ_e, T_p,
+cos θ_p and cos θ_ep (MicroBooNE 2026, arXiv:2603.13593, §3.2). Comparing to
+its Wiener-SVD unfolded results additionally takes the paper's published A_c
+regularization matrices, applied to the binned prediction.
 
 ### The particle list is post-FSI, and FSI is on in every generator
 
@@ -599,8 +607,12 @@ one from NuWro means:
   ω, charmed mesons and excited states, and no baryon, lepton, photon or nucleus.
 * **The leading pion is the highest-kinetic-energy pion of any charge**, so
   together with the `n_pi_*` counts it is the π⁺ of a CC1π⁺ event or the π⁰ of a
-  CC1π⁰ event. `leading_pion_costheta` is measured against the event's own
-  incoming-neutrino three-momentum, the same axis as `lepton_costheta`.
+  CC1π⁰ event. **The leading proton is the highest-kinetic-energy proton.** Both
+  `*_costheta` columns are measured against the event's own incoming-neutrino
+  three-momentum, the same axis as `lepton_costheta`;
+  `leading_proton_lepton_costheta` against the outgoing lepton's. It cannot be
+  rebuilt from the two beam angles, which lack the azimuth between the proton
+  and the lepton.
 * **"Hadronic" means non-leptonic**: every particle except `|pdg|` in 11..16.
   Photons and kaons therefore count toward the energy sums — a slight abuse of
   the name, chosen over silently dropping species that carry energy out of the
@@ -621,9 +633,10 @@ one from NuWro means:
 
 **Placeholders.** The counts default to `-1` and the energies to `-1.0`, both
 unmistakably "not available"; an event with nothing hadronic out is a real zero.
-The leading-pion columns are the exception: an event without a pion has no
-leading pion, so it keeps `-1.0` for the kinetic energy and `-999.0` for the
-cosine (−1 is a physical cosine), as does a pion at rest for its angle. Stub
+The leading-particle columns are the exception: an event without a pion (or
+proton) has no leading one, so it keeps `-1.0` for the kinetic energy and
+`-999.0` for the cosines (−1 is a physical cosine), as does a particle at rest,
+or an event without a lepton momentum, for the angle that needs it. Stub
 mode leaves every column at its placeholder.
 
 ### `native_interaction_code` is the one non-universal column
@@ -675,7 +688,13 @@ generator, `cos θ` stays within [−1, 1], and the leading pion's T never excee
 `gst`'s `Ef − m_π` (PDG mass) to 3.4 × 10⁻⁶ GeV, and `n_other_mesons` equals
 `gst`'s own kaon counters `nfkp + nfkm + nfk0` in all 2000 events (24 have a
 kaon, none another meson). Events with a non-pion meson: GENIE 1.2%, NuWro 1.2%,
-NEUT 3.8%, GiBUU 0.3%.
+NEUT 3.8%, GiBUU 0.3%. The leading-proton columns are likewise set exactly for
+the events with `n_proton > 0`, and an independent per-event loop over GENIE's
+`gst` (`pdgf`/`Ef`/`p*f` against `p*v` and `p*l`) reproduces all three to
+2 × 10⁻⁶ GeV and 4 × 10⁻¹⁶ in 1863 events. Fraction of events with a proton
+above MicroBooNE's 50 MeV visibility threshold: GENIE 0.78, NuWro 0.77, NEUT
+0.80, GiBUU 0.65, in line with GiBUU's lower QE proton multiplicity above
+(median leading-proton T 0.114 GeV against 0.160–0.177 GeV for the other three).
 
 **Before FSI was enabled in GiBUU (2026-07-30).** 300-event Docker runs of all
 four generators. The GENIE multiplicities and `native_interaction_code` agreed

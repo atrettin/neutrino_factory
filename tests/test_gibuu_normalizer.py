@@ -331,11 +331,15 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
             # E = 0.5 neutron is below m_N and so bound -- dropped -- and the two
             # protons are put on shell at m_N = 0.938, so their kinetic energies
             # become E - 0.938 (0.062 and 0.362) in place of the reference's
-            # 0.2 and 0.1.
+            # 0.2 and 0.1. That makes the E = 1.3 proton, along the beam, the
+            # leading one: cos 1 to the beam, 0.8 to the reference lepton.
             expected = reference_final_state()
             expected["n_neutron"] = 0
             expected["hadronic_energy_gev"] -= 0.5
             expected["hadronic_kinetic_energy_gev"] += -0.2 - 0.1 - 0.1 + 0.062 + 0.362
+            expected["leading_proton_kinetic_energy_gev"] = 0.362
+            expected["leading_proton_costheta"] = 1.0
+            expected["leading_proton_lepton_costheta"] = 0.8
             for event in events:
                 for field in FINAL_STATE_FIELDS:
                     self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)

@@ -19,14 +19,15 @@ from neutrino_factory.final_state import (
 
 
 def _summarize(particles: list[list[tuple[int, float, float, float, float]]]) -> dict:
-    """Summarize a per-event list of ``(pdg, E, px, py, pz)`` tuples, beam along +z."""
+    """Summarize ``(pdg, E, px, py, pz)`` tuples, beam along +z, lepton along +x."""
     flat = [p for event in particles for p in event]
     counts = np.array([len(event) for event in particles], dtype=np.int64)
     pdg = np.array([p[0] for p in flat], dtype=np.int64)
     energy = np.array([p[1] for p in flat], dtype=np.float64)
     momentum = np.array([p[2:] for p in flat], dtype=np.float64).reshape(-1, 3)
     beam = np.tile([0.0, 0.0, 1.0], (len(particles), 1))
-    return summarize_final_state(pdg, energy, momentum, counts, beam)
+    lepton = np.tile([1.0, 0.0, 0.0], (len(particles), 1))
+    return summarize_final_state(pdg, energy, momentum, counts, beam, lepton)
 
 
 class MultiplicityTests(unittest.TestCase):
@@ -157,7 +158,7 @@ class LeadingPionTests(unittest.TestCase):
         energy = np.array([5.0, 5.0])
         momentum = np.array([[0.0, 0.0, 4.0], [0.0, 0.0, 4.0]])
         beam = np.array([[0.0, 0.0, 2.0], [0.0, 3.0, 4.0]])
-        columns = summarize_final_state(pdg, energy, momentum, np.array([1, 1]), beam)
+        columns = summarize_final_state(pdg, energy, momentum, np.array([1, 1]), beam, beam)
         self.assertAlmostEqual(columns["leading_pion_costheta"][0], 1.0)
         self.assertAlmostEqual(columns["leading_pion_costheta"][1], 0.8)
 
@@ -184,8 +185,43 @@ class LeadingPionTests(unittest.TestCase):
     def test_beam_count_must_match_events(self) -> None:
         with self.assertRaises(ValueError):
             summarize_final_state(
-                np.array([211]), np.array([1.0]), np.zeros((1, 3)), np.array([1]), np.zeros((2, 3))
+                np.array([211]), np.array([1.0]), np.zeros((1, 3)), np.array([1]),
+                np.zeros((2, 3)), np.zeros((1, 3)),
             )
+        with self.assertRaises(ValueError):
+            summarize_final_state(
+                np.array([211]), np.array([1.0]), np.zeros((1, 3)), np.array([1]),
+                np.zeros((1, 3)), np.zeros((2, 3)),
+            )
+
+
+class LeadingProtonTests(unittest.TestCase):
+    def test_picks_highest_kinetic_energy_proton_and_measures_both_angles(self) -> None:
+        # The T = 0.2 proton leads over the T = 0.1 one; the more energetic
+        # neutron, antiproton and pion are not protons. Its direction
+        # (0.6, 0, 0.8)/1 gives cos 0.8 to the +z beam and 0.6 to the +x lepton.
+        columns = _summarize([[
+            (2212, 1.3, 0.0, 0.5, 0.0),
+            (2212, 1.0, 0.36, 0.0, 0.48),
+            (2112, 5.0, 4.0, 0.0, 0.0),
+            (-2212, 5.0, 4.0, 0.0, 0.0),
+            (211, 5.0, 4.0, 0.0, 0.0),
+        ]])
+        self.assertAlmostEqual(columns["leading_proton_kinetic_energy_gev"][0], 0.2)
+        self.assertAlmostEqual(columns["leading_proton_costheta"][0], 0.8)
+        self.assertAlmostEqual(columns["leading_proton_lepton_costheta"][0], 0.6)
+
+    def test_lepton_angle_is_measured_against_each_events_lepton(self) -> None:
+        pdg = np.array([2212, 2212], dtype=np.int64)
+        energy = np.array([1.0, 1.0])
+        momentum = np.array([[0.0, 0.0, 0.6], [0.0, 0.0, 0.6]])
+        beam = np.tile([0.0, 0.0, 1.0], (2, 1))
+        lepton = np.array([[0.0, 0.0, -2.0], [0.0, 0.0, 0.0]])
+        columns = summarize_final_state(pdg, energy, momentum, np.array([1, 1]), beam, lepton)
+        self.assertAlmostEqual(columns["leading_proton_lepton_costheta"][0], -1.0)
+        # No lepton momentum (e.g. a NEUT event without a lepton): no angle.
+        self.assertEqual(columns["leading_proton_lepton_costheta"][1], MISSING_SIGNED)
+        self.assertAlmostEqual(columns["leading_proton_costheta"][1], 1.0)
 
 
 class EmptyAndDegenerateInputTests(unittest.TestCase):
@@ -197,9 +233,11 @@ class EmptyAndDegenerateInputTests(unittest.TestCase):
             self.assertEqual(columns[field][0], 0, msg=field)
         for field in ENERGY_FIELDS:
             self.assertEqual(columns[field][0], 0.0, msg=field)
-        # ...except that there is no leading pion to describe.
-        self.assertEqual(columns["leading_pion_kinetic_energy_gev"][0], MISSING_ENERGY)
-        self.assertEqual(columns["leading_pion_costheta"][0], MISSING_SIGNED)
+        # ...except that there is no leading pion or proton to describe.
+        for prefix in ("leading_pion", "leading_proton"):
+            self.assertEqual(columns[f"{prefix}_kinetic_energy_gev"][0], MISSING_ENERGY)
+            self.assertEqual(columns[f"{prefix}_costheta"][0], MISSING_SIGNED)
+        self.assertEqual(columns["leading_proton_lepton_costheta"][0], MISSING_SIGNED)
 
     def test_no_events(self) -> None:
         columns = summarize_final_state(
@@ -207,6 +245,7 @@ class EmptyAndDegenerateInputTests(unittest.TestCase):
             np.array([], dtype=np.float64),
             np.zeros((0, 3), dtype=np.float64),
             np.array([], dtype=np.int64),
+            np.zeros((0, 3), dtype=np.float64),
             np.zeros((0, 3), dtype=np.float64),
         )
         for field in FINAL_STATE_FIELDS:
@@ -219,6 +258,7 @@ class EmptyAndDegenerateInputTests(unittest.TestCase):
                 np.array([1.0, 1.0], dtype=np.float64),
                 np.zeros((2, 3), dtype=np.float64),
                 np.array([3], dtype=np.int64),
+                np.zeros((1, 3), dtype=np.float64),
                 np.zeros((1, 3), dtype=np.float64),
             )
 

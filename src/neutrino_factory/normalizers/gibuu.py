@@ -355,7 +355,7 @@ class GiBUUNormalizer(OutputNormalizer):
         )
         final_state = summarize_final_state(
             merged["fs_pdg"], merged["fs_energy"], merged["fs_momentum"], merged["fs_counts"],
-            nu_p4[:, 1:],
+            nu_p4[:, 1:], lepton_p4[:, 1:],
         )
 
         # Declare how much this chunk's estimate is worth, so merging averages
