@@ -350,6 +350,18 @@ nucleon that `e/in` reports.
   unaffected at 10k — `nue`/`nuebar` on W184 and `numubar` on Fe56 all pass.
   The cause is not diagnosed; the production grid therefore drops the
   `nuwro/W184/numubar` combination.
+- **NuWro 25.11 aborts on a long work-directory path.** Same message,
+  `*** buffer overflow detected ***: terminated` (SIGABRT), but raised right
+  at the "Run real events" banner, before any event is generated, and
+  independent of flavor or nucleus. Observed on odslserv01 (2026-10-09) with
+  the C12 smoke config: a 213-character chunk work directory (under a deep
+  `/tmp/...` path) failed, while the same config with a ~120-character one
+  ran cleanly. The default `NF_WORK_ROOT` layout on `/ptmp` gives ~146
+  characters and works. The exact limit is not pinned down; presumably a
+  fixed-size path buffer in NuWro. Keep `NF_WORK_ROOT` short (e.g. directly
+  under `/ptmp/mpp/$USER`) when testing NuWro. It is unlikely to explain the
+  W184 abort above, which fails late rather than at startup and only for one
+  flavor × nucleus.
 - `config_version` is `"default"` only; real parameter-set versions are not yet
   defined (tracked in `.claude/TODOS.md`).
 - `run.log_level` is ignored — only the GENIE adapter maps it (tracked in
