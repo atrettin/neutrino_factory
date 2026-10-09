@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import numpy as np
 
+from tests.final_state_reference import reference_awkward_branches, reference_final_state
 from tests.kinematics_reference import (
     reference_kinematics,
     reference_lepton_p4,
@@ -19,8 +20,13 @@ from neutrino_factory.common_output import (
     RESONANT_PRIMARY_YES,
     read_events,
 )
+from neutrino_factory.final_state import FINAL_STATE_FIELDS, NATIVE_CODE_FIELD
 from neutrino_factory.kinematics import KINEMATIC_FIELDS, MISSING
-from neutrino_factory.normalizers.gibuu import GiBUUNormalizer
+from neutrino_factory.normalizers.gibuu import (
+    GIBUU_NUCLEON_MASS_GEV,
+    GiBUUNormalizer,
+    _leave_nucleus,
+)
 
 
 def _write_roottuple(
@@ -32,6 +38,7 @@ def _write_roottuple(
     by :func:`reference_lepton_p4`: a beam neutrino along +z with |p| = E, and an
     outgoing lepton at E_l = E/2 with (px, pz) = (0.3E, 0.4E). ``with_nucleon``
     off stands in for a file written before the ``nuc_*`` branches were read.
+    The outgoing particle list is the shared reference final state.
     """
     import uproot
 
@@ -39,6 +46,7 @@ def _write_roottuple(
     lepton = np.asarray(reference_lepton_p4(energies) if lepton_p4 is None else lepton_p4,
                         dtype=np.float64)
     nucleon = reference_nucleon_p4(energies)
+    fs_pdg, fs_e, fs_px, fs_py, fs_pz = reference_awkward_branches(len(energies))
 
     with uproot.recreate(path) as f:
         nucleon_branches = {
@@ -59,6 +67,11 @@ def _write_roottuple(
             "lepOut_Pz": lepton[:, 3],
             "weight": np.array(weight, dtype=np.float64),
             "evType": np.array(evType, dtype=np.int32),
+            "barcode": fs_pdg,
+            "E": fs_e,
+            "Px": fs_px,
+            "Py": fs_py,
+            "Pz": fs_pz,
         }
 
 
@@ -301,6 +314,56 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
                 self.assertAlmostEqual(
                     event["w_true_gev"], reference_kinematics(energy)["w_true_gev"], places=9
                 )
+
+    def test_normalize_root_summarizes_the_final_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            _write_roottuple(
+                _part(work_dir), lepIn_E=[1.0, 2.5, 4.0], weight=[1.0] * 3, evType=[1, 2, 34]
+            )
+            out_path = work_dir / "out.h5"
+
+            GiBUUNormalizer().normalize(work_dir, out_path, _base_task(), "local")
+
+            _, events = read_events(out_path)
+            # The shared reference, as GiBUU's nucleons leave the nucleus: the
+            # E = 0.5 neutron is below m_N and so bound -- dropped -- and the two
+            # protons are put on shell at m_N = 0.938, so their kinetic energies
+            # become E - 0.938 (0.062 and 0.362) in place of the reference's
+            # 0.2 and 0.1. That makes the E = 1.3 proton, along the beam, the
+            # leading one: cos 1 to the beam, 0.8 to the reference lepton.
+            expected = reference_final_state()
+            expected["n_neutron"] = 0
+            expected["hadronic_energy_gev"] -= 0.5
+            expected["hadronic_kinetic_energy_gev"] += -0.2 - 0.1 - 0.1 + 0.062 + 0.362
+            expected["leading_proton_kinetic_energy_gev"] = 0.362
+            expected["leading_proton_costheta"] = 1.0
+            expected["leading_proton_lepton_costheta"] = 0.8
+            for event in events:
+                for field in FINAL_STATE_FIELDS:
+                    self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+            # evType is carried through verbatim as the native code.
+            self.assertEqual([e[NATIVE_CODE_FIELD] for e in events], [1, 2, 34])
+
+    def test_leave_nucleus_drops_bound_nucleons_and_puts_the_rest_on_shell(self) -> None:
+        pdg = np.array([2212, 2112, 211, 2212])
+        energy = np.array([0.90, 1.00, 0.30, 0.95])
+        # The escaping proton is off shell (m4 = sqrt(1 - 0.36) = 0.8); the
+        # pion's momentum is untouched whatever its mass.
+        momentum = np.array([[0.1, 0, 0], [0, 0.6, 0], [0, 0, 0.2], [0.05, 0, 0]])
+        out_pdg, out_e, out_p, out_counts = _leave_nucleus(
+            pdg, energy, momentum, np.array([2, 2])
+        )
+        self.assertEqual(out_pdg.tolist(), [2112, 211, 2212])
+        self.assertEqual(out_counts.tolist(), [1, 2])
+        self.assertEqual(out_e.tolist(), [1.00, 0.30, 0.95])
+        masses = np.sqrt(out_e**2 - np.sum(out_p**2, axis=1))
+        self.assertAlmostEqual(masses[0], GIBUU_NUCLEON_MASS_GEV, places=12)
+        self.assertAlmostEqual(masses[2], GIBUU_NUCLEON_MASS_GEV, places=12)
+        np.testing.assert_array_equal(out_p[1], [0, 0, 0.2])
+        # Direction is kept: only the magnitude changes.
+        self.assertAlmostEqual(out_p[0, 1] / np.linalg.norm(out_p[0]), 1.0, places=12)
 
     def test_normalize_root_xsec_weight_matches_hand_derivation_for_flat_flux(self) -> None:
         # Flat power-law flux (gamma=0) over [0.5, 5.0] GeV: the unit-normalized

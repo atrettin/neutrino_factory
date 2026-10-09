@@ -379,6 +379,18 @@ is found the collected nucleons are discarded, since the scan then ran past the
 vertex. `n_nuc` is written alongside the sum so a later change of that policy is
 a change in Python rather than a container rebuild.
 
+**The post-FSI particle list is written as variable-length branches**
+(`n_fs`, `fs_pdg[n_fs]`, `fs_{e,px,py,pz}_gev[n_fs]`), from which the normalizer
+derives the [final-state columns](../physics.md#final-state-content). It is
+selected on NEUT's own flags, `fIsAlive && fStatus == 0` (status 0 = "Normal"),
+not by index: the array also holds the initial-state nucleons (status −1) and
+particles killed or replaced during the cascade (e.g. 3 = absorbed). The buffers
+hold 200 particles; an event with more makes the macro exit with an error rather
+than truncate the list. The cascade itself is on — the card pins `NEUT-NEFF 0`
+(pion FSI; `necard.h` calls it "nuclear effect in O16", but it is the general
+switch) and `NUCRES-RESCAT 1` (nucleon rescattering), both NEUT's defaults per
+`necard.h` and the shipped `neut_5.4.0_*` cards.
+
 **The flat tree contains only what this macro chose to write**, and
 `NeutAdapter.normalize_output` reuses an existing `events.flat.root` rather than
 regenerating it. A flat file from an older macro therefore serves a stale schema

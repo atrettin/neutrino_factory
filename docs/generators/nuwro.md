@@ -22,7 +22,11 @@ each to a set of `params.txt` overrides.
 Single stage. The adapter writes a `params.txt` of `key = value` lines into the
 work directory and invokes `nuwro -o events.root -i params.txt`. Everything the
 run needs is in that file — there is no card-plus-flux-file split as in NEUT or
-GiBUU, because the spectrum is encoded inline (see below).
+GiBUU, because the spectrum is encoded inline (see below). The file also pins
+`FSI_on = 1`, the intranuclear cascade that fills `e/post`; it is NuWro's
+default too (`src/params_all.h`, nuwro_25.11), and with it off NuWro copies
+`e/out` into `e/post` (`nuwro.cc`), which would make the final-state columns
+silently pre-FSI.
 
 **NuWro resolves `data/` relative to its binary.** Under Docker the container
 therefore runs with workdir `/opt/nuwro`, and the input/output paths are given
@@ -138,6 +142,11 @@ Tree `treeout`. The particle branches are **jagged**:
   for `qel` only index 1 is taken. `flag.isCorrelated` itself cannot be used as
   the marker: it is set on 13424 of the 20k events, so outside QE it holds
   garbage.
+- `e/post/post.{pdg,t,x,y,z}` — the particles leaving the nucleus after the
+  cascade, summarized into the
+  [final-state columns](../physics.md#final-state-content). It includes the
+  outgoing lepton, which the summary excludes.
+- `e/dyn`, NuWro's channel code, carried verbatim as `native_interaction_code`.
 - `e/weight`, `e/flag/flag.cc`, and the class flags
   `e/flag/flag.{qel,res,dis,coh,mec}`.
 
@@ -341,6 +350,18 @@ nucleon that `e/in` reports.
   unaffected at 10k — `nue`/`nuebar` on W184 and `numubar` on Fe56 all pass.
   The cause is not diagnosed; the production grid therefore drops the
   `nuwro/W184/numubar` combination.
+- **NuWro 25.11 aborts on a long work-directory path.** Same message,
+  `*** buffer overflow detected ***: terminated` (SIGABRT), but raised right
+  at the "Run real events" banner, before any event is generated, and
+  independent of flavor or nucleus. Observed on odslserv01 (2026-10-09) with
+  the C12 smoke config: a 213-character chunk work directory (under a deep
+  `/tmp/...` path) failed, while the same config with a ~120-character one
+  ran cleanly. The default `NF_WORK_ROOT` layout on `/ptmp` gives ~146
+  characters and works. The exact limit is not pinned down; presumably a
+  fixed-size path buffer in NuWro. Keep `NF_WORK_ROOT` short (e.g. directly
+  under `/ptmp/mpp/$USER`) when testing NuWro. It is unlikely to explain the
+  W184 abort above, which fails late rather than at startup and only for one
+  flavor × nucleus.
 - `config_version` is `"default"` only; real parameter-set versions are not yet
   defined (tracked in `.claude/TODOS.md`).
 - `run.log_level` is ignored — only the GENIE adapter maps it (tracked in

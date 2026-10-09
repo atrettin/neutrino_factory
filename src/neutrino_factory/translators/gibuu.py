@@ -301,24 +301,20 @@ class GiBUUTranslator(ConfigTranslator):
         # /opt/nf/generators/gibuu/<code_version>/GiBUU/buuinput. EventFormat=4
         # selects RootTuple ROOT output.
         #
-        # numTimeSteps=0 disables the FSI transport loop (time_max =
-        # numTimeSteps*delta_T, so GiBUU.f90's PhaseSpaceEvolution loop never
-        # runs). This is GiBUU's own documented setting for *inclusive* cross
-        # sections -- every shipped neutrino jobcard carries the comment "for
-        # inclusive cross sections set numTimeSteps = 0" -- and not a shortcut.
-        # The cross section is fixed at the initial vertex: perweight, evType
-        # and both lepton four-vectors are written from neutrinoProdInfo, a
-        # write-once record of the initial event, and transport only inherits
+        # numTimeSteps * delta_T = 150 * 0.2 fm = 30 fm of FSI transport, the
+        # values every shipped neutrino jobcard uses (e.g.
+        # 005_Neutrino_SBND_nu.job); the distance must comfortably exceed the
+        # nuclear radius. Transport is needed for the final-state columns
+        # (multiplicities, hadronic energy), which are read from the particle
+        # list WritePerturbativeParticles writes at the end of the evolution.
+        # It leaves the cross section alone: perweight, evType and the lepton
+        # and nucleon four-vectors are written from neutrinoProdInfo, a
+        # write-once record of the initial vertex, and transport only inherits
         # perweight into the final states it produces. Verified by running one
         # jobcard both ways (numTimeSteps 0 vs. 150, same seed, 1000-event C12
-        # CC): the hadron multiplicity rose 1.87 -> 3.08 per event, while
-        # weight, evType and lepIn/lepOut were bit-identical and sum(weight)
-        # agreed exactly. See docs/generators/gibuu.md.
-        #
-        # This holds only because the common output records no hadronic
-        # observables. Adding any (pion multiplicity, knocked-out nucleons,
-        # calorimetric energy, CCQE-like topology) requires numTimeSteps>0 with
-        # numTimeSteps*delta_T comfortably exceeding the nuclear radius.
+        # CC): weight, evType and lepIn/lepOut were bit-identical and
+        # sum(weight) agreed exactly, while the hadron multiplicity rose
+        # 1.87 -> 3.08 per event. See docs/generators/gibuu.md.
         #
         # Every reaction channel GiBUU makes available is switched on, because
         # the output is meant as an inclusive cross-section estimate; all but
@@ -353,8 +349,8 @@ class GiBUUTranslator(ConfigTranslator):
       version         = {version_year}   ! must match the GiBUU code release
       eventtype       = 5          ! neutrino induced
       numEnsembles    = {num_ensembles}
-      numTimeSteps    = 0          ! no FSI transport: GiBUU's documented setting
-                                   ! for inclusive cross sections (see above)
+      numTimeSteps    = 150        ! FSI transport out to 150 * delta_T = 30 fm
+      delta_T         = 0.2        ! fm; see above
       num_runs_SameEnergy = {NUM_RUNS_SAME_ENERGY}
     path_to_input   = '@NF_GIBUU_INPUT@'
       localEnsemble   = .true.

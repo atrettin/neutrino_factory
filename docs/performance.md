@@ -16,6 +16,12 @@ sizing Slurm time limits, not as portable constants.
 - `physics.mode: inclusive`, `current: cc` (single generation pass for every
   generator — GiBUU's `inclusive` two-pass mode is not exercised).
 - One chunk per job, so each measured run is one generator invocation.
+- GiBUU ran with `numTimeSteps = 0`, i.e. **without FSI transport**, the jobcard
+  setting at the time. The jobcards now transport for 150 steps (see
+  [generators/gibuu.md](generators/gibuu.md#final-state-interactions-are-switched-on)),
+  so the GiBUU numbers below are a lower bound. Transport cost about 4× the wall
+  clock in one Ar40 comparison on a different machine (65.6 s against 15.9 s,
+  same seed, Apple Silicon under Docker); this table has not been re-measured.
 - Executed 2026-09-08 (UTC) on the machine described below.
 
 ## Machine
@@ -187,7 +193,8 @@ timestamps of the 1k runs, identical across all seven runnable tunes):
   small fixed cost, at ~3.6 ms per ensemble-budget event.
 - For Slurm sizing: budget ≈ 30 s + (rate × events) for GENIE (use the
   per-tune rate), ~145 s + 4.1 ms×events for NEUT, ~65 s + 3.3 ms×events for
-  NuWro, ~10 s + 3.6 ms×events for GiBUU, plus the per-chunk overhead this
+  NuWro, ~10 s + 3.6 ms×events for GiBUU (measured without FSI transport, so
+  an underestimate now), plus the per-chunk overhead this
   measurement includes (it is one chunk; Slurm jobs here are also one task per
   chunk).
 

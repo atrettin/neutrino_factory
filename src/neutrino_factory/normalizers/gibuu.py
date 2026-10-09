@@ -6,6 +6,12 @@ from pathlib import Path
 import numpy as np
 
 from ..common_output import version_metadata, write_common_hdf5
+from ..final_state import (
+    NATIVE_CODE_FIELD,
+    event_fields,
+    flatten_particle_arrays,
+    summarize_final_state,
+)
 from ..flux import build_flux
 from ..kinematics import KINEMATIC_FIELDS, derive_kinematics
 from ..translators.gibuu import GiBUUTranslator
@@ -62,6 +68,44 @@ MAX_RESONANCE_EVTYPE = 31
 # ~1 GeV lower and indistinguishable from a real value downstream. Those events
 # get the placeholder instead.
 TWO_NUCLEON_EVTYPES = (35, 36)
+
+
+# GiBUU's nucleon mass, one value for protons and neutrons: every nucleon that
+# has left the nuclear potential comes out of the RootTuple with exactly this
+# four-vector mass.
+GIBUU_NUCLEON_MASS_GEV = 0.938
+NUCLEON_PDGS = (2212, 2112)
+
+
+def _leave_nucleus(
+    pdg: np.ndarray, energy: np.ndarray, momentum: np.ndarray, counts: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Reduce GiBUU's end-of-transport particle list to what leaves the nucleus.
+
+    Unlike the other generators' post-FSI lists, GiBUU's perturbative list is a
+    snapshot at the end of the time evolution, with nucleons still inside the
+    mean-field potential. Their energy includes the potential, so their
+    four-vector mass is off shell (~0.90 GeV on Ar40), and since the potential is
+    static that energy is conserved on the way out:
+
+    * ``E < m_N``: bound, the nucleon never escapes. Dropped -- the same test as
+      GiBUU's own ``neutrinoAnalysis/IsBound`` (kinetic energy plus potential
+      below zero). 25% of the nucleons of a 3435-event Ar40 CC run.
+    * ``E >= m_N``: escapes with this energy. Put on shell by rescaling the
+      momentum to ``sqrt(E^2 - m_N^2)``, so the kinetic energy derived from the
+      four-vector is the asymptotic ``E - m_N`` rather than ``E - m_eff``.
+    """
+    nucleon = np.isin(pdg, NUCLEON_PDGS)
+    keep = ~(nucleon & (energy < GIBUU_NUCLEON_MASS_GEV))
+    event_index = np.repeat(np.arange(counts.size), counts)
+    counts = np.bincount(event_index[keep], minlength=counts.size).astype(np.int64)
+    pdg, energy, momentum, nucleon = pdg[keep], energy[keep], momentum[keep], nucleon[keep]
+
+    p_abs = np.linalg.norm(momentum, axis=1)
+    on_shell = np.sqrt(np.maximum(energy**2 - GIBUU_NUCLEON_MASS_GEV**2, 0.0))
+    scale = np.divide(on_shell, p_abs, out=np.ones_like(p_abs), where=p_abs > 0)
+    momentum = np.where(nucleon[:, None], momentum * scale[:, None], momentum)
+    return pdg, energy, momentum, counts
 
 
 def _interaction_from_evtype(ev_type: int) -> str:
@@ -126,30 +170,39 @@ class GiBUUNormalizer(OutputNormalizer):
         metadata["translated_config"] = raw.get("translated_config", {})
         return write_common_hdf5(out_path, metadata, raw.get("events", []))
 
+    # The per-event column names ``_read_parts`` returns, in the order the
+    # normalizer unpacks them. All concatenate along axis 0, whether they are
+    # 1-D event columns, (n, 4) four-vectors or the flattened particle arrays.
+    PART_COLUMNS = (
+        "energies", "weights", "ev_types", "nu_p4", "lepton_p4", "nucleon_p4",
+        "fs_pdg", "fs_energy", "fs_momentum", "fs_counts",
+    )
+
     @staticmethod
-    def _read_parts(
-        parts: list[Path],
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def _read_parts(parts: list[Path]) -> dict[str, np.ndarray]:
         """Read and concatenate the ``RootTuple`` branches across run files.
 
         Concatenation is the right combination here, unlike merging chunks: the
         runs are parts of *one* estimate whose weights are all divided by the
         same ``num_runs`` in ``compute_xsec_weight``, so summing them recovers
         sigma rather than a multiple of it.
+
+        The final-state particle list comes back already flattened (``fs_pdg`` /
+        ``fs_energy`` / ``fs_momentum`` plus the per-event ``fs_counts``), which
+        is both what ``summarize_final_state`` takes and what lets the parts be
+        concatenated with plain numpy despite the branches being jagged.
         """
         import uproot
+        import awkward as ak
 
-        columns: dict[str, list[np.ndarray]] = {
-            "energies": [], "weights": [], "ev_types": [],
-            "nu_p4": [], "lepton_p4": [], "nucleon_p4": [],
-        }
+        columns: dict[str, list[np.ndarray]] = {name: [] for name in GiBUUNormalizer.PART_COLUMNS}
         for part in parts:
             with uproot.open(part) as f:
                 tree = f["RootTuple"]
 
-                def branch(name: str) -> np.ndarray:
+                def branch(name: str, library: str = "np"):
                     try:
-                        return tree[name].array(library="np")
+                        return tree[name].array(library=library)
                     except Exception as exc:
                         raise RuntimeError(
                             f"Cannot read branch '{name}' from {part.name}: {exc}"
@@ -176,15 +229,23 @@ class GiBUUNormalizer(OutputNormalizer):
                 columns["nucleon_p4"].append(np.column_stack([
                     branch(b) for b in ("nuc_E", "nuc_Px", "nuc_Py", "nuc_Pz")
                 ]))
+                # The perturbative particles left after FSI transport, written
+                # because the jobcard sets WritePerturbativeParticles (see
+                # translators.gibuu). GiBUU calls the PDG code "barcode"; any
+                # lepton in the list is filtered out by summarize_final_state.
+                fs_pdg, fs_energy, fs_momentum, fs_counts = _leave_nucleus(
+                    *flatten_particle_arrays(
+                        ak,
+                        branch("barcode", "ak"),
+                        *(branch(b, "ak") for b in ("E", "Px", "Py", "Pz")),
+                    )
+                )
+                columns["fs_pdg"].append(fs_pdg)
+                columns["fs_energy"].append(fs_energy)
+                columns["fs_momentum"].append(fs_momentum)
+                columns["fs_counts"].append(fs_counts)
 
-        return (
-            np.concatenate(columns["energies"]),
-            np.concatenate(columns["weights"]),
-            np.concatenate(columns["ev_types"]),
-            np.concatenate(columns["nu_p4"]),
-            np.concatenate(columns["lepton_p4"]),
-            np.concatenate(columns["nucleon_p4"]),
-        )
+        return {name: np.concatenate(values) for name, values in columns.items()}
 
     def _normalize_root(self, work_dir: Path, out_path, task: dict, mode: str) -> str:
         try:
@@ -250,13 +311,19 @@ class GiBUUNormalizer(OutputNormalizer):
             (pass_current, self._read_parts(parts))
             for pass_current, parts in parts_by_current
         ]
-        energies_gev, weights, ev_types, nu_p4, lepton_p4, nucleon_p4 = [
-            np.concatenate([columns[index] for _, columns in per_pass])
-            for index in range(6)
-        ]
+        merged = {
+            name: np.concatenate([columns[name] for _, columns in per_pass])
+            for name in self.PART_COLUMNS
+        }
+        energies_gev = merged["energies"]
+        weights = merged["weights"]
+        ev_types = merged["ev_types"]
+        nu_p4 = merged["nu_p4"]
+        lepton_p4 = merged["lepton_p4"]
+        nucleon_p4 = merged["nucleon_p4"]
         is_cc_flags = np.concatenate(
             [
-                np.full(len(columns[0]), pass_current == "cc", dtype=bool)
+                np.full(len(columns["energies"]), pass_current == "cc", dtype=bool)
                 for pass_current, columns in per_pass
             ]
         )
@@ -286,6 +353,10 @@ class GiBUUNormalizer(OutputNormalizer):
             nucleon_p4=nucleon_p4,
             nucleon_valid=~np.isin(ev_types, TWO_NUCLEON_EVTYPES),
         )
+        final_state = summarize_final_state(
+            merged["fs_pdg"], merged["fs_energy"], merged["fs_momentum"], merged["fs_counts"],
+            nu_p4[:, 1:], lepton_p4[:, 1:],
+        )
 
         # Declare how much this chunk's estimate is worth, so merging averages
         # the chunks instead of summing them (see ConfigTranslator.xsec_norm_count
@@ -296,8 +367,8 @@ class GiBUUNormalizer(OutputNormalizer):
         )
 
         events = []
-        for i, (e_gev, w, xw, itype, is_cc) in enumerate(
-            zip(energies_gev, weights_arr, xsec_weights, interactions, is_cc_flags)
+        for i, (e_gev, w, xw, itype, is_cc, ev_type) in enumerate(
+            zip(energies_gev, weights_arr, xsec_weights, interactions, is_cc_flags, ev_types)
         ):
             event = {
                 "event_id": start_event + i,
@@ -311,8 +382,10 @@ class GiBUUNormalizer(OutputNormalizer):
                 "probe": probe,
                 "target": target,
                 "generator": self.name,
+                NATIVE_CODE_FIELD: int(ev_type),
             }
             event.update({field: float(kinematics[field][i]) for field in KINEMATIC_FIELDS})
+            event.update(event_fields(final_state, i))
             events.append(event)
 
         return write_common_hdf5(out_path, metadata, events)

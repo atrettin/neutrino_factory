@@ -184,6 +184,19 @@ and an `events` group holding one 1-D dataset per column.
 | `lepton_p_parallel_gev` | GeV | lepton momentum along the beam (signed) |
 | `lepton_p_transverse_gev` | GeV | lepton momentum transverse to the beam |
 | `lepton_costheta` | – | cosine of the lepton scattering angle |
+| `n_proton`, `n_neutron` | – | post-FSI nucleon multiplicities |
+| `n_pi_plus`, `n_pi_minus`, `n_pi_zero` | – | post-FSI pion multiplicities |
+| `n_other_mesons` | – | post-FSI count of all mesons that are not pions (kaons, η, …) |
+| `leading_pi_charged_kinetic_energy_gev` | GeV | kinetic energy of the highest-T charged pion |
+| `leading_pi_charged_costheta` | – | cosine of that pion's angle to the beam |
+| `leading_pi_zero_kinetic_energy_gev` | GeV | kinetic energy of the highest-T π⁰ |
+| `leading_pi_zero_costheta` | – | cosine of that π⁰'s angle to the beam |
+| `leading_proton_kinetic_energy_gev` | GeV | kinetic energy of the highest-T proton |
+| `leading_proton_costheta` | – | cosine of that proton's angle to the beam |
+| `leading_proton_lepton_costheta` | – | cosine of the opening angle between that proton and the outgoing lepton |
+| `hadronic_energy_gev` | GeV | Σ E over non-leptonic final-state particles |
+| `hadronic_kinetic_energy_gev` | GeV | Σ (E − m) over the same particles |
+| `native_interaction_code` | – | the generator's own channel code (**not** universal) |
 
 The kinematic variables are all lab-frame, derived from the incoming-neutrino,
 outgoing-lepton and struck-nucleon four-vectors by one shared formula
@@ -198,6 +211,16 @@ non-negative quantities, `-999` for `lepton_p_parallel_gev` and
 `lepton_costheta` (whose physical range includes `-1`). Notably, `bjorken_x` and
 both W columns are `-1` for coherent events, which have no struck nucleon. See
 `docs/physics.md` for the full convention.
+
+The final-state columns are derived the same way, from each generator's post-FSI
+particle list (FSI is on in every generator): the multiplicities count exact PDG
+codes, and the two hadronic sums run over every final-state particle that is not
+a charged lepton, a neutrino or a nuclear remnant. Their placeholder is `-1`; an event with nothing
+hadronic out is a real zero. `native_interaction_code` is the deliberate
+exception to the format's universality — it is the generator's own channel code
+(GENIE `neut_code`, NEUT `mode`, GiBUU `evType`, NuWro `dyn`) and only means
+something read together with `generator`. See `docs/physics.md` for the full
+convention.
 
 Inspect a file's kinematic content with `analyze-kinematics`, which prints event
 counts by interaction type, the weight efficiency of each channel, and per-

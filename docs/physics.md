@@ -287,7 +287,10 @@ Two properties to be clear about before treating it as a topology label:
   and **30** (NC) for the 1π background — neither is a NEUT mode — and maps NC
   2p2h to **42**, which in NEUT means NC 1η. It is not a faithful round trip.
 
-Adding the column is tracked in `.claude/TODOS.md`.
+The common output carries each generator's own code verbatim in
+`native_interaction_code` (see [final-state content](#final-state-content)): the
+NEUT code itself for NEUT and GENIE, but `e/dyn` and `evType` for NuWro and
+GiBUU, so it is not yet a cross-generator axis.
 
 ### The `resonant_primary` column
 
@@ -534,6 +537,182 @@ above — `w_true_gev` is not commensurable across generators at better than
 *NEUT's `n_nuc`* came out 1 for 18 365 events, **2 for 1531 — all of them mode 2**,
 and 0 for 104. The 2p2h layout the flattener assumes is therefore confirmed per
 event rather than asserted.
+
+## Final-state content
+
+Fifteen columns summarize the particles that leave the nucleus, derived by one
+shared function, `final_state.summarize_final_state`, from each generator's
+post-FSI particle list: `n_proton`, `n_neutron`, `n_pi_plus`, `n_pi_minus`,
+`n_pi_zero`, `n_other_mesons`, `hadronic_energy_gev` (Σ E),
+`hadronic_kinetic_energy_gev` (Σ (E − m)); the kinetic energy and beam angle of
+the leading charged pion (`leading_pi_charged_kinetic_energy_gev`,
+`leading_pi_charged_costheta`) and of the leading π⁰
+(`leading_pi_zero_kinetic_energy_gev`, `leading_pi_zero_costheta`); and the
+kinetic energy, beam angle and lepton opening angle of the leading proton,
+`leading_proton_kinetic_energy_gev`, `leading_proton_costheta` and
+`leading_proton_lepton_costheta`. A sixteenth, `native_interaction_code`,
+carries the generator's own channel code.
+
+**Summaries, not particle lists.** The common format is strictly rectangular —
+one 1-D dataset per column (see `common_output.py`). Multiplicities, energy sums
+and the leading particles are what selections such as CC0π, CC1π⁺ or a
+hadronic-energy threshold are made on, and they fit the format as it stands. They
+are enough to apply MINERvA's CC1π⁺ signal definition at the generator level —
+one π⁺, no other meson, W_exp < 1.4 GeV (`w_gev`, whose formula is the paper's
+Eqs. 1–3), 1.5 < p_μ < 20 GeV, θ_μ < 20°, T_π < 350 MeV (Granados 2026,
+arXiv:2605.24224, §5) — and MicroBooNE's νe CC0π one, whose 1eNp0π / 1e0p0π split
+is a cut at 50 MeV on the leading proton's T, whose charged-pion veto
+(T_π± < 40 MeV, no π⁰) is `n_pi_zero == 0` plus a cut on the leading charged
+pion's T, and whose five unfolded variables are E_e, cos θ_e, T_p, cos θ_p and
+cos θ_ep (MicroBooNE 2026, arXiv:2603.13593, §3.2) — and NOvA's ν̄_μ CCπ⁰ one,
+at least one π⁰ with 0.5 ≤ p_μ < 2.5 GeV and θ_μ < 60°, unfolded in p_π⁰, θ_π⁰,
+p_μ, θ_μ, Q² and W_EXP (`w_gev` again, Eq. 3) (NOvA 2025, arXiv:2511.05807, §2,
+§3.4). Comparing to MicroBooNE's Wiener-SVD unfolded results additionally takes
+the paper's published A_c regularization matrices, applied to the binned
+prediction.
+
+### The particle list is post-FSI, and FSI is on in every generator
+
+| Generator | List read | FSI switch |
+|---|---|---|
+| GENIE | `gst` `pdgf`/`Ef`/`pxf`/`pyf`/`pzf` (the `f` family; `i` is pre-FSI) | the tune's `HadronTransp-Enable` / `HadronTransp-Model` in `config/<tune>/ModelConfiguration.xml`; the framework does not override it, and all 33 tunes in the R-3_06_00 source tree set it `true` |
+| NuWro | `e/post` ("particles leaving the nucleus"), not `e/out` | `FSI_on = 1`, pinned in `params.txt`; also NuWro's default (`params_all.h`, nuwro_25.11). With it off, NuWro copies `e/out` into `e/post` |
+| NEUT | the `NeutVect` particles with `fIsAlive && fStatus == 0`, selected in `nf_flatten.C` | `NEUT-NEFF 0` (pion FSI) and `NUCRES-RESCAT 1` (nucleon rescattering), pinned in the card; both are NEUT's defaults per `necard.h` and the shipped `neut_5.4.0_*` cards |
+| GiBUU | the perturbative particles `write_pert` writes after transport, minus the nucleons still bound in the nucleus (see below) | `numTimeSteps = 150`, `delta_T = 0.2` fm (30 fm) — see [generators/gibuu.md](generators/gibuu.md#final-state-interactions-are-switched-on) |
+
+NEUT's array is filtered on its own flags rather than by index because it also
+holds the initial-state nucleons (status −1) and particles killed or replaced
+during the cascade.
+
+**GiBUU's list needs one more step, because it is a snapshot rather than a list
+of escaped particles.** At the end of transport some nucleons are still inside
+the mean-field potential, which GiBUU folds into their energy, so their
+four-vectors are off shell. On a 3435-event numu CC Ar40 run, 25% of the listed
+nucleons had `E < m_N` and sat inside the nucleus (median radius 3.7 fm): bound,
+and never leaving it. Another 12% were unbound but still inside (four-vector mass
+~0.90 GeV). Escaped nucleons come out exactly on shell at GiBUU's single nucleon
+mass, 0.938 GeV. The normalizer (`normalizers/gibuu._leave_nucleus`) therefore
+drops nucleons with `E < m_N`, which is GiBUU's own
+`neutrinoAnalysis/IsBound` test (kinetic energy plus potential below zero). It
+puts the remaining nucleons on shell at their energy, which a static potential
+conserves on the way out, so their kinetic energy is the asymptotic `E − m_N`.
+GENIE's, NuWro's and NEUT's final-state nucleons and pions are all exactly on
+shell at their vacuum masses in the same run, and none has `E < m`.
+
+### Conventions
+
+All enforced in `summarize_final_state`, so a pion count from GENIE means what
+one from NuWro means:
+
+* **Counts are by exact, signed PDG code**: π⁺ and π⁻ are separate columns, and
+  `n_proton` does not count antiprotons.
+* **`n_other_mesons` is every meson except π⁺, π⁻ and π⁰**, of either sign, by the
+  PDG numbering scheme's meson digits (`final_state.is_meson`: first quark digit
+  0, the other two nonzero). That takes in K±, K⁰/K̄⁰, K⁰_L (130), K⁰_S, η, η′,
+  ω, charmed mesons and excited states, and no baryon, lepton, photon or nucleus.
+* **The leading charged pion, the leading π⁰ and the leading proton are each
+  the highest-kinetic-energy particle of their species.** Charged and neutral
+  pions lead separately because selections treat them separately: a CCNπ⁰
+  signal admits charged pions, and in 11–26% of π⁰ events (by generator, in the
+  runs below) a charged pion carries more kinetic energy than the leading π⁰, so
+  one leading pion of either charge would describe the wrong particle. All
+  `*_costheta` columns are measured against the event's own incoming-neutrino
+  three-momentum, the same axis as `lepton_costheta`;
+  `leading_proton_lepton_costheta` against the outgoing lepton's. It cannot be
+  rebuilt from the two beam angles, which lack the azimuth between the proton
+  and the lepton.
+* **"Hadronic" means non-leptonic**: every particle except `|pdg|` in 11..16.
+  Photons and kaons therefore count toward the energy sums — a slight abuse of
+  the name, chosen over silently dropping species that carry energy out of the
+  interaction. Any outgoing lepton in a generator's list is excluded by this
+  rule; it has its own columns.
+* **Nuclear remnants are excluded** (`|pdg| > 1e9`, the `10LZZZAAAI` ion codes).
+  GENIE's list carries the residual nucleus, whose rest mass (~37 GeV for argon)
+  would otherwise dominate `hadronic_energy_gev`.
+* **Mass from the four-vector**, `m = sqrt(E² − |p|²)`, never a lookup table.
+  All four generators supply full four-vectors, so a table would only add a way
+  to disagree with the generator about what it produced. The one exception is
+  GiBUU's in-medium nucleons, put on shell at GiBUU's own `m_N` as described
+  above.
+* `hadronic_kinetic_energy_gev` is **not** the energy transfer ν. It runs ~85% of
+  ν on average and exceeds it for a minority of events, because FSI-ejected
+  nucleons carry Fermi motion that did not come from the neutrino. Nor is it
+  GENIE's `sumKEf`.
+
+**Placeholders.** The counts default to `-1` and the energies to `-1.0`, both
+unmistakably "not available"; an event with nothing hadronic out is a real zero.
+The leading-particle columns are the exception: an event without a pion (or
+proton) has no leading one, so it keeps `-1.0` for the kinetic energy and
+`-999.0` for the cosines (−1 is a physical cosine), as does a particle at rest,
+or an event without a lepton momentum, for the angle that needs it. Stub
+mode leaves every column at its placeholder.
+
+### `native_interaction_code` is the one non-universal column
+
+Its meaning depends on `generator`. It exists so the exact channel split can be
+recovered without the raw files, and nothing in the framework interprets it.
+
+| Generator | Source | Notes |
+| --- | --- | --- |
+| `genie` | `gst` branch `neut_code` | GENIE has no native integer of its own in `gst`; `gntpc` re-encodes its scattering type into NEUT's mode scheme |
+| `neut` | `mode` | signed — negative for antineutrino channels |
+| `gibuu` | `evType` | 1 = QE, 2..31 resonances, 32/33/37 background, 34 = DIS, 35/36 = 2p2h |
+| `nuwro` | `e/dyn` | distinguishes the CC and NC variant of each dynamics |
+
+Its placeholder is `-2**31`: not `0`, because NuWro's `dyn = 0` is CC
+quasi-elastic, and not a small negative number, because NEUT negates its mode
+for antineutrinos.
+
+### Verification
+
+**With FSI on (2026-10-05).** numu CC on Ar40, E^-2 power law over 0.5–5 GeV,
+local Docker: 2000 events each from GENIE (G18_10a_02_11b), NuWro and NEUT, and
+a 4000-ensemble GiBUU run giving 3435 events. FSI demonstrably ran in each: GENIE's
+`gst` has a post-FSI list differing from the pre-FSI one (`ni` ≠ `nf`) in 70% of
+events; NuWro's `e/post` differs from `e/out` in 47%; 1251 of 2000 NEUT events
+carry FSI status codes (3 = absorbed, 7 = cascade products, …); and GiBUU's
+particles per event rose from 1.87 without transport to 4.57 with it, on the same
+seed. The GENIE multiplicities agree *exactly*, event by event, with `gst`'s own
+independently filled `nfp`, `nfn`, `nfpip`, `nfpim` and `nfpi0`, and
+`hadronic_kinetic_energy_gev ≤ hadronic_energy_gev` holds for every event in all
+four. Per quasi-elastic event, after the GiBUU bound-nucleon step:
+
+| | GENIE | NuWro | NEUT | GiBUU |
+|---|---|---|---|---|
+| 0π fraction | 0.981 | 0.969 | 0.978 | 0.990 |
+| ⟨n_proton⟩ | 2.04 | 1.35 | 1.52 | 1.03 |
+| ⟨n_neutron⟩ | 1.43 | 0.37 | 0.80 | 0.45 |
+| no nucleon out | 0.3% | 2.2% | 0% | 9.1% |
+
+The spread is model physics: GENIE's hA cascade knocks out the most nucleons,
+and GiBUU's potential captures the most slow ones. Without the bound-nucleon
+step GiBUU would have read 1.37 protons and 0.63 neutrons, and no QE event would
+have lost its nucleon.
+
+**Other mesons and the leading particles (2026-10-06), on the same four runs.**
+The leading charged-pion and π⁰ columns are set exactly for the events with
+`n_pi_plus + n_pi_minus > 0` and `n_pi_zero > 0` respectively in every
+generator, `cos θ` stays within [−1, 1], and the leading T never exceeds
+`hadronic_kinetic_energy_gev`. An independent per-event loop over GENIE's `gst`
+(`Ef − m_π` at the PDG mass, direction against `p*v`) reproduces them to
+3.4 × 10⁻⁶ GeV and 3 × 10⁻¹⁶ in its 636 charged-pion and 414 π⁰ events. The π⁰
+events that also hold a harder charged pion number 108/414 (GENIE), 68/327
+(NuWro), 72/341 (NEUT) and 33/300 (GiBUU). `n_other_mesons` equals
+`gst`'s own kaon counters `nfkp + nfkm + nfk0` in all 2000 events (24 have a
+kaon, none another meson). Events with a non-pion meson: GENIE 1.2%, NuWro 1.2%,
+NEUT 3.8%, GiBUU 0.3%. The leading-proton columns are likewise set exactly for
+the events with `n_proton > 0`, and an independent per-event loop over GENIE's
+`gst` (`pdgf`/`Ef`/`p*f` against `p*v` and `p*l`) reproduces all three to
+2 × 10⁻⁶ GeV and 4 × 10⁻¹⁶ in 1863 events. Fraction of events with a proton
+above MicroBooNE's 50 MeV visibility threshold: GENIE 0.78, NuWro 0.77, NEUT
+0.80, GiBUU 0.65, in line with GiBUU's lower QE proton multiplicity above
+(median leading-proton T 0.114 GeV against 0.160–0.177 GeV for the other three).
+
+**Before FSI was enabled in GiBUU (2026-07-30).** 300-event Docker runs of all
+four generators. The GENIE multiplicities and `native_interaction_code` agreed
+exactly with `gst`'s `nfp`/`nfn`/`nfpip`/`nfpim`/`nfpi0`/`neut_code`, and NuWro's
+`dyn` maps one-to-one onto the common labels (0→qel, 2→res, 4→dis, 6→coh,
+8→mec).
 
 ## Weighted statistics and weight efficiency
 

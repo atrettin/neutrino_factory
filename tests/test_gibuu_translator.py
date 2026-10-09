@@ -77,6 +77,13 @@ class GiBUUTranslatorFluxTests(unittest.TestCase):
         # 2p2h Delta is unpublished: release2025 aborts the run if it is on.
         self.assertRegex(jobcard, r"include2p2hDelta\s*=\s*\.false\.")
 
+    def test_jobcard_runs_fsi_transport(self) -> None:
+        # The final-state columns need the post-transport particle list;
+        # numTimeSteps = 0 would leave it at the primary vertex.
+        jobcard = _only_jobcard(GiBUUTranslator().translate(self._config(), _task()))
+        self.assertRegex(jobcard, r"numTimeSteps\s*=\s*150\b")
+        self.assertRegex(jobcard, r"delta_T\s*=\s*0\.2\b")
+
     def test_monoenergetic_fallback_when_range_degenerate(self) -> None:
         translated = GiBUUTranslator().translate(
             self._config(emin_gev=2.0, emax_gev=2.0), _task()
