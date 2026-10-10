@@ -19,7 +19,8 @@ each to a set of `params.txt` overrides.
 
 ## How it is run
 
-Single stage. The adapter writes a `params.txt` of `key = value` lines into the
+One stage, plus a second when the job defines reweight universes (see
+[Reweight universes](#reweight-universes)). The adapter writes a `params.txt` of `key = value` lines into the
 work directory and invokes `nuwro -o events.root -i params.txt`. Everything the
 run needs is in that file — there is no card-plus-flux-file split as in NEUT or
 GiBUU, because the spectrum is encoded inline (see below). The file also pins
@@ -323,6 +324,83 @@ across 0–300 MeV, much weaker than `_E_bind`'s own ~30 MeV variation, implying
 most of `_E_bind` is already reflected in the (off-shell, median mass 0.8965)
 nucleon that `e/in` reports.
 
+## Reweight universes
+
+A job with a `nuwro.universes` block (schema in
+[../configuration.md](../configuration.md#reweight-universes-and-variations))
+gets a second stage after generation. It writes one weight per event per
+universe, σ_universe/σ_central at the event's stored kinematics, into
+`events/universe_weights`. The sampling conventions are in
+[../physics.md](../physics.md#reweight-universes). This section is about what
+NuWro's reweighting can and cannot do, measured on nuwro_25.11.
+
+### NuWro's reweighting machinery
+
+`src/rew/` holds three engines (`rewQEL`, `rewRES`, `rewNorm`), a table of
+reweightable parameters (`rewparams.h`), and two drivers:
+
+- **`reweight_to <events.root> -p name value ... -o <out> --no_events`** handles
+  one parameter setting per process. It writes `<out>.weights` (TTree `weights`,
+  branch `weight`).
+- **`reweight_along`** applies fixed ±2σ shifts from the hardcoded `rewparams.h`
+  errors. The shift size cannot be chosen, so it cannot throw universes.
+
+Each event is reweighted relative to its own stored generation parameters
+(`e->par`). The `rewQEL` engine recomputes the free-nucleon `qel_sigma(Eν, q², …)`,
+times the RPA ratio when `qel_rpa` is 1 or 3. Non-QE events get weight 1 from it.
+
+**Why the framework does not call `reweight_to`.** Each call spends ~12.5 s before
+its event loop, whatever the event count: 12.7 s for 200 events, 13.4 s for
+20k (Docker on the dev Mac, numu C12 CC). Most of that is `SetupSPP`, the
+single-pion table setup, which `reweight_to` runs unconditionally. At 100
+universes that is ~21 min per chunk, against 83 s to generate the same 20k
+events.
+
+The framework instead builds **`nf_reweight`** (`setup/nuwro/nf_reweight.cc`).
+It is a driver over the same `REW`/`rew` objects, adapted from `reweight_to.cc`,
+that evaluates every universe inside one event loop and skips `SetupSPP` unless
+a RES parameter is active. 100 universes × 20k events take 2.3 s. Its weights
+are identical to `reweight_to`'s (max |Δ| = 0 on that sample). Unlike
+`reweight_to`, it writes a non-finite ratio as it is instead of replacing it
+with 0, so the normalizer can fail on it.
+
+`nf_reweight <events.root> <universes.txt> <weights.root>` takes the parameter
+names on the first line of `universes.txt`, then one universe's absolute values
+(NuWro units) per line. The adapter resolves the universes and writes the
+inputs `universes.txt` and `universes.json` (the resolved metadata) into the
+task's work directory, then runs it. It reads each universe's central value
+from the run's own `e/par` branches, and refuses a parameter whose value varies
+across the file. Norm-only universes need no NuWro call.
+
+### Which parameters are supported
+
+| Parameter | Status in nuwro_25.11 |
+|---|---|
+| `qel_minerva_ff_scale` | **Works under the default `qel_axial_ff_set = 8`** (MINERvA axial FF). It is the axial form factor's 1σ band weight: `ff.cc` evaluates `zExp − bandWeight·√uncSq`, with central 0 and the documented range −1…+1. |
+| `qel_deuterium_ff_scale` | The same, for `qel_axial_ff_set = 9`. |
+| `qel_cc_axial_mass`, `qel_nc_axial_mass` | Only act under the dipole axial FF (`qel_axial_ff_set` 1–3). `MINERvA_FA(q2, ma)` ignores `ma`, so under the default set 8 the axial mass has no effect at all. The adapter refuses them there. |
+| `qel_s_axial_mass`, `delta_s` | Strange axial FF. Accepted, but they act on NC only. The normalizer refuses a sample in which no universe moves any weight off 1. |
+| `qelNorm resNorm disNorm cohNorm mecNorm ccNorm ncNorm antyNorm` | Applied by the framework as flat factors from the event flags (central 1), because NuWro's own norm engine never runs (upstream issue 1). |
+| `pion_axial_mass`, `pion_C5A` | **Rejected.** Under the default hybrid RES model (`res_kind = 2`) `rewRES` returns NaN for every RES event (upstream issue 2). Generation does not depend on them either: a sample generated directly at `pion_axial_mass = 1.04` has the same RES σ as one at 0.94 (0.4131 ×10⁻³⁸ cm² both, 20k numu C12 CC events, same seed). |
+| bba07, zexp, 2comp/3comp, `qel_cc_vector_mass`, `SPPBkgScale`, `dynNorm*` | Rejected (upstream issues 3–4). |
+
+**QE closure.** A 20k-event numu C12 CC sample (power law E⁻², 0.5–5 GeV,
+`sf_method = 1`) was reweighted to `qel_minerva_ff_scale = +1` and compared
+with a sample generated directly at that value:
+
+- **QE σ:** 0.4480 reweighted against 0.4498 generated directly (×10⁻³⁸ cm²,
+  nominal 0.4042), which agree to 0.4%.
+- **Q² shape:** the per-bin ratio is consistent with 1 within statistics in all
+  eight bins up to 3 GeV².
+- **Other channels:** their σ is unchanged.
+
+Reweighting to the central value gives weight ≡ 1.
+
+What the universes cover is set by what NuWro can reweight, which is the QE
+axial form factor plus the channel norms. DIS, MEC shape, FSI, the spectral
+function, binding and Pauli blocking have no knob. The universe spread is
+therefore a lower bound on NuWro's model uncertainty.
+
 ## Container build
 
 `setup/apptainer/nuwro.def` mirrors `setup/Dockerfile.nuwro` (see
@@ -339,6 +417,12 @@ nucleon that `e/in` reports.
   Dockerfile.
 - NuWro's `CMakeLists.txt` hardcodes the install prefix to the source directory,
   so it is built in place rather than relocated.
+- `nf_reweight` is compiled into the NuWro tree after the main build. Its
+  Makefile rule is `reweight_to`'s with the name swapped, so the link line
+  cannot drift from NuWro's own. The Apptainer payload exposes it as
+  `bin/nf_reweight`, a wrapper with the same runtime environment as `nuwro` but
+  without the `cd`: its arguments are task-local paths, and the QE engine reads
+  no `data/` files.
 
 ## Known limitations
 
@@ -368,3 +452,46 @@ nucleon that `e/in` reports.
   `.claude/TODOS.md`).
 - A NuWro array run produces per-chunk HDF5 files; chunk merging after a Slurm
   array is not yet automated (framework-wide).
+
+## Upstream issues (to report to the NuWro team)
+
+Bugs and pitfalls found in nuwro_25.11, with the evidence for each and how this
+framework works around it. None has been reported yet. Minimal reproducers are
+tracked in `.claude/TODOS.md`.
+
+1. **The `*Norm` reweight parameters do nothing.** In `src/rew/rewparams.h` they
+   are registered with engine `"rewDyn"`, but the `Reweighters` in
+   `src/rew/Reweighters.h` are named `rewNorm`, `rewQEL` and `rewRES`. So
+   `REW("rewDyn")` returns the `End` sentinel, `calcNorm` never runs, and every
+   weight is 1. Nothing warns. *Workaround:* the norms are applied in Python.
+2. **RES reweighting returns NaN under the hybrid model.** `calcRES`
+   (`src/rew/rewRES.cc`) multiplies by `e.res_angrew`. That member is set only
+   in `src/dis/resevent2.cc` (`res_kind ≠ 2`). Under the default hybrid model
+   it holds uninitialized memory (−2.35×10⁻¹⁸⁵ in every event of a 20k C12
+   sample). The nominal is therefore ≈0 and the ratio NaN, which `reweight_to`
+   then hides as 0 (issue 5): all 8400 RES events got weight 0 when reweighted
+   to their own central values. *Workaround:* RES parameters are rejected.
+3. **`qel_cc_vector_mass` and `SPPBkgScale` are listed as reweightable but never
+   read** anywhere in `src/`.
+4. **Some reweight parameters carry over between events.** `RewParams::init`
+   (`rewparams.h`) resets only nine parameters from `e->par`. The bba07, zexp
+   and 2comp/3comp parameters keep the value `set()` gave them at event 0, so
+   from event 1 on the nominal is already computed at the new value and the
+   weight is ≈1. Separately, `reweight_along` never calls `ff_configure` after
+   `setTwk`, so form-factor parameters held in `ff.cc` globals do not respond
+   there. *Workaround:* rejected.
+5. **`reweight_to` silently maps a NaN weight to 0** (`if (weight != weight)
+   weight = 0;`). That makes a failed evaluation look like a physical zero.
+   `nf_reweight` does not do this.
+6. **`save_test_events` writes to `"weighted." + <-o value>`** (`src/nuwro.cc`,
+   `test_events`), prefixing the whole path. An absolute `-o` therefore points
+   into a non-existent directory. Mode 1 also has `finishevent` commented out,
+   so its weighted events have no FSI. Not used by the framework.
+7. **Mode 2 weighted events carry a running normalization.** Each saved weight
+   is divided by the channel ratio `_procesy.ratio(k)` as estimated at that
+   point in the run, and then multiplied by `saved/(i+1)`. Events early in a
+   run are therefore normalized with a less converged estimate than late ones.
+   Not used by the framework.
+8. The `numubar` × W184 buffer overflow under
+   [Known limitations](#known-limitations).
+

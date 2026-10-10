@@ -132,6 +132,20 @@ RUN export ROOTSYS=/opt/root && \
     make -j"${JOBS}" \
       LDFLAGS="$(/opt/root/bin/root-config --libs) -L/opt/ROOTEGPythia6/lib -Wl,-rpath,/opt/ROOTEGPythia6/lib -lEGPythia6 -lPythia6 -lGeom -lMinuit -lgfortran"
 
+# neutrino-factory's single-pass universe reweighter (nuwro/nf_reweight.cc), a
+# driver over NuWro's own src/rew/ engines. It is linked exactly like
+# reweight_to, so its Makefile rule is reweight_to's with the name swapped.
+COPY nuwro/nf_reweight.cc /opt/nuwro/src/rew/nf_reweight.cc
+RUN export ROOTSYS=/opt/root && \
+    export PATH=/opt/root/bin:${PATH} && \
+    export LD_LIBRARY_PATH=/opt/root/lib:${LD_LIBRARY_PATH:-} && \
+    export ROOTEGPythia6_ROOT=/opt/ROOTEGPythia6 && \
+    cd /opt/nuwro && \
+    sed -n '/^\$(BIN)\/reweight_to:/,/LINK.cc/p' Makefile | sed 's#reweight_to#nf_reweight#g' >> Makefile && \
+    make bin/nf_reweight \
+      LDFLAGS="$(/opt/root/bin/root-config --libs) -L/opt/ROOTEGPythia6/lib -Wl,-rpath,/opt/ROOTEGPythia6/lib -lEGPythia6 -lPythia6 -lGeom -lMinuit -lgfortran" && \
+    test -x bin/nf_reweight
+
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 FROM --platform=linux/amd64 ubuntu:22.04
 

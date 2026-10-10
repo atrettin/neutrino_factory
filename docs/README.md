@@ -13,15 +13,15 @@ For the project pitch, installation and a quickstart, see the
 | Document | What it covers |
 |---|---|
 | [architecture.md](architecture.md) | The module map and data flow of the Python package, and the run-configuration model (a run is a list of jobs). Read before changing how a config becomes tasks or where outputs land. |
-| [configuration.md](configuration.md) | The run YAML schema in full: sections, jobs, macros and matrix expansion, job labels and the output layout, seeds, `physics.current`, `.env` precedence, and the Slurm task-manifest schema. |
+| [configuration.md](configuration.md) | The run YAML schema in full: sections, jobs, macros and matrix expansion, job labels and the output layout, seeds, `physics.current`, reweight universes and variations (`nuwro.universes`, `genie.universes`, `genie.variations`), `.env` precedence, and the Slurm task-manifest schema. |
 
 ## Domain knowledge
 
 | Document | What it covers |
 |---|---|
-| [physics.md](physics.md) | The physics contract every backend is normalized onto: units and frames, the `xsec_weight` definition and its per-nucleon convention, chunk merging as an average, flux density vs. per-bin integrals, probes and targets, weak current, the interaction taxonomy, derived kinematics, and weighted statistics. |
-| [generators/genie.md](generators/genie.md) | GENIE: runtime-discovered tunes, the two-stage `gevgen` → `gntpc` run, why the flux histogram is written by hand, and how σ is reconstructed by summing cross-section splines. |
-| [generators/nuwro.md](generators/nuwro.md) | NuWro: the inline `beam_energy` spectrum in MeV, the `dyn_*` channel switches, and why its per-event weight is a single run-wide constant that is already per nucleon. |
+| [physics.md](physics.md) | The physics contract every backend is normalized onto: units and frames, the `xsec_weight` definition and its per-nucleon convention, chunk merging as an average, flux density vs. per-bin integrals, probes and targets, weak current, the interaction taxonomy, derived kinematics, weighted statistics, and reweight universes (definition, linear/log sampling, per-generator central values, switch variations kept apart, what their spread means). |
+| [generators/genie.md](generators/genie.md) | GENIE: runtime-discovered tunes, the two-stage `gevgen` → `gntpc` run, why the flux histogram is written by hand, how σ is reconstructed by summing cross-section splines, reweight universes and switch variations via GENIE Reweight and `nf_genie_reweight` with the dials that passed a per-dial check, and the upstream issues to report. |
+| [generators/nuwro.md](generators/nuwro.md) | NuWro: the inline `beam_energy` spectrum in MeV, the `dyn_*` channel switches, why its per-event weight is a single run-wide constant that is already per nucleon, reweight universes via `nf_reweight` and which parameters actually work, and the upstream issues to report. |
 | [generators/neut.md](generators/neut.md) | NEUT: the payload extracted from a published image, the 80-character Fortran path limit, the `NEUT-CRS` slot tables that substitute for a CC/NC switch, the `nf_flatten.C` second stage, and the mode → interaction table. |
 | [generators/gibuu.md](generators/gibuu.md) | GiBUU: cross-section weighting rather than rejection sampling, and everything that follows — `num_runs` as the merge denominator, `inclusive` as two concatenated passes, negative weights, and the `evType` table. |
 | [generator_versioning.md](generator_versioning.md) | The two-axis `code_version` + `config_version` model, adapters as the source of truth for versions, runtime tune discovery, and validation strictness. |
@@ -34,6 +34,7 @@ For the project pitch, installation and a quickstart, see the
 | [apptainer_image.md](apptainer_image.md) | How the unified `nf-base.sif` is composed from per-generator payload SIFs, and how adapters dispatch into it via `nf-run`. |
 | [mpp_cluster_usage.md](mpp_cluster_usage.md) | The MPCDF/ODSL runbook: execution model, filesystems, the mandatory `--partition=alma`, first-time setup, submitting a run, working up from a first scheduler-only submission, and troubleshooting. |
 | [performance.md](performance.md) | Measured generator runtimes on one machine: the machine facts, per-generator and per-GENIE-tune wall clocks and per-event rates at numu/Fe56/CC, the fixed overheads (GENIE's ~23 s spline load, NEUT's ~142 s), the 27× tune-rate spread and its model-construction cause, and Slurm-sizing formulae. |
+| [universes_cluster_verification.md](universes_cluster_verification.md) | The cluster-side checklist for the reweight-universe payloads (NuWro `nf_reweight`, GENIE `nf_genie_reweight`): rebuild, binary resolution in `nf-base.sif`, and end-to-end smoke runs with expected output. |
 
 ## Extending
 

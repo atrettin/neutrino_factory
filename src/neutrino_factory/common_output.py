@@ -83,6 +83,22 @@ VERSION_IDENTITY_KEYS = ("generator", "code_version", "config_version")
 XSEC_NORM_COUNT_KEY = "xsec_norm_count"
 
 
+# Optional 2D event datasets of reweight weights, shape (n_events, n_columns):
+# sigma_variant / sigma_central per event (see universes.py). Ratios, so merging
+# concatenates them and never rescales them. ``universe_weights`` holds the
+# Gaussian-sampled universes; ``variation_weights`` one column per switch-type
+# knob at its alternate setting, which follows no Gaussian prior and so is kept
+# apart. The metadata key paired with each dataset describes its columns.
+UNIVERSE_WEIGHTS_KEY = "universe_weights"
+UNIVERSES_METADATA_KEY = "universes"
+VARIATION_WEIGHTS_KEY = "variation_weights"
+VARIATIONS_METADATA_KEY = "variations"
+WEIGHT_MATRICES = {
+    UNIVERSE_WEIGHTS_KEY: UNIVERSES_METADATA_KEY,
+    VARIATION_WEIGHTS_KEY: VARIATIONS_METADATA_KEY,
+}
+
+
 class MergeError(ValueError):
     """Raised when attempting to merge HDF5 files with inconsistent version metadata."""
 
@@ -154,6 +170,9 @@ def _read_event_columns(handle: h5py.File) -> dict[str, np.ndarray]:
 
     for key in EVENT_STRING_FIELDS:
         columns[key] = _decode_text_array(np.asarray(event_group[key][()]))
+    for key in WEIGHT_MATRICES:
+        if key in event_group:
+            columns[key] = np.asarray(event_group[key][()])
     return columns
 
 
@@ -186,7 +205,20 @@ def _concat_event_columns(chunks: list[dict[str, np.ndarray]]) -> dict[str, np.n
     return merged
 
 
-def write_common_hdf5(output_path: str | Path, metadata: dict[str, Any], events: list[dict[str, Any]]) -> str:
+def write_common_hdf5(
+    output_path: str | Path,
+    metadata: dict[str, Any],
+    events: list[dict[str, Any]],
+    universe_weights: np.ndarray | None = None,
+    variation_weights: np.ndarray | None = None,
+) -> str:
+    matrices = {UNIVERSE_WEIGHTS_KEY: universe_weights, VARIATION_WEIGHTS_KEY: variation_weights}
+    for key, matrix in matrices.items():
+        if matrix is not None and (matrix.ndim != 2 or len(matrix) != len(events)):
+            raise ValueError(
+                f"{key} has shape {matrix.shape}; expected ({len(events)}, n_columns), "
+                "one row per event"
+            )
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -231,6 +263,9 @@ def write_common_hdf5(output_path: str | Path, metadata: dict[str, Any], events:
             event_group.create_dataset(key, data=values)
         for key, values in string_columns.items():
             event_group.create_dataset(key, data=values, dtype=STRING_DTYPE)
+        for key, matrix in matrices.items():
+            if matrix is not None:
+                event_group.create_dataset(key, data=np.asarray(matrix, dtype=np.float32))
 
     return str(output)
 
@@ -264,6 +299,38 @@ def _xsec_norm_count(metadata: dict[str, Any]) -> float | None:
     except (TypeError, ValueError):
         return None
     return value if value > 0.0 else None
+
+
+def _merge_weight_matrix(
+    read_files: list[tuple[str, dict[str, Any], dict[str, np.ndarray], float | None]],
+    key: str,
+) -> np.ndarray | None:
+    """Concatenate the inputs' ``key`` weight matrix, or None if none carry it.
+
+    Column ``k`` must mean the same parameter values in every input, so the
+    inputs must agree on the paired metadata exactly; and either all of them
+    carry the matrix or none does, since a merged column with holes could not be
+    told apart from a real one.
+    """
+    meta_key = WEIGHT_MATRICES[key]
+    carrying = [path for path, _, columns, _ in read_files if key in columns]
+    if not carrying:
+        return None
+    if len(carrying) != len(read_files):
+        missing = [path for path, _, columns, _ in read_files if key not in columns]
+        raise MergeError(
+            f"Only {len(carrying)} of {len(read_files)} inputs carry {key}; "
+            f"missing from {_summarize_paths(missing)}"
+        )
+    reference_path, reference_metadata = read_files[0][0], read_files[0][1]
+    reference = reference_metadata.get(meta_key)
+    for path, metadata, _, _ in read_files[1:]:
+        if metadata.get(meta_key) != reference:
+            raise MergeError(
+                f"Refusing to merge {key} drawn differently: the '{meta_key}' "
+                f"metadata of {path} differs from {reference_path}"
+            )
+    return np.concatenate([columns[key] for _, _, columns, _ in read_files])
 
 
 def merge_hdf5_files(
@@ -384,6 +451,7 @@ def merge_hdf5_files(
             assert count is not None
             columns["xsec_weight"] = columns["xsec_weight"] * (count / norm_count_total)
 
+    matrices = {key: _merge_weight_matrix(read_files, key) for key in WEIGHT_MATRICES}
     merged_columns = _concat_event_columns(merged_chunks)
     merged_events = _rows_from_event_columns(merged_columns)
 
@@ -411,5 +479,14 @@ def merge_hdf5_files(
     # Carry the combined denominator so a merged file can itself be merged.
     if norm_count_total:
         metadata[XSEC_NORM_COUNT_KEY] = norm_count_total
+    for key, matrix in matrices.items():
+        if matrix is not None:
+            metadata[WEIGHT_MATRICES[key]] = first_file_metadata[WEIGHT_MATRICES[key]]
 
-    return write_common_hdf5(output_path, metadata, merged_events)
+    return write_common_hdf5(
+        output_path,
+        metadata,
+        merged_events,
+        universe_weights=matrices[UNIVERSE_WEIGHTS_KEY],
+        variation_weights=matrices[VARIATION_WEIGHTS_KEY],
+    )

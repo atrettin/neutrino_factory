@@ -6,7 +6,7 @@ in [../physics.md](../physics.md); the run pipeline is in
 
 Files: `generators/genie.py`, `translators/genie.py`, `normalizers/genie.py`,
 `setup/Dockerfile.genie`, `setup/apptainer/genie.def`,
-`setup/download_genie_xsec.sh`.
+`setup/download_genie_xsec.sh`, `setup/genie/nf_genie_reweight.cc`.
 
 ## Versions and provenance
 
@@ -446,10 +446,212 @@ GENIE's own `NeutReactionCode` makes the same join explicit, handling
 primary-hadron multiplicity — `npi > 1` → mode 21/41, exactly NEUT's multi-π
 codes.
 
+## Reweight universes and variations
+
+A job with a `genie.universes` and/or `genie.variations` block (schema in
+[../configuration.md](../configuration.md#reweight-universes-and-variations))
+gets a third stage after `gevgen` and `gntpc`. It writes one weight per event
+per universe, σ_universe/σ_tune at the event's stored kinematics, into
+`events/universe_weights`. It writes one weight per event per switch variation
+into `events/variation_weights`. The sampling conventions are in
+[../physics.md](../physics.md#reweight-universes). This section is about what
+GENIE Reweight can and cannot do, measured on Generator R-3_06_00 with
+Reweight R-1_04_02.
+
+### GENIE Reweight and `nf_genie_reweight`
+
+GENIE Reweight ([GENIE-MC/Reweight](https://github.com/GENIE-MC/Reweight)) is a
+separate package built against the Generator tree. **R-1_04_02** is used: it is
+R-1_04_00, released alongside Generator R-3_06_00, plus a fix that makes the
+RES, COH and DIS engines use the phase space stored in the event instead of a
+hardcoded one.
+
+It reads the GHEP file (`gtree`/`gmcrec`), not gst, because it needs each
+event's stored kinematics, phase-space tag and FSI history. `events.ghep.root`
+is kept for this.
+
+Its API:
+
+- `GReWeight` owns one engine per physics area (`GReWeightNuXSecCCQE`,
+  `GReWeightNuXSecCCRES`, `GReWeightINuke`, …).
+- Dials are set with `Systematics().Set(GSyst_t, value)`.
+- `Reconfigure()` pushes them into the engines.
+- `CalcWeight(event)` multiplies every engine's weight.
+
+A dial value means `p = p_tune · (1 + dial · err)`, clamped at 0, where `err` is
+the 1σ entry in the Generator's `config/GSystUncertaintyTable.xml`.
+
+**Why the shipped apps are not used.**
+
+- `grwght1p` scans a single dial.
+- `grwghtnp` throws correlated universes, but adopts engines only for a subset
+  of dials. It also hands `NormCCRES` the CCQE engine (upstream issue 2 below).
+
+The framework instead builds **`nf_genie_reweight`**, a driver over the same
+engines:
+
+```
+nf_genie_reweight <events.ghep.root> <universes.txt> <weights.root>
+                  --tune <tune> [--message-thresholds <files>]
+```
+
+The first line of `universes.txt` holds one `<GSyst name>:<kind>` per column.
+Every further line is one column set. The output is TTree `weights`, branch
+`weights[N]/D`, one entry per event in input order.
+
+- **`scale` columns are a multiplier on the tune's own value** (1 = nominal).
+  The driver overrides GENIE's 1σ table to 1 for these dials, so GENIE's dial is
+  exactly `value − 1`. The config's `sigma` is therefore the only prior: the
+  table's own values, including its asymmetric NormCCQE (+20/−15 %) entry, never
+  enter.
+- **`raw` columns** pass the value to GENIE unchanged. These are the [0, 1]
+  switches.
+- **It builds the generation tune** (`--tune` = the job's `config_version`),
+  because each engine takes its default model from the tune.
+- **It adopts only the engines the dials need.** `GReWeightINuke` calls
+  `exit(1)` in its constructor unless the tune's FSI model is hA2018.
+- **It fails loudly** (exit 2) on a dial its table does not know, or one that no
+  adopted engine handles under the tune. An example is `MaCCQE` under
+  AR23_20i's z-expansion axial form factor, checked on a 25k-event AR23_20i C12
+  sample.
+- **It loops universes outer and events inner**, so `Reconfigure()` runs once
+  per column, and re-reads each event for every column, because the engines
+  modify the interaction while computing a weight.
+- **It recomputes the nominal dσ** with the engine's own default model
+  (`UseOldWeightFromFile(false)`) instead of reading the dσ stored in the event.
+  See upstream issue 1: for G18_10a_02_11a's RES and COH models the stored value
+  is unusable as the denominator.
+
+The adapter builds the inputs:
+
+- one row per universe, with every scale dial at its thrown value;
+- then one row per variation, with that switch at its value and everything else
+  at nominal.
+
+It writes `universes.txt` and `universes.json`, runs the driver, and the
+normalizer splits the columns into the two datasets.
+
+**Runtime.** About 1 ms per event per universe with 22 scale dials on (every
+dial of the table below except `NormCCQE`, `NormCCRES`, `NormCCCOH` and the two
+`FrPiProd` fates) plus `RPA_CCQE`. 10 universes over 20k events took 207 s
+(numu C12 CC, G18_10a_02_11a, Docker on the dev Mac). 100 universes per 20k-event chunk
+therefore cost ~35 min, against ~25 min to generate the chunk with this tune
+(75 ms/event, [../performance.md](../performance.md)). Dials outside the
+cross-section engines are cheaper: four dials over 20k events × 6 columns ran in
+37 s, including startup.
+
+### Which dials are supported
+
+Every dial below was checked on one sample: 20k numu C12 CC events,
+G18_10a_02_11a, power law E⁻² on 0.5–5 GeV. Each was moved alone to scale 1.2
+(switches to 1), and accepted only if it met all four conditions:
+
+- the nominal weight is exactly 1;
+- every weight is finite;
+- it moves only the channel it should;
+- its mean weight has the expected sign and size.
+
+Dials outside this table fail config validation. NC and antineutrino variants
+of the dials below have not been checked and are not yet accepted.
+
+| Dials (config names) | Engine | Channel moved at +20 % (mean weight over that channel) |
+|---|---|---|
+| `MaCCQE` | CCQE, `kModeMa` | qel 1.220 (closure below) |
+| `NormCCQE` | CCQE, default mode | qel 1.199 |
+| `MaCCRES`, `MvCCRES` | CCRES, `kModeMaMv` | res 1.239, 1.456 |
+| `NormCCRES` | CCRES, default mode | res 1.200 |
+| `NonRESBGv{p,n}CC{1,2}pi` | non-resonant background | DIS events with W < 2 GeV only: 1–29 % of dis events move, dis mean 1.002–1.058 |
+| `AhtBY`, `BhtBY`, `CV1uBY`, `CV2uBY` | DIS (Bodek-Yang) | dis 1.025, 1.001, 1.010, 1.020 |
+| `MaCOHpi`, `R0COHpi`, `NormCCCOH` | COH | coh 1.055, 0.969, 1.200 |
+| `NormCCMEC` | MEC | mec 1.200 |
+| `MFP_pi`, `MFP_N` | hA2018 FSI | σ-preserving: all-event mean 0.9992 each |
+| `Fr{CEx,Inel,Abs,PiProd}_{pi,N}` | hA2018 FSI fates | σ-preserving: all-event mean 0.9995–1.0002 |
+
+**Switch variations** (`genie.variations`), where 0 is the tune and 1 is the
+alternative, read from the engine sources:
+
+| Dial | 1 means | Effect at 1 |
+|---|---|---|
+| `RPA_CCQE` | Nieves CCQE with RPA off | qel mean 1.063 |
+| `XSecShape_CCMEC` | the Empirical MEC model's (T_l, cos θ_l) shape at the tune's MEC total σ | mec mean 1.025, single weights 0–8.5 |
+| `DecayAngMEC` | MEC nucleon-cluster decay as 3 cos²θ about q (0: isotropic) | mec mean 0.979 |
+| `Theta_Delta2Npi` | isotropic Δ → Nπ decay (0: the Rein-Sehgal distribution the engine assumes) | res mean 1.013 |
+
+**Constraints the config enforces.**
+
+- `MaCCQE` and `NormCCQE` select incompatible CCQE engine modes, so they cannot
+  be combined. The same holds for `MaCCRES`/`MvCCRES` with `NormCCRES`.
+- Of each fate group, at most three may be varied. `GReWeightINukeParams` needs
+  one fate left as the "cushion" that absorbs unitarity, and exits with "There
+  must be at least one cushion term" otherwise.
+- The fate weights are 0 for an event whose cushion fate's scale factor is
+  driven below 0. At +20 % on one nucleon fate this happened for 10–50 of 20k
+  events. That is GENIE's own design, not a NaN.
+
+**Rejected.**
+
+- **`FormZone`:** at +20 % it moves the mean DIS weight to 0.854, where a
+  formation-zone change should preserve σ. The engine also logs FATAL
+  "INTRANUKE didn't set a valid rescattering code" on 224 of 20k events.
+- **`AGKYxF1pi`, `AGKYpT1pi`:** not σ-preserving (dis mean 0.986 at +20 %), with
+  single weights up to 2.4 and 5.0.
+- **`DISNuclMod`:** its `CalcWeight` exits for any non-zero value.
+- **`FrElas_*`:** not a fate in this Reweight version.
+
+The z-expansion dials (AR23_20i) and the remaining dials are untested, so they
+are not accepted.
+
+**MaCCQE closure.**
+
+- **Setup:** a QEL-Ma +20 % copy of the G18_10a_02_11a tune (QEL-Ma 0.961242 →
+  1.1534904, via `GXMLPATH`) gave both the CCQE spline (`gmkspl`, 30 knots) and
+  a 10k-event CCQE sample generated directly.
+- **σ:** the flux-averaged σ_QE ratio from the splines is 1.2217. The mean
+  reweighted QE weight is 1.2203 ± 0.0014. Per energy bin the agreement is
+  within 0.1 % up to 2 GeV, and within 0.7 % in 2–5 GeV, which is limited by
+  the 30-knot spline.
+- **Q² shape:** reweighted against direct gives χ² = 2.7 for 8 degrees of
+  freedom over nine bins to 3 GeV². The unweighted nominal against direct gives
+  χ² = 46.9.
+
+**Coverage.** The universes cover what GENIE Reweight can reweight. The README
+of GENIE Reweight itself states that this is not the full systematic error of
+any tune. Nuclear ground state, binding and Pauli blocking have no working
+knob for these tunes. The universe spread is therefore a lower bound on GENIE's
+model uncertainty.
+
+### Upstream issues (to report to the GENIE team)
+
+1. **The stored dσ does not match the model's own dσ for the RES and COH
+   engines.** With G18_10a_02_11a, the RES and COH engines compare
+   `event.DiffXSec()` against their default model's `XSec(interaction,
+   event.DiffXSecVars())` at the stored kinematics, and warn on each of the first
+   20 events: "default dxsec does not match dxsec saved in tree".
+   - **Size:** for the first eight events of each, the recomputed value was
+     1.05–16× (RES, Berger-Sehgal) and 7–38× (COH) smaller than the stored one.
+   - **Effect:** the default `UseOldWeightFromFile(true)` divides by the stored
+     value, so every weight is noise. MaCCRES at 1.001 gave RES events a mean
+     weight of 0.61; MaCOHpi at 1.2 gave 0.10.
+   - **Not the model:** reconfiguring the model copy with the unchanged Ma
+     reproduces the default exactly.
+   - **Workaround:** `nf_genie_reweight` recomputes the nominal. MaCCRES at 1.001
+     then gives 1.0012.
+2. **`grwghtnp` adopts `GReWeightNuXSecCCQE` under the name `xsec_ccres`** for
+   `NormCCRES`/`MaCCRESshape`/`MvCCRESshape` (`gRwghtNCorrelatedParams.cxx`,
+   ~line 837), so those dials never reach the RES engine.
+3. **`grwght1p`'s `--max-tweak` defaults to −5, not +5**
+   (`gRwght1Param.cxx`, ~line 584), so a scan without it runs backwards.
+4. **The non-resonant background engine hardcodes W < 2.0 GeV**
+   (`GReWeightNonResonanceBkg.cxx`, ~line 198). G18_10a_02_11a's `Wcut` is
+   1.927862, so DIS events with 1.93 < W < 2.0 GeV are reweighted as background
+   although generation did not treat them as such.
+5. **`FormZone` is not σ-preserving under hA2018,** and its engine reports
+   events without a valid INTRANUKE rescattering code (see Rejected above).
+
 ## Container build
 
 `setup/apptainer/genie.def` mirrors `setup/Dockerfile.genie` (see
-[../containers.md](../containers.md)). Four things in that build are deliberate
+[../containers.md](../containers.md)). Five things in that build are deliberate
 and non-obvious:
 
 - **ROOT 6.24.08, not newer.** ROOT 6.26+ changed `TXMLEngine::GetAttr()` to
@@ -463,6 +665,16 @@ and non-obvious:
 - **Pythia6 sources are pre-staged**: pythia.org answers with a 302 redirect that
   breaks `curl -f -O`. The shared builder is `setup/lib/build_pythia6.sh` (NuWro
   needs it too).
+- **GENIE Reweight and `nf_genie_reweight` are built in the builder stage**
+  against `$GENIE`. Reweight has no configure step and reads the Generator's
+  `Make.config`. The driver's Makefile rule is `grwght1p`'s with the names
+  swapped, so its link line cannot drift. The Reweight libraries, the driver
+  and the Reweight headers are then copied into `$GENIE/lib`, `$GENIE/bin` and
+  `$GENIE/src`, so the runtime stage, the Apptainer payload and its wrapper need
+  no further paths. The headers matter at run time: without them, loading the
+  libraries' ROOT dictionaries prints cling "Missing FileEntry" errors for every
+  Reweight class. The Apptainer payload exposes the driver as
+  `bin/nf_genie_reweight` through the same wrapper body as `gevgen`.
 
 ## Known limitations
 

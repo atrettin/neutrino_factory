@@ -13,6 +13,7 @@ from . import catalog
 from . import flux as flux_module
 from . import jobs as jobs_module
 from . import particles
+from . import universes
 from .jobs import JobExpansionError, deep_merge
 
 
@@ -190,6 +191,10 @@ def _validate_job(
             f"{where}: log_level must be one of {', '.join(LOG_LEVELS)} (got '{log_level}')"
         )
 
+    for section in GENERATOR_SECTIONS:
+        if section in job:
+            errors.extend(_validate_generator_section(section, job[section], generator, where))
+
     nucleus = str(job.get("target", {}).get("nucleus", ""))
     try:
         derived_pdg = particles.nucleus_pdg(nucleus)
@@ -207,6 +212,37 @@ def _validate_job(
                 derived_pdg,
             )
 
+    return errors
+
+
+# Optional per-job generator sections, each only valid on its own generator's
+# jobs. Their keys: ``universes`` (Gaussian reweight universes) and, where the
+# generator has switch-type knobs, ``variations``.
+GENERATOR_SECTIONS = {"nuwro": ("universes",), "genie": ("universes", "variations")}
+
+
+def _validate_generator_section(section: str, block: Any, generator: str, where: str) -> list[str]:
+    """An optional per-job ``nuwro:`` / ``genie:`` section."""
+    if generator != section:
+        return [
+            f"{where}: a '{section}' section is only valid on a {section} job (got '{generator}')"
+        ]
+    if not isinstance(block, dict):
+        return [f"{where}: {section} must be a mapping"]
+    supported = GENERATOR_SECTIONS[section]
+    errors = [
+        f"{where}: unknown key '{section}.{key}' (supported: {', '.join(supported)})"
+        for key in block
+        if key not in supported
+    ]
+    if "universes" in block:
+        errors += universes.validate_universes(
+            block["universes"], f"{where}: {section}.universes", section
+        )
+    if "variations" in block and "variations" in supported:
+        errors += universes.validate_variations(
+            block["variations"], f"{where}: {section}.variations", section
+        )
     return errors
 
 

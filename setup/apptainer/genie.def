@@ -25,7 +25,11 @@ Stage: builder
     LHAPDF_VERSION=6.5.6
     ROOT_VERSION=6.24.08
     PYTHIA6_VERSION=6.4.28
+    GENIE_REWEIGHT_TAG=R-1_04_02
     JOBS=4
+
+%files
+    setup/genie/nf_genie_reweight.cc /opt/nf-src/nf_genie_reweight.cc
 
 %post
     export DEBIAN_FRONTEND=noninteractive
@@ -170,6 +174,28 @@ Stage: builder
     test -d /opt/genie/config && test -d /opt/genie/data
     test -x /opt/genie/bin/gevgen
 
+    # ── GENIE Reweight + nf_genie_reweight ────────────────────────────────────
+    # Same as the Dockerfile's step: build Reweight in place against $GENIE, link
+    # the driver with grwght1p's Makefile rule, and copy the libraries and the
+    # binary into $GENIE/lib and $GENIE/bin so the payload wrapper needs no extra
+    # paths.
+    export GENIE_REWEIGHT=/opt/genie-reweight
+    export LD_LIBRARY_PATH="/opt/genie/lib:${LD_LIBRARY_PATH}"
+    git clone --depth 1 --branch "{{ GENIE_REWEIGHT_TAG }}" \
+        https://github.com/GENIE-MC/Reweight.git /opt/genie-reweight
+    cd /opt/genie-reweight
+    make
+    cp /opt/nf-src/nf_genie_reweight.cc src/Apps/nf_genie_reweight.cxx
+    cd src/Apps
+    sed -n '/^\$(GENIE_REWEIGHT_BIN_PATH)\/grwght1p:/,/\$(LD)/p' Makefile \
+        | sed 's#grwght1p#nf_genie_reweight#g; s#gRwght1Param#nf_genie_reweight#g' >> Makefile
+    make /opt/genie-reweight/bin/nf_genie_reweight
+    cp -a /opt/genie-reweight/lib/. /opt/genie/lib/
+    cp -a /opt/genie-reweight/src/RwFramework /opt/genie-reweight/src/RwCalculators \
+      /opt/genie-reweight/src/RwIO /opt/genie/src/
+    cp /opt/genie-reweight/bin/nf_genie_reweight /opt/genie/bin/
+    test -x /opt/genie/bin/nf_genie_reweight
+
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 Bootstrap: docker
 From: ubuntu:22.04
@@ -213,8 +239,8 @@ Stage: final
     # Single source of truth for GENIE's runtime env + launch logic (was the
     # per-generator wrapper in nf-base.def). The wrapper locates its own payload
     # root at run time, so its text is version-independent, and dispatches on its
-    # own basename so one body serves both gevgen and gntpc.
-    for gbin in gevgen gntpc; do
+    # own basename so one body serves gevgen, gntpc and nf_genie_reweight.
+    for gbin in gevgen gntpc nf_genie_reweight; do
     cat > "$PREFIX/bin/$gbin" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -233,7 +259,7 @@ EOF
     # Descriptor consumed by the generic composition/verification in
     # build_apptainer_images.sh (no per-generator knowledge in the script).
     cat > "$PREFIX/nf-payload.json" <<EOF
-{"schema_version":1,"generator":"genie","code_version":"$CV","binaries":["gevgen","gntpc"],"default_binary":"gevgen","smoke_paths":["genie/data","genie/config"]}
+{"schema_version":1,"generator":"genie","code_version":"$CV","binaries":["gevgen","gntpc","nf_genie_reweight"],"default_binary":"gevgen","smoke_paths":["genie/data","genie/config"]}
 EOF
 
 %environment
@@ -249,6 +275,8 @@ EOF
 %test
     test -x /opt/nf/generators/genie/{{ GENIE_TAG }}/bin/gevgen
     test -x /opt/nf/generators/genie/{{ GENIE_TAG }}/genie/bin/gevgen
+    test -x /opt/nf/generators/genie/{{ GENIE_TAG }}/bin/nf_genie_reweight
+    test -x /opt/nf/generators/genie/{{ GENIE_TAG }}/genie/bin/nf_genie_reweight
 
 %labels
     org.neutrino-factory.image genie

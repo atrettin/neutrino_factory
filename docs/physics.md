@@ -733,3 +733,67 @@ selection reports "0 used, 127 blank" rather than silently averaging in `-1`.
 The weighted quantile uses the **midpoint convention** — cumulative weight
 evaluated at the centre of each point's weight, not its upper edge; the naive
 cumulative sum biases the median low by half a bin.
+
+## Reweight universes
+
+A **universe** is one setting of a generator's physics parameters, drawn from
+independent Gaussian priors. For an event *i* and universe *k*,
+`events/universe_weights[i, k]` is the ratio of the differential cross section
+under universe *k* to the one under the generation's own parameters (the
+central values), both evaluated at the event's stored kinematics. A universe's
+cross section in a bin is therefore `Σ xsec_weight · universe_weights[:, k]` over
+the bin. The weights are ratios, so merging chunks concatenates them and never
+averages or rescales them. NuWro and GENIE support them. What each can
+reweight is listed in [generators/nuwro.md](generators/nuwro.md#reweight-universes)
+and [generators/genie.md](generators/genie.md#reweight-universes-and-variations).
+The sampling below is the same for both; only the parameter tables and the
+binary that computes the ratios differ.
+
+**Sampling.** Each parameter has `z ~ N(0, 1)`, drawn from its own stream seeded
+by `(universes.seed, crc32(name))`. Adding a parameter therefore leaves the
+others' throws unchanged, and a larger `count` extends the existing universes
+instead of redrawing them. The seed is explicit, never derived from the run seed
+or the job label, so universe *k* means the same parameter values in every job
+that uses it. That shared meaning is what makes bin-to-bin correlations
+*between* jobs (targets, flavours, fluxes) estimable. The value depends on the
+parameter's flag:
+
+- **linear** (default): `value = central + sigma·z`, with `sigma` in the
+  parameter's own units. A non-positive throw of a physically positive parameter
+  is an error, not clipped.
+- **`log: true`**: `value = central·exp(sigma·z)`. `sigma` is then the standard
+  deviation of `ln(value)`, approximately the fractional error for small sigma.
+  The median is `central`, every value is positive, and
+  `ln(value/central) = sigma·z` exactly, so a covariance for such a parameter
+  can be formed in log space. That is the motivation for the flag, which is
+  meant to avoid Peelle's Pertinent Puzzle.
+
+What `central` means is per generator. A NuWro parameter's central is the
+generation's own value, in NuWro units. A GENIE Reweight dial is a scale on the
+generation tune's own value, so its central is 1 and `sigma` is a fractional
+error in either mode: linear gives `1 + sigma·z`, log gives `exp(sigma·z)`.
+
+The `universes` metadata stores everything needed to rebuild or extend the
+throws: the seed, the count, each parameter's central value, sigma, log flag
+and optional source, the `z` throws, and the values.
+
+**Variations.** Some knobs are not parameters with an uncertainty but switches
+between two models, interpolated on [0, 1]. Examples are GENIE's `RPA_CCQE`
+(RPA on → off) and `DecayAngMEC` (isotropic → 3 cos²θ). A Gaussian throw has no
+meaning for them. Each is therefore stored as one deterministic column of
+`events/variation_weights`: that knob at its configured value, everything else
+nominal. The `variations` metadata gives the column order, each value, and what
+0 and 1 mean. Such a column is a model alternative to compare against, or to
+add as a separate one-sided systematic. It is never a universe, and folding it
+into the universe covariance would treat a two-point model choice as if it
+were Gaussian.
+
+**What the spread means.** The covariance from `count` universes has rank at
+most `count − 1`, so it cannot be inverted for more bins than that. Its
+correlation coefficients carry a statistical precision of roughly `1/√count`.
+Because every universe reweights the same events, the universe covariance holds
+almost no MC statistical noise. The central sample's own statistical covariance,
+from `Σ xsec_weight²` per bin, must be added separately. And the spread covers
+only the parameters that can be reweighted, so it is a lower bound on the
+generator's model uncertainty.
+

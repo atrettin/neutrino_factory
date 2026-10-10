@@ -85,6 +85,10 @@ def check_columns(handle: h5py.File) -> dict[str, Any]:
             lengths[name] = int(len(events[name]))
         else:
             missing.append(name)
+    # Optional, but when present it must have one row per event.
+    for key in ("universe_weights", "variation_weights"):
+        if events is not None and key in events:
+            lengths[key] = int(len(events[key]))
 
     consistent_length = len(set(lengths.values())) <= 1
     return {

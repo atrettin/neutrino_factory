@@ -15,6 +15,7 @@ from ..final_state import (
 from ..flux import build_flux
 from ..kinematics import KINEMATIC_FIELDS, derive_kinematics
 from ..translators.nuwro import NuWroTranslator
+from .. import universes
 from .base import (
     OutputNormalizer,
     interaction_from_flags,
@@ -132,6 +133,29 @@ def _resonant_primary(interactions, res_delta, res_kind) -> list[int]:
         resonant_primary_from_interaction(itype, bool(is_delta))
         for itype, is_delta in zip(interactions, delta)
     ]
+
+
+def _universe_weights(
+    work_dir: Path, flags: dict[str, np.ndarray], antineutrino: bool, n_events: int
+) -> tuple[dict, np.ndarray]:
+    """The resolved universes metadata and the ``(n_events, count)`` weights.
+
+    The product of ``nf_reweight``'s per-universe ratios (for NuWro-reweighted
+    parameters) and the channel norm factors (applied here; NuWro's own norm
+    engine never runs). Non-finite weights are an error: nf_reweight writes them
+    as they are instead of hiding them as 0 the way reweight_to does.
+    """
+    resolved = universes.read_resolved(work_dir)
+    univ = resolved["universes"]
+    norms = {
+        name: np.asarray(univ["values"][name])
+        for name in univ["parameters"]
+        if name in universes.NUWRO_NORM_PARAMS
+    }
+    factors = universes.norm_factors(norms, flags, antineutrino) if norms else None
+    weights, _ = universes.load_weights(work_dir, resolved, n_events, factors)
+    assert weights is not None
+    return univ, weights
 
 
 class NuWroNormalizer(OutputNormalizer):
@@ -350,4 +374,15 @@ class NuWroNormalizer(OutputNormalizer):
             event.update(event_fields(final_state, i))
             events.append(event)
 
-        return write_common_hdf5(out_path, metadata, events)
+        universe_weights = None
+        if translated.get("universes"):
+            flags = {
+                "qel": flag_qel, "res": flag_res, "dis": flag_dis, "coh": flag_coh,
+                "mec": flag_mec, "cc": flag_cc,
+            }
+            antineutrino = int(translated["nuwro_params"]["beam_particle"]) < 0
+            metadata["universes"], universe_weights = _universe_weights(
+                root_path.parent, flags, antineutrino, len(events)
+            )
+
+        return write_common_hdf5(out_path, metadata, events, universe_weights=universe_weights)
