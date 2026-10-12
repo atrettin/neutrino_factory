@@ -123,8 +123,12 @@ def _validate_job(
     stub_mode: bool,
     software_root: Any,
     flux_base_dir: str | None,
+    warnings: set[str],
 ) -> list[str]:
-    """Everything that must hold for one expanded job, as a list of messages."""
+    """Everything that must hold for one expanded job, as a list of messages.
+
+    Warnings worth logging once per run, not once per job, go into ``warnings``.
+    """
     errors: list[str] = []
 
     generator = str(job.get("generator") or "").strip()
@@ -193,7 +197,9 @@ def _validate_job(
 
     for section in GENERATOR_SECTIONS:
         if section in job:
-            errors.extend(_validate_generator_section(section, job[section], generator, where))
+            errors.extend(
+                _validate_generator_section(section, job[section], job, generator, where, warnings)
+            )
 
     nucleus = str(job.get("target", {}).get("nucleus", ""))
     try:
@@ -221,7 +227,14 @@ def _validate_job(
 GENERATOR_SECTIONS = {"nuwro": ("universes",), "genie": ("universes", "variations")}
 
 
-def _validate_generator_section(section: str, block: Any, generator: str, where: str) -> list[str]:
+def _validate_generator_section(
+    section: str,
+    block: Any,
+    job: Dict[str, Any],
+    generator: str,
+    where: str,
+    warnings: set[str],
+) -> list[str]:
     """An optional per-job ``nuwro:`` / ``genie:`` section."""
     if generator != section:
         return [
@@ -243,6 +256,18 @@ def _validate_generator_section(section: str, block: Any, generator: str, where:
         errors += universes.validate_variations(
             block["variations"], f"{where}: {section}.variations", section
         )
+    if section == "genie" and not errors:
+        # Which dials can work depends on the tune's models, so check them
+        # against it here rather than after generation, in nf_genie_reweight.
+        names = [*block.get("universes", {}).get("parameters", {}), *block.get("variations", {})]
+        tune_errors, tune_warnings = universes.validate_genie_tune(
+            names,
+            str(job.get("code_version") or "").strip(),
+            str(job.get("config_version") or "").strip(),
+            where,
+        )
+        errors += tune_errors
+        warnings.update(tune_warnings)
     return errors
 
 
@@ -280,14 +305,17 @@ def validate_config(config: Dict[str, Any]) -> None:
     flux_base_dir = str(Path(config_path).parent) if config_path else None
     software_root = config.get("storage", {}).get("software_root")
 
+    warnings: set[str] = set()
     for index, job in enumerate(job_list):
         if not isinstance(job, dict):
             errors.append(f"jobs[{index}] must be a mapping")
             continue
         where = f"jobs[{index}] ({job.get('label', '?')})"
         errors.extend(
-            _validate_job(job, where, stub_mode, software_root, flux_base_dir)
+            _validate_job(job, where, stub_mode, software_root, flux_base_dir, warnings)
         )
+    for warning in sorted(warnings):
+        LOGGER.warning(warning)
 
     if errors:
         raise ConfigError("; ".join(errors))

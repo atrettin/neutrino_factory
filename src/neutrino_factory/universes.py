@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import zlib
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, NamedTuple
 
 import numpy as np
 
@@ -168,6 +168,257 @@ GENIE_FATE_GROUPS = (
     ("FrCEx_pi", "FrInel_pi", "FrAbs_pi", "FrPiProd_pi"),
     ("FrCEx_N", "FrInel_N", "FrAbs_N", "FrPiProd_N"),
 )
+
+# ── GENIE tune compatibility ─────────────────────────────────────────────────
+
+class GenieModels(NamedTuple):
+    """The models of one GENIE comprehensive model configuration (CMC) that the
+    Reweight engines take their defaults from: ``alg/config`` ids without the
+    ``genie::`` prefix, from the CMC's ``ModelConfiguration.xml``."""
+
+    fsi: str  # HadronTransp-Model
+    qel_cc: str
+    res_cc: str
+    coh_cc_pion: str
+    dis_cc: str
+    mec_cc: str
+
+
+# Every CMC of each code version that has nf_genie_reweight, by the CMC name
+# that prefixes its tunes (G18_10a for G18_10a_02_11a). A tune's own directory
+# only overrides parameters, never these models. Snapshot of the payload's
+# config/<CMC>/ModelConfiguration.xml, checked against it by
+# tests/test_universes.py where the payload is present. CMCs that leave any of
+# these models unset (EM-only, HNL, dark matter, high-energy) are left out.
+GENIE_TUNE_MODELS: dict[str, dict[str, GenieModels]] = {
+    "R-3_06_00": {
+        "AR23_20i": GenieModels(
+            "HAIntranuke2018/Default", "NievesQELCCPXSec/ZExp",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "SuSAv2MECPXSec/Default",
+        ),
+        "G00_00a": GenieModels(
+            "HAIntranuke/Default", "LwlynSmithQELCCPXSec/DipoleAndOldIntegrator",
+            "ReinSehgalRESPXSec/NoPauliBlock", "ReinSehgalCOHPiPXSec/Default",
+            "KNOTunedQPMDISPXSec/Default", "EmpiricalMECPXSec2015/Default",
+        ),
+        "G00_00b": GenieModels(
+            "HAIntranuke/Default", "LwlynSmithQELCCPXSec/DipoleAndOldIntegrator",
+            "ReinSehgalRESPXSec/NoPauliBlock", "ReinSehgalCOHPiPXSec/Default",
+            "KNOTunedQPMDISPXSec/Default", "EmpiricalMECPXSec2015/Default",
+        ),
+        "G00_00z": GenieModels(
+            "HAIntranuke/Default", "LwlynSmithQELCCPXSec/DipoleAndOldIntegrator",
+            "ReinSehgalRESPXSec/WithPauliBlock", "ReinSehgalCOHPiPXSec/Default",
+            "KNOTunedQPMDISPXSec/Default", "EmpiricalMECPXSec2015/Default",
+        ),
+        "G18_01a": GenieModels(
+            "HAIntranuke2018/Default", "LwlynSmithQELCCPXSec/Dipole",
+            "ReinSehgalRESPXSec/NoPauliBlock", "ReinSehgalCOHPiPXSec/Default",
+            "KNOTunedQPMDISPXSec/Default", "EmpiricalMECPXSec2015/Default",
+        ),
+        "G18_01b": GenieModels(
+            "HNIntranuke2018/Default", "LwlynSmithQELCCPXSec/Dipole",
+            "ReinSehgalRESPXSec/NoPauliBlock", "ReinSehgalCOHPiPXSec/Default",
+            "KNOTunedQPMDISPXSec/Default", "EmpiricalMECPXSec2015/Default",
+        ),
+        "G18_02a": GenieModels(
+            "HAIntranuke2018/Default", "LwlynSmithQELCCPXSec/Dipole",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "EmpiricalMECPXSec2015/Default",
+        ),
+        "G18_02b": GenieModels(
+            "HNIntranuke2018/Default", "LwlynSmithQELCCPXSec/Dipole",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "EmpiricalMECPXSec2015/Default",
+        ),
+        "G18_02c": GenieModels(
+            "HINCLCascadeIntranuke/Default", "LwlynSmithQELCCPXSec/Dipole",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "EmpiricalMECPXSec2015/Default",
+        ),
+        "G18_02d": GenieModels(
+            "HG4BertCascIntranuke/Default", "LwlynSmithQELCCPXSec/Dipole",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "EmpiricalMECPXSec2015/Default",
+        ),
+        "G18_10a": GenieModels(
+            "HAIntranuke2018/Default", "NievesQELCCPXSec/Dipole",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "NievesSimoVacasMECPXSec2016/Default",
+        ),
+        "G18_10b": GenieModels(
+            "HNIntranuke2018/Default", "NievesQELCCPXSec/Dipole",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "NievesSimoVacasMECPXSec2016/Default",
+        ),
+        "G18_10c": GenieModels(
+            "HINCLCascadeIntranuke/Default", "NievesQELCCPXSec/Dipole",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "NievesSimoVacasMECPXSec2016/Default",
+        ),
+        "G18_10d": GenieModels(
+            "HG4BertCascIntranuke/Default", "NievesQELCCPXSec/Dipole",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "NievesSimoVacasMECPXSec2016/Default",
+        ),
+        "G18_10i": GenieModels(
+            "HAIntranuke2018/Default", "NievesQELCCPXSec/ZExp",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "NievesSimoVacasMECPXSec2016/Default",
+        ),
+        "G18_10j": GenieModels(
+            "HNIntranuke2018/Default", "NievesQELCCPXSec/ZExp",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "NievesSimoVacasMECPXSec2016/Default",
+        ),
+        "G21_11a": GenieModels(
+            "HAIntranuke2018/Default", "HybridXSecAlgorithm/SuSAv2-QEL",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "SuSAv2MECPXSec/Default",
+        ),
+        "G21_11b": GenieModels(
+            "HNIntranuke2018/Default", "HybridXSecAlgorithm/SuSAv2-QEL",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "SuSAv2MECPXSec/Default",
+        ),
+        "G21_11c": GenieModels(
+            "HINCLCascadeIntranuke/Default", "HybridXSecAlgorithm/SuSAv2-QEL",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "SuSAv2MECPXSec/Default",
+        ),
+        "G21_11d": GenieModels(
+            "HG4BertCascIntranuke/Default", "HybridXSecAlgorithm/SuSAv2-QEL",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "SuSAv2MECPXSec/Default",
+        ),
+        "G24_20i": GenieModels(
+            "HAIntranuke2018/Default", "NievesQELCCPXSec/ZExp",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "SuSAv2MECPXSec/Default",
+        ),
+        "G24_20j": GenieModels(
+            "HNIntranuke2018/Default", "NievesQELCCPXSec/ZExp",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "SuSAv2MECPXSec/Default",
+        ),
+        "G24_20k": GenieModels(
+            "HINCLCascadeIntranuke/Default", "NievesQELCCPXSec/ZExp",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "SuSAv2MECPXSec/Default",
+        ),
+        "G24_20l": GenieModels(
+            "HG4BertCascIntranuke/Default", "NievesQELCCPXSec/ZExp",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "SuSAv2MECPXSec/Default",
+        ),
+        "GDM18_00a": GenieModels(
+            "HAIntranuke/Default", "LwlynSmithQELCCPXSec/Dipole",
+            "ReinSehgalRESPXSec/NoPauliBlock", "ReinSehgalCOHPiPXSec/Default",
+            "KNOTunedQPMDISPXSec/Default", "EmpiricalMECPXSec2015/Default",
+        ),
+        "GDM18_00b": GenieModels(
+            "HAIntranuke/Default", "LwlynSmithQELCCPXSec/Dipole",
+            "ReinSehgalRESPXSec/NoPauliBlock", "ReinSehgalCOHPiPXSec/Default",
+            "KNOTunedQPMDISPXSec/Default", "EmpiricalMECPXSec2015/Default",
+        ),
+        "GPRD18_10a": GenieModels(
+            "HAIntranuke2018/Default", "XSecLinearCombinations/NievesQELCCPXSecNoRPA",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "NievesSimoVacasMECPXSec2016/Default",
+        ),
+        "N24_20i": GenieModels(
+            "HAIntranuke2018/Default", "NievesQELCCPXSec/ZExp",
+            "BergerSehgalRESPXSec2014/NoPauliBlock", "BergerSehgalCOHPiPXSec2015/Default",
+            "KNOTunedQPMDISPXSec/Default", "SuSAv2MECPXSec/Default",
+        ),
+    },
+}
+
+# The CMC every dial in GENIE_SCALE_DIALS and GENIE_SWITCH_DIALS was checked on.
+GENIE_VALIDATED_CMC = ("R-3_06_00", "G18_10a")
+
+# The model each dial's engine takes its defaults from, by GenieModels field.
+GENIE_DIAL_MODEL: dict[str, str] = {
+    **dict.fromkeys(("MaCCQE", "NormCCQE", "RPA_CCQE"), "qel_cc"),
+    **dict.fromkeys(("MaCCRES", "MvCCRES", "NormCCRES", "Theta_Delta2Npi"), "res_cc"),
+    **dict.fromkeys(("MaCOHpi", "R0COHpi", "NormCCCOH"), "coh_cc_pion"),
+    **dict.fromkeys(
+        ("NonRESBGvpCC1pi", "NonRESBGvnCC1pi", "NonRESBGvpCC2pi", "NonRESBGvnCC2pi",
+         "AhtBY", "BhtBY", "CV1uBY", "CV2uBY"),
+        "dis_cc",
+    ),
+    **dict.fromkeys(("NormCCMEC", "XSecShape_CCMEC", "DecayAngMEC"), "mec_cc"),
+    **dict.fromkeys(
+        ("MFP_pi", "MFP_N", *GENIE_FATE_GROUPS[0], *GENIE_FATE_GROUPS[1]), "fsi"
+    ),
+}
+
+
+def _genie_dial_problem(name: str, models: GenieModels) -> str | None:
+    """Why a dial cannot work under a CMC's models, or None. From the GENIE
+    Reweight R-1_04_02 engine sources."""
+    qel_alg, _, qel_config = models.qel_cc.partition("/")
+    if GENIE_DIAL_MODEL.get(name) == "fsi" and not models.fsi.startswith("HAIntranuke2018/"):
+        # GReWeightINuke's constructor exits unless the FSI model is hA2018.
+        return f"needs hA2018 FSI, but the tune uses {models.fsi}"
+    if name in ("MaCCQE", "NormCCQE") and not (
+        qel_alg in ("LwlynSmithQELCCPXSec", "NievesQELCCPXSec") and qel_config.startswith(("Dipole", "RunningMA"))
+    ):
+        # GReWeightNuXSecCCQE handles both only with a dipole (or running-MA)
+        # axial form factor; the CMCs' QEL-CC configs name it.
+        return f"needs a dipole axial form factor, but the tune's CCQE model is {models.qel_cc}"
+    if name == "RPA_CCQE" and qel_alg != "NievesQELCCPXSec":
+        # The engine switches the "RPA" flag of the tune's CCQE model, which
+        # only the Nieves model has: elsewhere every weight would be 1.
+        return f"needs the Nieves CCQE model, but the tune's is {models.qel_cc}"
+    if name == "XSecShape_CCMEC" and models.mec_cc.startswith("EmpiricalMECPXSec2015/"):
+        # The alternative shape is the Empirical MEC model's own.
+        return "reshapes MEC towards the Empirical MEC model, which the tune already uses"
+    return None
+
+
+def validate_genie_tune(
+    names: Iterable[str], code_version: str, tune: str, where: str
+) -> tuple[list[str], list[str]]:
+    """Check GENIE dials against the job's tune: (errors, warnings).
+
+    An error is a dial that cannot work under the tune's models. A warning is a
+    dial whose engine model differs from the one it was checked under.
+    """
+    names = [name for name in names if name in GENIE_DIAL_MODEL]
+    if not names:
+        return [], []
+    by_cmc = GENIE_TUNE_MODELS.get(code_version)
+    if by_cmc is None:
+        return [
+            f"{where}: GENIE universes and variations need nf_genie_reweight, which is "
+            f"built and checked only for {', '.join(GENIE_TUNE_MODELS)} (got '{code_version}')"
+        ], []
+    cmc = "_".join(tune.split("_")[:2])
+    models = by_cmc.get(cmc)
+    if models is None:
+        return [
+            f"{where}: GENIE tune '{tune}' (model configuration '{cmc}') is not in the "
+            f"reweighting model table for {code_version}; known: {', '.join(by_cmc)}"
+        ], []
+    validated = GENIE_TUNE_MODELS[GENIE_VALIDATED_CMC[0]][GENIE_VALIDATED_CMC[1]]
+    errors: list[str] = []
+    warnings: list[str] = []
+    for name in names:
+        problem = _genie_dial_problem(name, models)
+        if problem:
+            errors.append(f"{where}: GENIE dial '{name}' {problem}")
+            continue
+        field = GENIE_DIAL_MODEL[name]
+        if getattr(models, field) != getattr(validated, field):
+            warnings.append(
+                f"GENIE dial '{name}' under tune {cmc}* is unvalidated: it was checked with "
+                f"{getattr(validated, field)} ({GENIE_VALIDATED_CMC[1]}), the tune uses "
+                f"{getattr(models, field)}"
+            )
+    return errors, warnings
+
 
 # ── Tables per generator ─────────────────────────────────────────────────────
 

@@ -289,6 +289,88 @@ class GenieValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "only valid on a genie job"):
             run_config([job(**NUWRO_JOB, genie={"universes": _block(MaCCQE={"sigma": 0.1})})])
 
+    def _tune(self, tune: str, code_version: str = "R-3_06_00", **section) -> None:
+        run_config(
+            [job(**{**GENIE_JOB, "code_version": code_version, "config_version": tune}, genie=section)]
+        )
+
+    def test_fsi_dials_need_ha2018(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "MFP_pi' needs hA2018 FSI.*HNIntranuke2018"):
+            self._tune("G18_10b_02_11a", universes=_block(MFP_pi={"sigma": 0.2}))
+
+    def test_ccqe_dials_need_a_dipole_form_factor(self) -> None:
+        for dial in ("MaCCQE", "NormCCQE"):
+            with self.assertRaisesRegex(ConfigError, f"{dial}' needs a dipole.*ZExp"):
+                self._tune("AR23_20i_00_000", universes=_block(**{dial: {"sigma": 0.1}}))
+
+    def test_rpa_needs_the_nieves_model(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "RPA_CCQE' needs the Nieves.*LwlynSmith"):
+            self._tune("G18_02a_00_000", variations={"RPA_CCQE": {}})
+
+    def test_mec_shape_needs_a_non_empirical_tune(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "already uses"):
+            self._tune("G18_02a_00_000", variations={"XSecShape_CCMEC": {}})
+
+    def test_code_version_without_reweighter(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "built and checked only for R-3_06_00"):
+            self._tune("G18_10a_02_11a", "R-3_04_00", universes=_block(MaCCQE={"sigma": 0.1}))
+
+    def test_unknown_model_configuration(self) -> None:
+        with self.assertRaisesRegex(ConfigError, r"'GEM21_11a'\) is not in the reweighting model table"):
+            self._tune("GEM21_11a_00_000", universes=_block(NormCCMEC={"sigma": 0.5}))
+
+    def test_dial_under_an_unchecked_model_warns_once(self) -> None:
+        section = {"universes": _block(NormCCMEC={"sigma": 0.5}, MFP_pi={"sigma": 0.2})}
+        with self.assertLogs("neutrino_factory.config", "WARNING") as logs:
+            run_config(
+                [
+                    job(**{**GENIE_JOB, "config_version": "N24_20i_02_11b"}, genie=section,
+                        target={"nucleus": nucleus})
+                    for nucleus in ("C12", "O16", "Ar40")
+                ]
+            )
+        warnings = [line for line in logs.output if "unvalidated" in line]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("NormCCMEC", warnings[0])
+        self.assertIn("SuSAv2MECPXSec", warnings[0])
+
+    def test_validated_tune_does_not_warn(self) -> None:
+        with self.assertLogs("neutrino_factory.config", "WARNING") as logs:
+            self._tune(
+                "G18_10a_02_11b",
+                universes=_block(MaCCQE={"sigma": 0.1}, MFP_pi={"sigma": 0.2}),
+                variations={"RPA_CCQE": {}, "XSecShape_CCMEC": {}},
+            )
+        self.assertFalse([line for line in logs.output if "unvalidated" in line])
+
+    def test_model_table_matches_the_payload(self) -> None:
+        import xml.etree.ElementTree as ET
+
+        for code_version, by_cmc in universes.GENIE_TUNE_MODELS.items():
+            config_dir = Path(f"/opt/nf/generators/genie/{code_version}/genie/config")
+            if not config_dir.is_dir():
+                self.skipTest(f"no GENIE {code_version} payload here")
+            keys = {
+                "HadronTransp-Model": "fsi",
+                **{
+                    f"XSecModel@genie::EventGenerator/{process}": field
+                    for process, field in (
+                        ("QEL-CC", "qel_cc"), ("RES-CC", "res_cc"), ("COH-CC-PION", "coh_cc_pion"),
+                        ("DIS-CC", "dis_cc"), ("MEC-CC", "mec_cc"),
+                    )
+                },
+            }
+            found = {}
+            for path in sorted(config_dir.glob("*/ModelConfiguration.xml")):
+                models = {
+                    keys[p.get("name")]: (p.text or "").strip().removeprefix("genie::")
+                    for p in ET.parse(path).getroot().iter("param")
+                    if p.get("name") in keys
+                }
+                if len(models) == len(keys):
+                    found[path.parent.name] = universes.GenieModels(**models)
+            self.assertEqual(found, by_cmc)
+
     def test_driver_table_matches_the_allowlist(self) -> None:
         # nf_genie_reweight must accept exactly the dials the config accepts.
         source = (Path(__file__).parent.parent / "setup/genie/nf_genie_reweight.cc").read_text()

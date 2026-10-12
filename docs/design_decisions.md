@@ -123,7 +123,7 @@ via `containers.apptainer_dispatch`.
 
 ## GENIE flux: a histogram we write, divided out from the one GENIE saved (2026-07)
 
-2026-07 — moved to [generators/genie.md](generators/genie.md#flux-handling).
+2026-07 — moved to [generators/genie.md](generators/genie.md#the-flux-histogram-is-written-by-hand-2026-07).
 
 ## GiBUU cross-section weight (`xsec_weight`) normalization
 
@@ -131,15 +131,15 @@ via `containers.apptainer_dispatch`.
 
 ## GiBUU non-resonant background events are `dis`, and every channel is enabled (2026-07)
 
-2026-07 — moved to [generators/gibuu.md](generators/gibuu.md#why-the-non-resonant-background-is-dis).
+2026-07 — moved to [generators/gibuu.md](generators/gibuu.md#the-non-resonant-background-is-counted-as-dis-2026-07).
 
 ## NEUT: a payload extracted from a published image, not built from source
 
-2026-07 — moved to [generators/neut.md](generators/neut.md#versions-and-provenance).
+2026-07 — moved to [generators/neut.md](generators/neut.md#a-payload-extracted-from-a-published-image).
 
 ## NEUT output flattening (`nf_flatten.C`)
 
-2026-07 — moved to [generators/neut.md](generators/neut.md#output-flattening-nf_flattenc).
+2026-07 — moved to [generators/neut.md](generators/neut.md#flattening-nf_flattenc).
 
 ## NEUT cross-section weight (`xsec_weight`) normalization
 
@@ -147,11 +147,11 @@ via `containers.apptainer_dispatch`.
 
 ## NEUT flux: log bins of per-bin integrals, divided out on NEUT's own grid (2026-07)
 
-2026-07 — moved to [generators/neut.md](generators/neut.md#flux-handling).
+2026-07 — moved to [generators/neut.md](generators/neut.md#log-spaced-per-bin-integrals-2026-07).
 
 ## NEUT paths are limited to 80 characters
 
-2026-07 — moved to [generators/neut.md](generators/neut.md#every-path-neut-sees-must-be-a-bare-filename).
+2026-07 — moved to [generators/neut.md](generators/neut.md#paths-must-be-bare-filenames).
 
 ## NEUT is not bit-reproducible from its seed
 
@@ -201,11 +201,16 @@ confirming the run itself is complete.
 
 ## The probe flavour is one table, validated at config time (2026-07)
 
-2026-07 — moved to [physics.md](physics.md#probes-and-targets).
+2026-07 — moved to [physics.md](physics.md#probes-and-targets). Kept here: the
+antineutrino sign comes from the PDG code because `translators/gibuu.py` used to
+negate `process_ID` when the flavour string ended in `bar`, and a name-based test
+silently produces a *neutrino* run for any probe spelled differently. Validating
+the name at config time means a typo fails at `validate-config` rather than as a
+`KeyError` inside a translator once Slurm tasks are already running.
 
 ## GENIE: a probe with no staged spline is an error, not a zero weight (2026-07)
 
-2026-07 — moved to [generators/genie.md](generators/genie.md#cross-section-weight).
+2026-07 — moved to [generators/genie.md](generators/genie.md#a-probe-with-no-spline-is-an-error-2026-07).
 
 ## A job label is a pure function of its own job
 
@@ -245,7 +250,7 @@ would generate identical events and inflate the sample's statistics.
 
 2026-10 — superseded: the final-state columns are hadronic observables, the
 condition this entry named for reversing it. See the FSI entry below and
-[generators/gibuu.md](generators/gibuu.md#final-state-interactions-are-switched-on).
+[generators/gibuu.md](generators/gibuu.md#fsi-transport).
 
 ## Plots are grouped by the configuration, not by the events
 
@@ -395,7 +400,7 @@ to take (`event::W()` is not stored), and the four-vector sum is ours anyway.
 Subtracting the binding energy ourselves: it depends on the local Fermi momentum
 at the vertex, which would mean reimplementing NuWro's density profile. Details
 and measurements are in
-[generators/nuwro.md](generators/nuwro.md#w_true_gev-is-nuwros-own-w-taken-from-the-outgoing-hadrons).
+[generators/nuwro.md](generators/nuwro.md#w_true_gev-is-nuwros-own-w).
 
 ## FSI is on in every generator, set by the framework or the GENIE tune (2026-10)
 
@@ -457,8 +462,7 @@ many parameter throws.
 
 **What was ruled out.** RES parameters (`pion_axial_mass`, `pion_C5A`): broken in
 the hybrid model (all RES weights NaN), and the hybrid model's generation does
-not depend on them either. Correlated priors are deferred (tracked in
-`.claude/TODOS.md`). Details and measurements are in
+not depend on them either. Correlated priors are deferred. Details and measurements are in
 [generators/nuwro.md](generators/nuwro.md#reweight-universes).
 
 ## Reweight universes for GENIE, and switch variations (2026-10)
@@ -500,7 +504,29 @@ with the same output contract.
 
 **What was ruled out.** `FormZone` and the AGKY dials, which are not
 σ-preserving and log FATAL errors or give single weights up to 5. NC and
-antineutrino variants, the z-expansion dials for AR23_20i, and tunes without
-hA2018 FSI are not ruled out, only unchecked, and are tracked in
-`.claude/TODOS.md`. Details and measurements are in
+antineutrino variants and the z-expansion dials for AR23_20i are not ruled out,
+only unchecked. Under a tune without
+hA2018 FSI the FSI dials cannot work at all, and validation refuses them (see
+the 2026-10 section on checking dials against the tune). Details and measurements are in
 [generators/genie.md](generators/genie.md#reweight-universes-and-variations).
+
+## GENIE dials checked against the tune at validation (2026-10)
+
+**The problem.** Which GENIE Reweight dials work depends on the tune's models.
+`nf_genie_reweight` caught a mismatch only after `gevgen` had finished, and some
+mismatches, such as `RPA_CCQE` under a model without RPA, gave weights of 1
+without any error.
+
+**The decision.** `validate-config` checks each dial against the models of the
+job's comprehensive model configuration (CMC). The models come from a
+checked-in snapshot of every CMC's `ModelConfiguration.xml`
+(`GENIE_TUNE_MODELS`), not from the payload at validation time. The CLI also
+runs where no GENIE payload is present (the Docker dev setup, where generators
+live in images), and a check that silently disappears there would let the same
+config pass in one place and fail in another. A test compares the snapshot with
+the payload wherever the payload is present. A dial that cannot work under the
+tune is an error. A dial whose engine model only differs from the one it was
+checked under (G18_10a) is a warning, logged once per dial and CMC. A large
+matrix such as `keystone_prod_v2.yml` would otherwise repeat it for every job.
+Rules and lists are in
+[generators/genie.md](generators/genie.md#which-dials-a-tune-allows).

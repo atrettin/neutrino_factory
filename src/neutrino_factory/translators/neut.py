@@ -31,7 +31,7 @@ DEFAULT_MDLQE = 2002
 DEFAULT_MAQE = 1.05
 
 # config_version -> the physics-model card keys it selects. Only "default"
-# exists for now (see .claude/TODOS.md); a new parameter set is a new entry
+# exists for now; a new parameter set is a new entry
 # here plus a new config_versions entry on NeutAdapter.
 CONFIG_VERSION_CARDS: dict[str, dict[str, Any]] = {
     "default": {"NEUT-MDLQE": DEFAULT_MDLQE, "NEUT-MAQE": DEFAULT_MAQE},

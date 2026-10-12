@@ -21,6 +21,48 @@ To add a new backend, keep changes isolated to four places:
 
 The rest of the orchestration layer should not need generator-specific branching.
 
+## Documenting the generator
+
+Add `docs/generators/<name>.md` with the same structure as the existing four, so
+a user finds the same thing in the same place in every generator doc. The
+sections above the divider are for users; the ones below are for maintainers and
+for anyone checking the evidence. Omit a section only if it would be empty, and
+then say so in one line (e.g. "no reweight support").
+
+```
+# <Generator>
+One-paragraph summary.
+
+## At a glance           table: code versions | config_version | sampling |
+                         raw σ → per nucleon | physics.current | FSI |
+                         run.log_level | reweight universes (cells link down)
+## Setup                 image build, data staging, "is it available?" check
+## Configuring a job     config_version, generator-specific knobs, what to avoid
+## Reading the output    what the common columns mean for this generator:
+                         interaction mapping, is_cc, w_true_gev source,
+                         resonant_primary, native_interaction_code
+## Model notes           generator physics needed to interpret results
+## Reweight universes    allowed parameters with default 1σ, constraints, coverage
+## Known limitations     user-visible failures and workarounds
+---
+*Reference: …*
+## Implementation        run stages, flux, cross-section weight, weak current,
+                         raw branches and units
+## Container build
+## Design notes          why it is built this way; ruled-out alternatives
+## Validation            one ### per claim: headline number + the sample used
+## Upstream issues       numbered, with workaround
+## Open questions        unexplained observations, if any
+```
+
+Two rules keep the docs from overlapping:
+
+- **Cross-generator conventions live in [physics.md](physics.md)**, which has one
+  table cell per generator linking into the generator docs. A generator doc
+  states only its own facts and links there for the convention.
+- **Measurements go under Validation**, not into the sentence that states the
+  fact. The user-facing sections may say "validated" and link down.
+
 ## Apptainer payload (cluster runtime)
 
 The composed cluster image `nf-base.sif` is assembled from per-generator *payload*
