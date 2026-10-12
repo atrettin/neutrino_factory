@@ -55,6 +55,13 @@ choices lives in [design_decisions.md](design_decisions.md).
   output → common HDF5)
 - `src/neutrino_factory/kinematics.py` — the derived kinematic columns, one
   shared formula for every generator (see [physics.md](physics.md))
+- `src/neutrino_factory/universes.py` — generator-agnostic reweight-universe
+  throws (seeded, linear/log) and switch variations, the per-generator parameter
+  tables (NuWro, GENIE), and the shared spec/weight files the adapters write and
+  the normalizers read; the weights themselves come from `nf_reweight` (see
+  [generators/nuwro.md](generators/nuwro.md#reweight-universes)) and
+  `nf_genie_reweight` (see
+  [generators/genie.md](generators/genie.md#reweight-universes-and-variations))
 - `src/neutrino_factory/plots.py` — plotting of common-output files. Split into
   axis-level helpers that draw onto a caller-owned axes (`plot_interactions`,
   `plot_energy`, `plot_xsec_by_interaction`), figure builders (`figure_xsec`,

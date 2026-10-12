@@ -179,6 +179,66 @@ the chunk's own identity, so inserting or removing a job never shifts another
 job's random stream, and there is no chunk count at which the layout collides.
 `build_task_manifest` still asserts that all seeds in a manifest are distinct.
 
+## Reweight universes and variations
+
+Optional per-job sections, `nuwro:` on a NuWro job and `genie:` on a GENIE job;
+either on any other job is a validation error. With them, the chunk gets an
+`events/universe_weights` dataset and a `universes` metadata entry, and on GENIE
+optionally `events/variation_weights` with a `variations` entry (see
+[physics.md](physics.md#reweight-universes)). Without them, nothing changes.
+
+```yaml
+nuwro:
+  universes:
+    seed: 20261005        # required; universe k is identical in every job using it
+    count: 100
+    parameters:
+      qel_minerva_ff_scale: {sigma: 1.0}
+      mecNorm: {sigma: 0.25, log: true, source: "<citation>"}
+```
+
+```yaml
+genie:
+  universes:              # same schema; GENIE Reweight dial names
+    seed: 20261005
+    count: 100
+    parameters:
+      MaCCQE: {sigma: 0.15, log: true}   # a scale on the tune's value: sigma is fractional
+      MFP_pi: {sigma: 0.2}
+  variations:             # switch-type knobs, one weight column each; no seed
+    RPA_CCQE: {}          # value defaults to 1, the alternative model
+    DecayAngMEC: {value: 0.5, source: "<citation>"}
+```
+
+- **`seed`** is required and independent of `run.seed`. Jobs whose correlations
+  are wanted must share it.
+- **`parameters`** gives only `sigma`, an optional `log` flag and a free-text
+  `source`. The central value is not configurable. On NuWro it is the
+  generation's own value, read from the output. On GENIE every dial is a scale on
+  the generation tune's own value, so its central is 1 and `sigma` is a
+  fractional error. Either way the central MC is the `config_version`'s; a
+  different central value is a different `config_version`.
+- **`variations`** (GENIE only) lists switch-type dials, which interpolate
+  between the tune's model (0) and an alternative (1). They have no Gaussian
+  prior, so each gets one deterministic weight column at `value` (in (0, 1],
+  default 1) with every other dial at nominal. They never enter the universes.
+- **Allowed names** are listed in
+  [generators/nuwro.md](generators/nuwro.md#supported-parameters) and
+  [generators/genie.md](generators/genie.md#supported-dials).
+  Known-broken parameters fail validation with the reason. A switch listed under
+  `universes`, or a Gaussian dial under `variations`, is refused. GENIE also
+  refuses dial combinations that select incompatible engine modes (`MaCCQE`
+  with `NormCCQE`; `MaCCRES`/`MvCCRES` with `NormCCRES`), and all four hA2018
+  fates of one hadron type at once.
+- **GENIE dials are checked against the job's tune.** Validation refuses a dial
+  that cannot work under the tune's models, for example an FSI dial under hN2018
+  or `MaCCQE` under a z-expansion form factor. It also refuses universes on a
+  code version without `nf_genie_reweight`. A dial whose model differs from the
+  one it was checked under only logs a warning, once per tune and dial. The
+  rules are in [generators/genie.md](generators/genie.md#which-dials-a-tune-allows).
+- **Not part of the job label.** Two jobs that differ only in their universes
+  need distinct `name:`s, otherwise they collide.
+
 ## Weak current: `physics.current`
 
 | Value | What is generated |
@@ -193,7 +253,7 @@ section reconstructed into `xsec_weight` is that of the selected current alone:
 
 | Generator | Native mechanism |
 |---|---|
-| GENIE | `--event-generator-list CC` / `NC`; omitted for `inclusive`. The cross-section spline sum used for `xsec_weight` is filtered on the matching `proc:Weak[CC]`/`proc:Weak[NC]` tag so it covers exactly the channels that could be generated. |
+| GENIE | `--event-generator-list CC` / `NC`; omitted for `inclusive`. The spline sum behind `xsec_weight` is filtered to the same current ([genie.md](generators/genie.md#weak-current)). |
 | NuWro | The `dyn_*` switches in `params.txt` (all ten `dyn_<channel>_<current>`, plus `dyn_hyp_cc`). |
 | NEUT | `NEUT-MODE -1` with a `NEUT-CRS`/`NEUT-CRSB` mask that zeroes the other current's channels; `inclusive` uses NEUT's normal `NEUT-MODE 0`. |
 | GiBUU | `process_ID` (CC=2, NC=3, negated for antineutrinos). A jobcard selects a single current, so `inclusive` runs **two passes** (see below). |

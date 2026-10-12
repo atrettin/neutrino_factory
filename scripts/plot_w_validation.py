@@ -107,7 +107,7 @@ GENIE_WCUT_BY_TUNE: dict[str, float] = {
 # NuWro's `res_dis_cut` is hardcoded here at its default, 1900 MeV -- read back
 # and confirmed against `e/par/par.res_dis_cut` in this run's own output, but not
 # read per run, because NuWro's per-event parameter branches do not survive into
-# the merged HDF5 (see .claude/TODOS.md). It is the one genuinely hard boundary:
+# the merged HDF5. It is the one genuinely hard boundary:
 # the two dynamics are disjoint across it.
 #
 # `res_dis_blending_start` (1600) is deliberately NOT drawn. It is not where the
@@ -173,7 +173,7 @@ def _plot_channels(data: dict) -> np.ndarray:
     common output keeps ``interaction`` exactly as each generator assigned it and
     records the mechanism separately in ``resonant_primary``, so this regrouping
     is reversible and costs no re-normalization. Whether it should become the
-    stored labelling is an open decision (.claude/TODOS.md).
+    stored labelling is an open decision.
     """
     channels = np.array(data["interactions"], dtype=object).copy()
     channels[data["resonant_primary"] == RESONANT_PRIMARY_NO] = "dis"

@@ -1,383 +1,453 @@
 # GiBUU
 
-Generator-specific domain knowledge. The conventions this is normalized onto are
-in [../physics.md](../physics.md); the run pipeline is in
+GiBUU is the odd one out: it is **phase-space sampled and weighted by cross
+section**, where the other three generators are rejection-sampled and
+unweighted. Almost every difference below follows from that. It is built from
+HEPForge release tarballs and run from a generated jobcard, with full transport
+(FSI) on. The conventions its output is normalized onto are in
+[../physics.md](../physics.md); the run pipeline is in
 [../architecture.md](../architecture.md).
+
+## At a glance
+
+| | |
+|---|---|
+| Code versions | `release2025` |
+| `config_version` | `default` only |
+| Sampling | phase-space sampled, cross-section weighted; weights can be **negative** |
+| Raw σ → per nucleon | already 1e-38 cm² per nucleon, no conversion |
+| `physics.current` | `process_ID`; `inclusive` is two concatenated passes ([Weak current](#weak-current)) |
+| FSI | transport for 150 × 0.2 fm = 30 fm |
+| `run.log_level` | ignored |
+| Reweight universes | none |
+
+## Setup
+
+The image downloads the GiBUU release, its input data and the RootTuple library
+from HEPForge (`wget --content-disposition`); there is no separate data staging
+step. The GitHub mirror is stale and not used.
+
+## Configuring a job
+
+- **Event counts are approximate.** GiBUU simulates whole-nucleus *ensembles*,
+  and the framework sizes their number from the requested event count assuming
+  ~A/2 events per ensemble. The number of events written differs from the
+  request (e.g. 821 for a 1000-event C12 request; 3435 for 4000 on Ar40).
+- **`inclusive` splits the event budget over two passes**, CC and NC. The CC:NC
+  split by *event count* is not the physical one; it lives in the weights
+  ([Reading the output](#weights-are-the-physics)).
+- **Every channel is on**: QE, Δ, higher resonances, DIS, 1π and 2π background,
+  2p2h QE. 2p2h Δ is unavailable in this release.
+- **Monoenergetic beams work** (a degenerate energy range switches GiBUU to its
+  fixed-energy mode).
+- **Transport costs about 4× the wall clock** of a run without it.
+
+## Reading the output
+
+### Weights are the physics
+
+Every event carries a per-nucleon cross-section weight, and the event *density*
+carries no normalization. In practice:
+
+- **Always split by weight, never by counting events.** An inclusive run is
+  roughly half CC by event count (45% on a 0.5–5 GeV numu C12 run) but 69% CC by
+  σ.
+- **Negative weights are physical** (interference terms) and must be summed as
+  they are.
+- **Weights are heavy-tailed.** A 100k-event run's quasi-elastic sample had an
+  effective size of 35 events. Check `analyze-kinematics`'s weight-efficiency
+  table and quote bootstrap intervals for channel statistics
+  ([physics.md](../physics.md#weighted-statistics-and-weight-efficiency)).
+
+### Interaction labels and `is_cc`
+
+`native_interaction_code` is `evType`, GiBUU's production label (`prod_id`). It
+describes the interaction at the vertex, not the observed final state. Its table
+is closed:
+
+| `evType` | GiBUU meaning | Common label |
+|---|---|---|
+| 1 | nucleon (QE) | `qel` |
+| 2–31 | non-strange baryon resonance (2 = Δ) | `res` |
+| 32 | π neutron-background | `dis` |
+| 33 | π proton-background | `dis` |
+| 34 | DIS | `dis` |
+| 35 | 2p2h QE | `mec` |
+| 36 | 2p2h Δ | `mec` (cannot occur in release2025) |
+| 37 | two-pion background | `dis` |
+
+GiBUU never emits `other` or `coh`; an `evType` outside 1–37 raises.
+`resonant_primary` follows `evType`: 1 for 2–31, 0 for 32–34 and 37.
+`RootTuple` has no per-event current branch, so `is_cc` comes from which pass
+(`cc/` or `nc/`) the event was read from.
+
+### The non-resonant background is `dis`
+
+`evType` 32/33/37 are GiBUU's non-resonant shallow-inelastic contribution,
+generated only for 1.2 < W < `REScutW` (default 2.0 GeV). They are labelled `dis`
+because that is what GENIE, the taxonomy's reference, would call the same event:
+GENIE's non-resonant background comes out of its DIS generator
+([physics.md](../physics.md#the-shallow-inelastic-region)). GiBUU's own NuHepMC
+exporter disagrees and labels them SIS, which this framework does not have.
+
+### `w_true_gev` and the struck nucleon
+
+`nuc_*` holds the struck nucleon for every event. With GiBUU's default
+`storeNucleon = 2` it is the **bound** nucleon, including its mean-field
+potential, so its invariant mass sits below `M_N` and `qel` `w_true_gev` sits
+~40 MeV below the nucleon mass
+([physics.md](../physics.md#how-each-generators-qe-vertex-closes)).
+
+### `w_true_gev` is blank for 2p2h
+
+GiBUU stores only one nucleon of a 2p2h pair, so the pair mass that defines
+`w_true_gev` cannot be formed. 2p2h events (`evType` 35/36) carry the
+placeholder; `w_gev` is unaffected.
+
+### The particle list is a snapshot
+
+The final-state columns are summarized from the perturbative particle list at the
+end of transport, which is a snapshot, not a list of escaped particles. Some
+nucleons are still inside the nucleus. The normalizer
+(`normalizers/gibuu._leave_nucleus`):
+
+- **drops nucleons with `E < m_N`**, GiBUU's own `neutrinoAnalysis/IsBound`
+  criterion (kinetic plus potential energy below zero): bound, never leaving;
+- **puts the remaining nucleons on shell** at their energy, which a static
+  potential conserves on the way out, so their kinetic energy is the asymptotic
+  `E − m_N` at GiBUU's single nucleon mass, 0.938 GeV.
+
+The list holds no leptons, only hadrons. Transport does not change the cross
+section or any kinematic column: those are fixed at the initial vertex
+([FSI transport](#fsi-transport)).
+
+## Model notes
+
+- **2p2h is QE-like only.** 2p2h Δ is not in release2025.
+- **`include2pi` matters for the total, not just a category.** With
+  `new_eN = .true.` (the default) GiBUU scales the 1π background *down* above
+  W = 1.267 GeV "to allow for 2pi contribution"; with 2π off that strength would
+  never be added back. The framework switches it on.
+- **The background and DIS do not double-count.** GiBUU damps the background with
+  `Sigmoid(W, REScutW, -0.05)` exactly where the PYTHIA/DIS piece turns on.
+- **`evType` is a vertex label.** FSI never changes it.
+
+## Reweight universes
+
+GiBUU has no reweight support in this framework.
+
+## Known limitations
+
+- **2p2h Δ is unavailable.** `include2p2hDelta` aborts release2025 via
+  `notInRelease("2p2p Delta")` (`initNeutrino.f90:689`); the feature is
+  unpublished. The mapping keeps `evType` 36 for a future release
+  ([upstream issue 1](#upstream-issues)).
+- **Weights are heavy-tailed**; effective sample sizes can be orders of
+  magnitude below the event count.
+- **Flux resolution is untested.** GiBUU gets 500 *equidistant* flux bins, the
+  same choice that produced a visible staircase below ~1 GeV in NEUT before it
+  moved to log bins. Whether GiBUU shows the same effect over a wide energy range
+  has not been checked. GiBUU requires equidistant bins, so log spacing is not an
+  option.
+- `config_version` is `"default"` only.
+- `run.log_level` is ignored.
+
+---
+
+*Reference: the sections below describe how the adapter works, why, and the
+evidence. Users can stop here.*
 
 Files: `generators/gibuu.py`, `translators/gibuu.py`, `normalizers/gibuu.py`,
 `setup/Dockerfile.gibuu`, `setup/apptainer/gibuu.def`.
 
-GiBUU is the odd one out in this framework: it is **phase-space sampled and
-weighted by cross section**, where the other three are rejection-sampled and
-unweighted. Almost every difference below follows from that.
+## Implementation
 
-## Versions and provenance
-
-Distributed as **HEPForge release tarballs**, not from git — the GitHub mirror is
-stale. `CODE_VERSIONS` carries `release2025`, with `git_ref` holding the release
-tag so the catalog treats it as buildable. The build arg strips the prefix
-(`release2025` → `GIBUU_RELEASE=2025`). Downloads use
-`wget --content-disposition`.
-
-`config_version` is `"default"` only.
-
-## How it is run
+### Run stages
 
 **GiBUU reads its jobcard from stdin** (`GiBUU.x < job.job`) and writes its ROOT
 output into the **current working directory** under a fixed name,
-`EventOutput.Pert.<run>.root`.
-
-That fixed output name forces the layout: **one subdirectory per pass**, created
-uniformly whether the run has one pass or two, so the normalizer has a single
-layout to read. A second pass sharing a directory would overwrite the first. Each
-pass gets its own copy of the flux table, since the jobcard's `FileNameFlux` is
-CWD-relative. The passes are chained with `set -e` so a failing pass fails the
-task rather than being masked by the exit status of the last one.
+`EventOutput.Pert.<run>.root`. The task therefore has **one subdirectory per
+pass**, created uniformly whether the run has one pass or two, each with its own
+copy of the flux table (the jobcard's `FileNameFlux` is CWD-relative). The passes
+are chained with `set -e`.
 
 `path_to_input` is written as the placeholder `@NF_GIBUU_INPUT@` and resolved by
-the adapter, because the buuinput location is runtime- and version-dependent:
-`/opt/GiBUU/buuinput` under Docker, but
-`/opt/nf/generators/gibuu/<code_version>/GiBUU/buuinput` in the
-version-namespaced Apptainer payload.
+the adapter: `/opt/GiBUU/buuinput` under Docker,
+`/opt/nf/generators/gibuu/<code_version>/GiBUU/buuinput` in the Apptainer
+payload.
 
-**Native binary first.** The branch order is load-bearing, as for every adapter.
+Like every adapter, `build_run_command` runs a binary found on `$PATH` before considering a container, since a cluster task already runs inside the Apptainer image, which cannot nest ([../apptainer_image.md](../apptainer_image.md)).
 
-### Jobcard settings that matter
+`CODE_VERSIONS` carries `release2025`, with `git_ref` holding the release tag so
+the catalog treats it as buildable. The build arg strips the prefix
+(`release2025` → `GIBUU_RELEASE=2025`).
+
+### Jobcard
 
 Fortran namelist, rendered by `_render_jobcard`:
 
 | Key | Value | Why |
 |---|---|---|
-| `version` | the release year | GiBUU **refuses to run** unless the jobcard version matches the code release |
+| `version` | the release year | GiBUU **refuses to run** unless it matches the code release |
 | `eventtype` | 5 | neutrino induced |
 | `EventFormat` | 4 | RootTuple ROOT output |
-| `numTimeSteps` / `delta_T` | 150 / 0.2 fm | FSI transport out to 30 fm, as in the shipped neutrino cards — see below |
+| `numTimeSteps` / `delta_T` | 150 / 0.2 fm | FSI transport out to 30 fm |
 | `densitySwitch` / `pauliSwitch` | 2 / 2 | static density and Pauli blocking (fixed target) |
-| `process_ID` | ±2 (CC) / ±3 (NC) | negative for antineutrinos, from the **PDG sign**, not the name |
+| `process_ID` | ±2 (CC) / ±3 (NC) | negative for antineutrinos, from the PDG sign |
 | `flavor_ID` | 1/2/3 | e/μ/τ, independent of ν vs ν̄ |
+| `numEnsembles` | from the event count | see below |
+| `includeQE`, `includeDELTA`, `includeRES`, `includeDIS`, `include1pi`, `include2pi`, `include2p2hQE` | all `.true.` | all but `includeQE` default to `.false.` |
 
-### Final-state interactions are switched on
+**Ensemble sizing.** `numEnsembles = ceil(events / (A/2 · n_passes))`, from the
+empirical yield of ~A/2 events per ensemble (~6 on carbon). GiBUU aborts for
+`numEnsembles < 100` unless the value is negative (its documented "enforce
+anyway" override), so small counts are negated.
 
-The jobcard runs FSI transport for `numTimeSteps × delta_T = 150 × 0.2 fm =
-30 fm`, the values the shipped neutrino jobcards use (e.g.
-`testRun/jobCards/005_Neutrino_SBND_nu.job`, whose comment asks that the
-distance "significantly exceed the radius of the target nucleus").
-`inputGeneral.f90:514` sets `time_max = numTimeSteps * delta_T`, and
-`GiBUU.f90`'s `PhaseSpaceEvolution` loop propagates, rescatters and absorbs the
-hadrons until then.
+### FSI transport
 
-Transport is what makes the final-state columns post-FSI: `EventOutput`'s
-`write_pert` writes the perturbative particle list as it stands at the end of
-the evolution, which is the `barcode`/`E`/`Px`/`Py`/`Pz` list the normalizer
-summarizes (see [physics.md](../physics.md#final-state-content)). The jobcards
-used to set `numTimeSteps = 0` — GiBUU's documented setting for *inclusive*
-cross sections, correct while the common output recorded no hadronic
-observable — and with that setting the list is the primary-vertex one.
+The jobcard runs transport for `numTimeSteps × delta_T = 30 fm`, the values the
+shipped neutrino jobcards use (e.g. `testRun/jobCards/005_Neutrino_SBND_nu.job`,
+which asks that the distance "significantly exceed the radius of the target
+nucleus"). `inputGeneral.f90:514` sets `time_max = numTimeSteps * delta_T`, and
+`PhaseSpaceEvolution` in `GiBUU.f90` propagates, rescatters and absorbs hadrons
+until then. `EventOutput`'s `write_pert` then writes the perturbative list as it
+stands, which is what the normalizer summarizes.
 
-**Transport leaves the cross section and the vertex columns alone**, because
-they are fixed at the initial vertex:
+**Transport leaves the cross section and the vertex columns alone**:
 
-- `weight`, `evType`, `lepIn_*`, `lepOut_*` and `nuc_*` are all written from
-  `neutrinoProdInfo` — a module whose own header says it "stores information
-  about the initial neutrino event", written only from `initNeutrino.f90` and
-  never updated afterwards.
-- Transport never recomputes a weight. Every `%perweight =` assignment outside
-  `init/` (in `collisionTerm.f90`, `master_1Body.f90`) *inherits* the parent's
-  weight into the final state.
-- The outgoing lepton does not interact strongly, so every kinematic column the
-  common output derives — Q², x, y, the lepton angles, both W columns — is an
-  initial-vertex quantity.
+- `weight`, `evType`, `lepIn_*`, `lepOut_*` and `nuc_*` are written from
+  `neutrinoProdInfo`, which "stores information about the initial neutrino
+  event", is written only from `initNeutrino.f90` and never updated.
+- Transport never recomputes a weight: every `%perweight =` assignment outside
+  `init/` (`collisionTerm.f90`, `master_1Body.f90`) inherits the parent's weight.
+- The outgoing lepton does not interact strongly, so every derived kinematic
+  column is an initial-vertex quantity.
 
-**Verified empirically** (release2025, local Docker, 1000-event C12 CC run,
-E^-2 flux over 0.5–5 GeV, same jobcard and same seed run both ways):
+The one thing transport *could* change is the event count: `write_pert` skips an
+event with no perturbative particle left (`if (NUP == 0) cycle`). No event has
+been lost this way ([Validation](#transport)).
 
-| | `numTimeSteps = 0` | `numTimeSteps = 150` |
-|---|---|---|
-| Time steps executed | 0 | 150 (out to 30 fm) |
-| Events written | 821 | 821 |
-| `sum(weight)` | 0.982030 | 0.982030 |
-| `weight`, `evType`, `lepIn_*`, `lepOut_*` | — | **bit-identical** |
-| Hadrons per event | 1.867 | 3.077 |
-
-FSI raised the hadron multiplicity by 65% and changed the inclusive cross
-section by exactly nothing. `evType` is a *production* label (GiBUU's
-`prod_id`): it describes the interaction at the vertex, not the observed final
-state.
-
-**The event count is the one thing transport could change.** `write_pert`
-skips an event with no perturbative particle left (`if (NUP == 0) cycle`; its
-header notes that such events "are not included in the list and thus produce no
-output"), which would drop that event's weight from the cross-section sum. Neither
-the C12 run above (821 both ways) nor a heavier target lost any: a 4000-ensemble
-numu CC Ar40 run (2026-10-05, same seed both ways) wrote 3435 events with and
-without transport, with `weight`, `evType` and `lepOut_E` bit-identical and
-`sum(weight)` = 1.131102 both times. The list holds no leptons at all, only the
-hadrons.
-
-**The list is a snapshot, so it holds bound nucleons.** In that Ar40 run, 25% of
-the nucleons at the end of transport had `E < m_N`. They were still inside the
-nucleus, and so were 12% more that were unbound but had not yet left the
-potential, which shows in their off-shell four-vector mass. The normalizer
-drops the first group and puts the second on shell, as GiBUU's own
-`neutrinoAnalysis/IsBound` does — see
-[physics.md](../physics.md#the-particle-list-is-post-fsi-and-fsi-is-on-in-every-generator).
-
-**Transport costs about 4× the wall clock**: 65.6 s against 15.9 s for that
-Ar40 run (Apple Silicon, Docker under Rosetta).
-
-### Ensemble sizing
-
-Each GiBUU ensemble simulates the whole nucleus, but only a fraction of its A
-nucleons yields an accepted interaction, so the perturbative event yield is
-empirically **~A/2 events per ensemble** (measured ~6 events/ensemble on carbon).
-`numEnsembles` is sized to land near the requested event count.
-
-GiBUU warns and **aborts for `numEnsembles < 100`** unless the value is given
-negative — its documented "enforce anyway" override for small runs — so small
-counts are negated.
-
-An inclusive run splits its ensembles evenly over the two passes, so the
-requested event count is the budget for the run as a whole rather than per
-current. The resulting CC:NC split is **not 50:50**: each pass yields whatever
-its own cross section produces from half the ensembles.
-
-### `numEnsembles` versus `num_runs_SameEnergy`
-
-Both scale statistics; **only the first is normalized out for you**, which is why
-`num_runs` is the divisor in the weight and why chunk size is scaled with
-`numEnsembles`. Read from the release2025 source: `initNeutrino.f90:1292` sets
-`perweight = totalWeight/float(numtry)`, where `numtry` counts nucleon
-test-particles over *all* ensembles (`realParticles` is indexed
-`(ensemble, particle)`) — so doubling `numEnsembles` halves each weight and
-leaves the sum invariant. `num_runs_sameEnergy` never enters `perweight`; GiBUU
-divides by it in its own analysis (`neutrinoAnalysis.f90:3515`) and hands both
-counts to the consumer as ROOT branches (`EventOutput.f90:1132`).
-
-Confirmed by running one jobcard three ways: doubling ensembles gave 2.04× the
-events at 0.86× the weight sum; doubling runs gave 2.02× the events at 2.17× the
-weight sum (the spread is GiBUU's heavy tails).
-
-Because `numEnsembles` is auto-normalized, a GiBUU chunk estimates σ regardless
-of its size — the property that makes `num_runs`, not the event count, the right
-`xsec_norm_count` for merging.
-
-`NUM_RUNS_SAME_ENERGY` is 1 and lives in one place so the jobcard and the weight
-normalization cannot drift. Raising it is safe **only** because the normalizer
-reads *every* `EventOutput.Pert.*.root` part; reading the first while dividing by
-N would silently report σ/N (measured: 4.07 instead of 8.13 on a real 2-run job).
-The normalizer fails loudly if it finds fewer parts than `num_runs`.
-
-## Flux handling
+### Flux
 
 `nuExp = 99` (user flux) + `nuXsectionMode = 16` (EXP_dSigmaMC) reads an
 equidistant `energy[GeV] flux` table from `FileNameFlux`. `FLUX_NBINS = 500`;
-GiBUU allocates the flux arrays dynamically.
+GiBUU allocates the arrays dynamically.
 
-Two details:
-
-- **Energies are equidistant bin centers.** GiBUU's `read_fluxfile` requires
+- **Energies are equidistant bin centres.** GiBUU's `read_fluxfile` requires
   equidistant bins and takes the energy as the middle of the bin. Leading `#`
-  comment lines are allowed. The flux column is a relative weight, normalized
-  internally by GiBUU.
-- **The leading `./` in `./flux.dat` matters.** GiBUU's `ExpandPath` uses a
-  filename verbatim only if it contains a `/`; without it the name would be
-  expanded against GiBUU's input tree. The path is deliberately CWD-relative,
-  since every pathway runs GiBUU with the work directory as CWD — an absolute
-  `/work` path would be valid only under Docker.
+  lines are allowed. The flux column is a relative weight, normalized internally.
+- **The path is `./flux.dat`.** GiBUU's `ExpandPath` uses a filename verbatim
+  only if it contains a `/`.
 
 A degenerate energy range falls back to fixed-energy `nuExp = 0` +
 `nuXsectionMode = 6` (dSigmaMC) with `enu` in `&nl_SigmaMC`.
 
-## Cross-section weight
+### Cross-section weight
 
-Every generated interaction carries a perturbative weight (the `weight` branch of
-`RootTuple`). Two properties, established from GiBUU's own source
-(`code/analysis/neutrinoAnalysis.f90` header) and cross-checked against the
-production KM3NeT `km3buu` wrapper, which reads the identical branch:
-
-- **Units are already 1e-38 cm²** — exactly the common convention — so no
-  `XSEC_SCALE` factor is applied.
-- **Already per nucleon**: km3buu multiplies by the mass number `A` to recover
-  the whole-nucleus cross section, confirming the raw value is per nucleon. No
-  division by `A`.
-
-Within a single run the sum over all events reproduces the flux-folded total
-cross section. Because a spectrum run's weights are therefore already
-flux-folded, recovering the differential σ(E) still requires dividing out the
-unit-normalized flux density:
+The `weight` branch of `RootTuple` is a perturbative weight in **1e-38 cm² per
+nucleon**, the common convention, so no scale factor or `÷ A` is applied
+(`code/analysis/neutrinoAnalysis.f90` header; the KM3NeT `km3buu` wrapper
+multiplies the same branch by A to get the whole-nucleus value). Within one run
+the sum over all events is the flux-folded total cross section, so the
+differential σ(E) still needs the unit-normalized flux density divided out:
 
 ```
 xsec_weight_i = raw_weight_i / (num_runs · phi_hat(E_i))
 ```
 
-What differs from NuWro is the *constant* (`num_runs`, no `1e38`), not the
-presence of the flux division.
+Monoenergetic runs skip the flux division: `raw / num_runs`.
 
-**Negative weights (interference terms) are passed through unchanged** — they are
-physical and must be summed as-is. This is why the weight-efficiency statistic in
-`analyze-kinematics` is computed on `|w|`.
+`xsec_norm_count` is **`num_runs`, not the event count**. GiBUU normalizes
+`numEnsembles` out itself: `initNeutrino.f90:1292` sets
+`perweight = totalWeight/float(numtry)`, where `numtry` counts nucleon
+test-particles over *all* ensembles, so doubling `numEnsembles` halves each
+weight and leaves the sum invariant. `num_runs_sameEnergy` never enters
+`perweight`; GiBUU divides by it in its own analysis
+(`neutrinoAnalysis.f90:3515`) and writes both counts as ROOT branches
+(`EventOutput.f90:1132`).
 
-`xsec_norm_count` returns **`num_runs`, not the event count** — the one generator
-where these differ. Using the event count would weight chunks by how many
-interactions GiBUU happened to produce, which itself varies with the cross
-section.
+`NUM_RUNS_SAME_ENERGY` is 1 and lives in one place, so the jobcard and the weight
+normalization cannot drift. The normalizer reads *every*
+`EventOutput.Pert.*.root` part and fails loudly if it finds fewer than
+`num_runs`.
 
-Monoenergetic runs (fixed-energy mode 6) skip the flux division entirely:
-`raw / num_runs`, since there is no flux to divide out and the differential
-`/bin_width` convention is degenerate at a single energy.
+### Weak current
 
-**Heavy tails.** GiBUU's weight is extremely concentrated in some channels: in
-one 100k-event run the quasi-elastic sample had Kish `n_eff = 35` out of 14579
-events, with the top 1% of events carrying 86% of the weight. Quote bootstrap
-intervals rather than point estimates for GiBUU channel statistics, and use
-`analyze-kinematics`'s efficiency table before trusting a number.
+A jobcard selects exactly one `process_ID`, so `inclusive` runs **two passes**, in
+`cc/` and `nc/`, with different seeds (`PASS_SEED_OFFSET = 1_000_000` on the NC
+pass), whose events are concatenated. The ensembles are split evenly over the
+passes. This is exact because GiBUU is cross-section weighted: each pass's
+weights already sum to that current's cross section, so the union sums to
+σ_CC + σ_NC with no reweighting.
 
-## Weak current: `inclusive` is two passes
+### RootTuple branches
 
-A GiBUU jobcard selects exactly one `process_ID`, so there is no inclusive run.
-`inclusive` is generated as **two passes**, one per current, in `cc/` and `nc/`
-subdirectories with different seeds (`PASS_SEED_OFFSET = 1_000_000` on the NC
-pass), whose events are concatenated.
-
-That is **exact rather than an approximation** because GiBUU is
-cross-section-weighted: each event carries an absolute per-nucleon weight and
-each pass's weights already sum to that current's cross section, so the union
-sums to σ_CC + σ_NC with no reweighting. A rejection-sampled generator could not
-be combined this way.
-
-`RootTuple` has **no per-event current branch**, so `is_cc` comes from which pass
-directory the event was read from.
-
-The seed offset is safe because task seeds are hashed into `[1, SEED_MODULUS]`
-rather than laid out arithmetically, so it can only collide by the same
-negligible hash coincidence `build_task_manifest` already checks for, and the sum
-stays inside the int32 range Fortran seeds need.
-
-## Output and interaction taxonomy
-
-Tree `RootTuple`, one file per run per pass. Branches: `lepIn_E` (the incoming
-neutrino energy, **GeV**), `weight`, `evType`, `lepIn_P{x,y,z}`,
-`lepOut_{E,Px,Py,Pz}` and the struck nucleon `nuc_{E,Px,Py,Pz}` (also GeV; the
-companion `nuc_charge` is a charge, not a PDG code, and is not read).
-Concatenating across runs is correct — they are parts of one estimate. A missing
+Tree `RootTuple`, one file per run per pass. Branches read: `lepIn_E` (GeV),
+`weight`, `evType`, `lepIn_P{x,y,z}`, `lepOut_{E,Px,Py,Pz}`,
+`nuc_{E,Px,Py,Pz}` (GeV; `nuc_charge` is a charge, not a PDG code, and is not
+read), and the perturbative particle list (`barcode`/`E`/`Px`/`Py`/`Pz`).
+Concatenating across runs is correct; they are parts of one estimate. A missing
 pass or run file is a hard error, since it would silently understate σ.
 
-The `nuc_*` branches are written inside the same `NeutrinoProdInfo_Get` block as
-`weight`/`evType`/`lepIn_*` (`code/inputOutput/EventOutput.f90`), so they are
-filled for every event that reaches the file, and GiBUU has no coherent channel
-to blank. What they contain is governed by the jobcard's `storeNucleon`, which
-defaults to **2 = bound**:
-the nucleon including its mean-field potential, so its invariant mass sits below
-`M_N`. GiBUU's own comment notes that a real check of energy and momentum
-conservation is only possible with that setting. The framework does not override
-it.
+The `nuc_*` branches are written in the same `NeutrinoProdInfo_Get` block as
+`weight`/`evType` (`code/inputOutput/EventOutput.f90`), so they are filled for
+every event. `storeNucleon` (default 2 = bound) is not overridden; GiBUU's own
+comment notes that a real check of four-momentum conservation is only possible
+with that setting.
 
-**Only one nucleon is stored, which makes `w_true_gev` uncomputable for 2p2h.**
-`mom_nuc` in `tneutrinoProdInfo` is a single `real, dimension(0:3)`, and
-`doStoreNeutrinoInfo` (`initNeutrino.f90`) passes it `eN%nucleon` — never
-`eN%nucleon2`. That second nucleon is not incidental to the channel: GiBUU's own
-2p2h cross section is `abs4Sq(eN%boson%mom + eN%nucleon%mom + eN%nucleon2%mom)`
-(`lepton2p2h.f90`), i.e. the pair's invariant mass. But `nucleon2` appears
-nowhere in the output path — its only other use is `ResidueAddPH` for the nuclear
-residue — so the pair cannot be reconstructed from a RootTuple file.
+For 2p2h, `mom_nuc` in `tneutrinoProdInfo` is a single `real, dimension(0:3)`,
+and `doStoreNeutrinoInfo` (`initNeutrino.f90`) passes it `eN%nucleon`, never
+`eN%nucleon2`, although GiBUU's own 2p2h cross section is
+`abs4Sq(eN%boson%mom + eN%nucleon%mom + eN%nucleon2%mom)` (`lepton2p2h.f90`).
+`nucleon2` appears nowhere in the output path; its only other use is
+`ResidueAddPH` for the nuclear residue. The normalizer therefore blanks
+`w_true_gev` for `evType` 35 and 36.
 
-The normalizer therefore blanks `w_true_gev` for `evType` 35 and 36 rather than
-computing it from the single stored nucleon. That would have produced a
-one-nucleon invariant mass under a column defined as the struck *system*: on a
-20k-event numu CC C12 run it gave a median of 0.924 GeV starting near `M_N`,
-where GENIE, NEUT and NuWro give 2.18–2.25 GeV with a floor at 2 `M_N`. `w_gev`
-is unaffected, since it uses no nucleon at all.
-
-`evType` is GiBUU's `prod_id` (`code/inputOutput/EventOutput.f90:1138`), whose
-authoritative and **closed** table is
-`code/init/neutrino/initNeutrino.f90:296-307` (`max_finalstate_ID = 37`):
-
-| `evType` | GiBUU meaning | Common label |
-|---|---|---|
-| 1 | nucleon (QE) | `qel` |
-| 2–31 | non-strange baryon resonance (2 = Delta) | `res` |
-| 32 | π neutron-background | `dis` |
-| 33 | π proton-background | `dis` |
-| 34 | DIS | `dis` |
-| 35 | 2p2h QE | `mec` |
-| 36 | 2p2h Delta | `mec` (unreachable, see below) |
-| 37 | two-pion background | `dis` |
-
-An `evType` outside 1–37 raises `ValueError` naming the code rather than
-producing `other`. Since the code space is closed, an out-of-range value means
-our reading of the output is wrong, not that GiBUU invented a channel — and the
-catch-all is what hid the bug below. GiBUU consequently never emits `other`, nor
-`coh`.
-
-### Why the non-resonant background is `dis`
-
-*Moved here from `design_decisions.md` (2026-07).*
-
-A high-statistics run put ~10% of its events (31 885 of 313 389) into the `other`
-bucket — more than the entire `res` category. The mapping covered only
-1 → `qel`, 2–31 → `res`, 34 → `dis`, 35/36 → `mec`; the missing 32/33 accounted
-for the whole bucket.
-
-**They must be counted.** 32/33/37 are GiBUU's *non-resonant* shallow-inelastic
-contribution, generated only for 1.2 < W < `REScutW` (default 2.0 GeV) either
-from a MAID-like amplitude with the resonance contributions subtracted or from
-the Bosted–Christy background fit (`neutrinoXsection.f90:564-700`). They do not
-double-count anything: GiBUU damps them with `Sigmoid(W, REScutW, -0.05)` exactly
-where the PYTHIA/DIS piece turns on (`case (chDIS)` returns unless
-`W > REScutW - 0.1`). Dropping them would understate the inclusive cross section.
-
-**They are labelled `dis` because the taxonomy is pinned to GENIE** — an event
-gets the category it would have had if GENIE had produced it. GENIE has no
-shallow-inelastic category: its non-resonant background is produced by the DIS
-generator (`DISInteractionListGenerator.cxx:77` creates `kScDeepInelastic` for
-all W) with the KNO multiplicity tune applied below `Wcut`
-(`KNOTunedQPMDISPXSec.cxx:195-237`), and `gNtpConv.cxx:646-649` fills the gst
-`dis` flag straight from `ProcInfo().IsDeepInelastic()`. `res` would be wrong:
-GENIE's `res` is purely Rein–Sehgal resonant, and GiBUU's background has the
-resonances subtracted.
-
-**Caveat.** GiBUU disagrees with this grouping internally: its own NuHepMC
-exporter (`EventOutput.f90:1447-1499`) assigns 32/33 → `SIS_ID` 500/501 and
-37 → 502, distinct from `DIS_ID` 600. The coarser merge is accepted because
-cross-generator comparability with GENIE/NEUT/NuWro — none of which expose a
-shallow category either — is worth more than a distinction only one generator can
-make. A future `sis` label would have to be introduced for all four generators at
-once, and for GENIE it is not recoverable from the gst output.
-
-### Every channel is enabled
-
-All GiBUU channel switches except `includeQE` default to `.false.`, so the
-jobcard sets them all explicitly: `includeQE`, `includeDELTA`, `includeRES`,
-`includeDIS`, `include1pi`, `include2pi`, `include2p2hQE`.
-
-**`include2pi` is easy to forget and biases the total low** rather than merely
-omitting a category: with `new_eN = .true.` (the default,
-`neutrinoParms.f90:260`) GiBUU scales the 1π background *down* above W = 1.267
-"to allow for 2pi contribution" (`neutrinoXsection.f90:652-656`), and with 2π off
-that strength is never added back. Its events land in `dis` with the rest of the
-non-resonant background.
+`evType` is `prod_id` (`EventOutput.f90:1138`), whose closed table is
+`code/init/neutrino/initNeutrino.f90:296-307` (`max_finalstate_ID = 37`).
 
 ## Container build
 
 `setup/apptainer/gibuu.def` mirrors `setup/Dockerfile.gibuu` (see
 [../containers.md](../containers.md)). Non-obvious points:
 
-- RootTuple needs **C++17 pinned** — the same fix km3buu applies.
+- RootTuple needs **C++17 pinned**, the same fix km3buu applies.
 - RootTuple is built **without `-j`**: the nested `cmake --build` loses the make
   jobserver file descriptor.
-- ROOT (from the `rootproject/root` base) is folded into the payload, so
-  `nf-base.sif` carries GiBUU's own copy.
+- ROOT comes from the `rootproject/root` base image and is copied into the
+  GiBUU payload, so `nf-base.sif` carries a separate ROOT for GiBUU.
 
-## Known limitations
+## Design notes
 
-- **2p2h Delta is unavailable.** `include2p2hDelta` aborts release2025 via
-  `notInRelease("2p2p Delta")` (`initNeutrino.f90:689`) because the feature is
-  unpublished. MEC is therefore 2p2h-QE only and `evType` 36 cannot occur in this
-  release — the mapping keeps it for a future one. Tracked in `.claude/TODOS.md`.
-- Weights are heavy-tailed; effective sample sizes can be orders of magnitude
-  below the event count. See the weight-efficiency note above.
-- `config_version` is `"default"` only.
-- `run.log_level` is ignored — only the GENIE adapter maps it.
-- **A GiBUU abort on a bad jobcard key currently surfaces as a confusing
-  `FileNotFoundError`** for a missing task JSON, because `local.run_task` does
-  not check the generator's exit status. Tracked in `.claude/TODOS.md`.
+### Weighting determines everything
+
+Because the raw weight *is* a cross section, three things follow that would be
+wrong for the other generators: `D` is the run count, not the event count;
+`inclusive` can be two passes concatenated; and statistics must be weighted.
+
+### `num_runs`, not the event count, as the merge denominator
+
+Using the event count would weight chunks by how many interactions GiBUU happened
+to produce, which itself varies with the cross section. Because `numEnsembles`
+is normalized out, a chunk estimates σ regardless of size. Raising
+`NUM_RUNS_SAME_ENERGY` is safe only because every output part is read; reading
+the first while dividing by N would silently report σ/N. Prefer `numEnsembles`
+for more statistics anyway.
+
+### One subdirectory per pass
+
+The fixed output name means a second pass sharing a directory would overwrite the
+first. The subdirectories are created even for one pass so the normalizer has a
+single layout. `set -e` makes a failing pass fail the task rather than be masked
+by the last pass's exit status.
+
+### Seed offsets cannot collide
+
+Task seeds are hashed into `[1, SEED_MODULUS]` rather than laid out
+arithmetically, so the NC pass offset can only collide by the same negligible
+hash coincidence `build_task_manifest` already checks for, and the sum stays
+inside the int32 range Fortran seeds need.
+
+### Path handling
+
+`./flux.dat` is CWD-relative because every pathway runs GiBUU with the work
+directory as CWD; an absolute `/work` path would be valid only under Docker.
+`@NF_GIBUU_INPUT@` is resolved by the adapter because the buuinput location is
+runtime- and version-dependent.
+
+### A closed `evType` table
+
+An out-of-range `evType` means our reading of the output is wrong, not that GiBUU
+invented a channel, so it raises. A catch-all `other` is what hid the missing
+32/33 mapping (see below).
+
+### The non-resonant background is counted, as `dis` (2026-07)
+
+A high-statistics run once put ~10% of its events into `other`, more than all of
+`res`: the mapping covered only 1, 2–31, 34 and 35/36. These events must be
+counted, since dropping them would understate the inclusive cross section
+(`neutrinoXsection.f90:564-700`: a MAID-like amplitude with resonances
+subtracted, or the Bosted–Christy background fit). `res` would be wrong, because
+GENIE's `res` is purely resonant and GiBUU's background has the resonances
+subtracted. GENIE fills the gst `dis` flag from `ProcInfo().IsDeepInelastic()`
+(`gNtpConv.cxx:646-649`), and its DIS generator creates `kScDeepInelastic` for
+all W (`DISInteractionListGenerator.cxx:77`) with the KNO tune applied below
+`Wcut` (`KNOTunedQPMDISPXSec.cxx:195-237`). GiBUU's NuHepMC exporter
+(`EventOutput.f90:1447-1499`) assigns 32/33 → `SIS_ID` 500/501 and 37 → 502,
+distinct from `DIS_ID` 600; the coarser merge is accepted for cross-generator
+comparability.
+
+### FSI on (2026-10)
+
+The jobcards used to set `numTimeSteps = 0`, GiBUU's documented setting for
+*inclusive* cross sections, correct while the common output recorded no hadronic
+observable. With it the list is the primary-vertex one. The final-state columns
+need the post-transport list. GiBUU can cut bound nucleons itself
+(`applyCuts = 2` in `&neutrinoAnalysis`), but only for `FinalEvents.dat`, not the
+RootTuple, hence `_leave_nucleus`.
+
+## Validation
+
+### Transport
+
+**C12** (release2025, local Docker, 1000 requested events, E^-2 over 0.5–5 GeV,
+same seed with and without transport): 821 events both ways, `sum(weight)`
+0.982030 both ways, `weight`/`evType`/`lepIn_*`/`lepOut_*` bit-identical, hadrons
+per event 1.867 → 3.077.
+
+**Ar40** (2026-10-05, 4000 requested events, same seed both ways): 3435 events
+both ways, `weight`, `evType` and `lepOut_E` bit-identical, `sum(weight)` =
+1.131102. Wall clock 65.6 s against 15.9 s (Apple Silicon, Docker under Rosetta).
+
+> **Unverified:** these notes and physics.md quote 1.867 and 1.87 hadrons per event
+> before transport, on C12 and Ar40 respectively. The near-identical baseline on
+> two different nuclei is suspicious and should be rechecked.
+
+### Bound nucleons
+
+In the Ar40 run, 25% of the listed nucleons had `E < m_N` and sat inside the
+nucleus (median radius 3.7 fm); another 12% were unbound but still inside, with
+four-vector mass ~0.90 GeV. Escaped nucleons came out exactly on shell at
+0.938 GeV. Without the bound-nucleon step the QE sample would have read 1.37
+protons and 0.63 neutrons per event (instead of 1.03 and 0.45), and no QE event
+would have lost its nucleon.
+
+### Ensembles and runs
+
+Running one jobcard three ways: doubling `numEnsembles` gave 2.04× the events at
+0.86× the weight sum; doubling `num_runs_SameEnergy` gave 2.02× the events at
+2.17× the weight sum. Reading only the first part of a real 2-run job while
+dividing by 2 reported 4.07 instead of 8.13.
+
+### 2p2h `w_true_gev` from one nucleon
+
+On a 20k-event numu CC C12 run, computing `w_true_gev` from the single stored
+nucleon gave a median of 0.924 GeV starting near `M_N`, where GENIE, NEUT and
+NuWro give 2.18–2.25 GeV with a floor at 2 `M_N`.
+
+### Heavy tails
+
+In one 100k-event run the quasi-elastic sample had Kish `n_eff = 35` out of 14579
+events, with the top 1% of events carrying 86% of the weight.
+
+### Background mapping
+
+The high-statistics run that exposed the missing 32/33 mapping put 31 885 of
+313 389 events into `other`.
+
+### Per-nucleon normalization
+
+From GiBUU's source and the km3buu cross-check only (see
+[Cross-section weight](#cross-section-weight)).
+
+> **Unverified:** physics.md used to say this was checked by rerunning the same
+> flux on several nuclei; no such GiBUU measurement is recorded.
+
+## Upstream issues
+
+Not reported.
+
+1. **2p2h Δ is not in the release**: `include2p2hDelta` aborts in
+   `initNeutrino.f90:689`.
+2. **The second 2p2h nucleon is not written** to the RootTuple, so the pair's
+   invariant mass, which GiBUU's own cross section uses, cannot be reconstructed.

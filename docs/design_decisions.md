@@ -123,7 +123,7 @@ via `containers.apptainer_dispatch`.
 
 ## GENIE flux: a histogram we write, divided out from the one GENIE saved (2026-07)
 
-2026-07 — moved to [generators/genie.md](generators/genie.md#flux-handling).
+2026-07 — moved to [generators/genie.md](generators/genie.md#the-flux-histogram-is-written-by-hand-2026-07).
 
 ## GiBUU cross-section weight (`xsec_weight`) normalization
 
@@ -131,15 +131,15 @@ via `containers.apptainer_dispatch`.
 
 ## GiBUU non-resonant background events are `dis`, and every channel is enabled (2026-07)
 
-2026-07 — moved to [generators/gibuu.md](generators/gibuu.md#why-the-non-resonant-background-is-dis).
+2026-07 — moved to [generators/gibuu.md](generators/gibuu.md#the-non-resonant-background-is-counted-as-dis-2026-07).
 
 ## NEUT: a payload extracted from a published image, not built from source
 
-2026-07 — moved to [generators/neut.md](generators/neut.md#versions-and-provenance).
+2026-07 — moved to [generators/neut.md](generators/neut.md#a-payload-extracted-from-a-published-image).
 
 ## NEUT output flattening (`nf_flatten.C`)
 
-2026-07 — moved to [generators/neut.md](generators/neut.md#output-flattening-nf_flattenc).
+2026-07 — moved to [generators/neut.md](generators/neut.md#flattening-nf_flattenc).
 
 ## NEUT cross-section weight (`xsec_weight`) normalization
 
@@ -147,11 +147,11 @@ via `containers.apptainer_dispatch`.
 
 ## NEUT flux: log bins of per-bin integrals, divided out on NEUT's own grid (2026-07)
 
-2026-07 — moved to [generators/neut.md](generators/neut.md#flux-handling).
+2026-07 — moved to [generators/neut.md](generators/neut.md#log-spaced-per-bin-integrals-2026-07).
 
 ## NEUT paths are limited to 80 characters
 
-2026-07 — moved to [generators/neut.md](generators/neut.md#every-path-neut-sees-must-be-a-bare-filename).
+2026-07 — moved to [generators/neut.md](generators/neut.md#paths-must-be-bare-filenames).
 
 ## NEUT is not bit-reproducible from its seed
 
@@ -201,11 +201,16 @@ confirming the run itself is complete.
 
 ## The probe flavour is one table, validated at config time (2026-07)
 
-2026-07 — moved to [physics.md](physics.md#probes-and-targets).
+2026-07 — moved to [physics.md](physics.md#probes-and-targets). Kept here: the
+antineutrino sign comes from the PDG code because `translators/gibuu.py` used to
+negate `process_ID` when the flavour string ended in `bar`, and a name-based test
+silently produces a *neutrino* run for any probe spelled differently. Validating
+the name at config time means a typo fails at `validate-config` rather than as a
+`KeyError` inside a translator once Slurm tasks are already running.
 
 ## GENIE: a probe with no staged spline is an error, not a zero weight (2026-07)
 
-2026-07 — moved to [generators/genie.md](generators/genie.md#cross-section-weight).
+2026-07 — moved to [generators/genie.md](generators/genie.md#a-probe-with-no-spline-is-an-error-2026-07).
 
 ## A job label is a pure function of its own job
 
@@ -245,7 +250,7 @@ would generate identical events and inflate the sample's statistics.
 
 2026-10 — superseded: the final-state columns are hadronic observables, the
 condition this entry named for reversing it. See the FSI entry below and
-[generators/gibuu.md](generators/gibuu.md#final-state-interactions-are-switched-on).
+[generators/gibuu.md](generators/gibuu.md#fsi-transport).
 
 ## Plots are grouped by the configuration, not by the events
 
@@ -395,7 +400,7 @@ to take (`event::W()` is not stored), and the four-vector sum is ours anyway.
 Subtracting the binding energy ourselves: it depends on the local Fermi momentum
 at the vertex, which would mean reimplementing NuWro's density profile. Details
 and measurements are in
-[generators/nuwro.md](generators/nuwro.md#w_true_gev-is-nuwros-own-w-taken-from-the-outgoing-hadrons).
+[generators/nuwro.md](generators/nuwro.md#w_true_gev-is-nuwros-own-w).
 
 ## FSI is on in every generator, set by the framework or the GENIE tune (2026-10)
 
@@ -423,3 +428,105 @@ against 15.9 s); the figures in [performance.md](performance.md) predate it. The
 change — `weight` is fixed at the vertex and inherited through transport, and
 a same-seed C12 run gave bit-identical weights both ways.
 
+## Reweight universes for NuWro (2026-10)
+
+**The problem.** We want cross-section uncertainties and bin-to-bin correlations
+(including between jobs) without regenerating MC, by reweighting each event under
+many parameter throws.
+
+**The decisions.**
+
+- **Explicit, shared seed; one stream per parameter.** Seeding from the job label
+  would give each job its own universe *k* and destroy cross-job correlations.
+  Per-parameter streams keep existing throws stable when a parameter is added or
+  `count` is raised.
+- **Central from generation, not config.** Writing a configurable central into
+  `params.txt` would make the central MC drift from its `config_version` while
+  keeping the same version identity. That identity is what the merge checks, so
+  such chunks would merge silently. The block therefore gives only sigma.
+- **Optional log-space sampling per parameter**, so that a covariance can be
+  formed in log space (Peelle's Pertinent Puzzle).
+- **`nf_reweight` instead of `reweight_to`.** The latter spends ~12.5 s of fixed
+  setup per universe, ~21 min per chunk at 100 universes. The single-pass driver
+  over the same engines takes 2.3 s and gives identical weights.
+- **2D float32 `universe_weights` dataset** rather than N scalar columns: one
+  optional key for writer, reader, merger and validator. float32 is ample for
+  ratios.
+- **No weighted generation.** NuWro's `save_test_events = 2` was considered as a
+  way to cover phase space better. The parameters that can be reweighted leave
+  the region where σ is non-zero unchanged, so ratio weights on
+  rejection-sampled events are already unbiased. The weighted mode drops
+  zero-weight events anyway, and its normalization is a running estimate
+  (upstream issue 7 in [generators/nuwro.md](generators/nuwro.md)). It would buy
+  tail statistics at the cost of effective sample size.
+
+**What was ruled out.** RES parameters (`pion_axial_mass`, `pion_C5A`): broken in
+the hybrid model (all RES weights NaN), and the hybrid model's generation does
+not depend on them either. Correlated priors are deferred. Details and measurements are in
+[generators/nuwro.md](generators/nuwro.md#reweight-universes).
+
+## Reweight universes for GENIE, and switch variations (2026-10)
+
+**The problem.** NuWro's own reweighting turned out narrow: only the QE axial
+form factor works, plus channel norms applied in Python (see the entry above).
+GENIE Reweight covers more of the model, so it was added as a second backend
+with the same output contract.
+
+**The decisions.**
+
+- **One generic sampler, per-generator tables.** `universes.py` draws the
+  throws, writes the binary's input and reads its output for both generators.
+  What is generator-specific is only the allowlist and the binary. The config
+  key mirrors NuWro's (`genie.universes`, same schema), so no existing config
+  changed.
+- **GENIE dials are fractional scales with central 1, and GENIE's own 1σ table
+  is overridden to 1.** The dial then equals the fractional change exactly,
+  and the config's `sigma` is the only prior. This also gives `log: true` the
+  same meaning as for NuWro's norms. GENIE's table, with its asymmetric
+  NormCCQE entry, never enters, so the metadata fully describes the prior.
+- **Switch-type knobs are variations, not universes.** Interpolations between
+  two models on [0, 1] (RPA on/off, MEC decay angle, …) have no Gaussian prior.
+  Each gets one deterministic column in a separate `variation_weights` dataset,
+  so a covariance built from `universe_weights` can never mix them in.
+- **Own driver (`nf_genie_reweight`), not the shipped apps.** `grwght1p` scans
+  one dial; `grwghtnp` covers a subset of engines and miswires `NormCCRES`.
+  The driver adopts only the engines the dials need, because the hA2018 FSI
+  engine exits on any other tune. It fails loudly on a dial the tune's model
+  does not handle.
+- **The nominal dσ is recomputed, not read from the event.** For
+  G18_10a_02_11a's RES and COH models the stored dσ differs from the model's
+  own by event-dependent factors up to ~38×, which turned every weight into
+  noise (upstream issue 1 in [generators/genie.md](generators/genie.md)).
+- **The allowlist is what passed a per-dial check on a real sample.** Each dial
+  was checked for nominal weight exactly 1, finite weights, the right channel,
+  and a plausible sign and size; MaCCQE also passed closure against a directly
+  generated sample. The rest fail validation until checked.
+
+**What was ruled out.** `FormZone` and the AGKY dials, which are not
+σ-preserving and log FATAL errors or give single weights up to 5. NC and
+antineutrino variants and the z-expansion dials for AR23_20i are not ruled out,
+only unchecked. Under a tune without
+hA2018 FSI the FSI dials cannot work at all, and validation refuses them (see
+the 2026-10 section on checking dials against the tune). Details and measurements are in
+[generators/genie.md](generators/genie.md#reweight-universes-and-variations).
+
+## GENIE dials checked against the tune at validation (2026-10)
+
+**The problem.** Which GENIE Reweight dials work depends on the tune's models.
+`nf_genie_reweight` caught a mismatch only after `gevgen` had finished, and some
+mismatches, such as `RPA_CCQE` under a model without RPA, gave weights of 1
+without any error.
+
+**The decision.** `validate-config` checks each dial against the models of the
+job's comprehensive model configuration (CMC). The models come from a
+checked-in snapshot of every CMC's `ModelConfiguration.xml`
+(`GENIE_TUNE_MODELS`), not from the payload at validation time. The CLI also
+runs where no GENIE payload is present (the Docker dev setup, where generators
+live in images), and a check that silently disappears there would let the same
+config pass in one place and fail in another. A test compares the snapshot with
+the payload wherever the payload is present. A dial that cannot work under the
+tune is an error. A dial whose engine model only differs from the one it was
+checked under (G18_10a) is a warning, logged once per dial and CMC. A large
+matrix such as `keystone_prod_v2.yml` would otherwise repeat it for every job.
+Rules and lists are in
+[generators/genie.md](generators/genie.md#which-dials-a-tune-allows).

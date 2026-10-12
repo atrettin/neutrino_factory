@@ -1,0 +1,54 @@
+# End-to-end smoke test — GENIE with reweight universes and variations.
+# Like genie_c12.yaml, plus the third stage: nf_genie_reweight (GENIE Reweight)
+# computes 10 universe weights per event into events/universe_weights, and one
+# column per switch variation into events/variation_weights, with the throws and
+# the switch settings in the `universes` / `variations` metadata.
+# Requires the tune's cross-section spline staged on disk, like genie_c12.yaml.
+
+run:
+  name: smoke_genie_c12_universes
+  seed: 12345
+  executor: local
+  stub_mode: false
+  log_level: essential
+
+jobs:
+  - generator: genie
+    code_version: "R-3_06_00"
+    config_version: "G18_10a_02_11a"
+    events: 500
+    chunks: 1
+    flux:
+      type: power_law
+      particle: numu
+      emin_gev: 0.5
+      emax_gev: 5.0
+      gamma: -2.0
+    target:
+      nucleus: C12
+    physics:
+      mode: inclusive
+      current: cc
+    genie:
+      universes:
+        seed: 1
+        count: 10
+        parameters:
+          MaCCQE: {sigma: 0.15, log: true}
+          MaCCRES: {sigma: 0.2, log: true}
+          NormCCMEC: {sigma: 0.5, log: true}
+          MFP_pi: {sigma: 0.2, log: true}
+      variations:
+        RPA_CCQE: {}
+        DecayAngMEC: {}
+
+storage:
+  software_root: ${NF_SOFTWARE_ROOT:-./software}
+  output_root: ${NF_OUTPUT_ROOT:-./output}
+  work_root: ${NF_WORK_ROOT:-./work}
+
+slurm:
+  partition: alma
+  time: "00:10:00"
+  cpus_per_task: 1
+  mem: "2G"

@@ -2,8 +2,13 @@
 
 The physics contract every generator backend is normalized onto. Anything that
 reads, writes or compares the common HDF5 output depends on the conventions
-below; the per-generator half of the story — how each generator's raw output is
-turned into these quantities — is in [generators/](generators/).
+below. How each generator's raw output is turned into these quantities is in
+that generator's doc under [generators/](generators/); this document only
+summarizes it, one table cell per generator.
+
+The topics come first. [Design notes](#design-notes) explains why some
+conventions are the way they are, and [Validation](#validation) collects the
+measurements that back them.
 
 ## Units and frames
 
@@ -36,26 +41,24 @@ xsec_weight_i = numerator_i / (D · phi_hat(E_i))
 ```
 
 where `phi_hat` is the unit-integral-normalized flux density and `D` is the
-normalization denominator. What varies between generators is the numerator and
-`D`, because generators encode cross-section information in fundamentally
-different ways:
+normalization denominator, recorded per chunk as HDF5 metadata
+`xsec_norm_count`. What varies between generators is the numerator and `D`:
 
-- **Rejection-sampled / unweighted** (GENIE, NuWro, NEUT). Every event carries
-  the same information; the event *density* in energy is what encodes σ(E). The
-  numerator is a flux-averaged total cross section obtained per generator, and
-  `D` is the chunk's **event count**.
-- **Phase-space sampled and cross-section weighted** (GiBUU). The raw per-event
-  weight *is* a cross section; the event density carries no normalization. The
-  numerator is the raw weight and `D` is the number of generator **runs**.
+| Generator | Sampling | Numerator | `D` |
+|---|---|---|---|
+| GENIE | unweighted | flux-averaged σ, reconstructed from the staged splines ([genie.md](generators/genie.md#cross-section-weight)) | event count |
+| NuWro | unweighted | the run-wide constant raw `weight` ([nuwro.md](generators/nuwro.md#cross-section-weight)) | event count |
+| NEUT | unweighted | ∫evtrt / ∫flux from NEUT's own output ([neut.md](generators/neut.md#cross-section-weight)) | event count |
+| GiBUU | phase-space sampled, cross-section weighted | the raw per-event `weight` ([gibuu.md](generators/gibuu.md#cross-section-weight)) | number of GiBUU **runs** |
 
-`ConfigTranslator.xsec_norm_count` is abstract rather than defaulting to
-`len(events)` precisely so that the GiBUU case cannot be got wrong silently
-(`translators/base.py:40-61`).
+For the three unweighted generators the event *density* in energy encodes σ(E).
+For GiBUU the event density carries no normalization; the weights do, and they
+can be negative.
 
 ### Per-nucleon, always
 
 The column is per target nucleon regardless of the nucleus. Generators differ in
-what they hand over, and the conversion is part of each translator's knowledge:
+what they hand over:
 
 | Generator | Raw scale | Per-nucleon conversion |
 |---|---|---|
@@ -64,50 +67,31 @@ what they hand over, and the conversion is part of each translator's knowledge:
 | NEUT | already 1e-38 cm² per nucleon | none |
 | GiBUU | already 1e-38 cm² per nucleon | none |
 
-The two "already per-nucleon" claims are not assumptions — both were verified by
-regenerating the same flux on different nuclei and confirming the weight does not
-scale with `A` (see [generators/neut.md](generators/neut.md) and
-[generators/gibuu.md](generators/gibuu.md)). GENIE's splines are keyed on the
-whole-nucleus PDG code, which is why it is the one generator that divides.
+GENIE's splines are keyed on the whole-nucleus PDG code, which is why it is the
+one generator that divides. The evidence for each row is in that generator's
+Validation section.
 
 ### Merging chunks averages, it does not sum
 
-*Moved here from `design_decisions.md` (2026-07).*
-
 Every generator's `xsec_weight` column is a *per-chunk* estimate of the cross
-section: for one chunk on its own,
-`sum(xsec_weight in an energy bin) / bin_width` converges to σ(E). Concatenating
-N chunks therefore reports roughly N times the true cross section — measured at
-2.06× for a 2-chunk NEUT run whose single-chunk equivalent was correct to 1.03.
+section: for one chunk on its own, `sum(xsec_weight in an energy bin) /
+bin_width` converges to σ(E). Concatenating N chunks naively would report N
+times the true cross section. This applies to **all four generators**,
+GiBUU included: its weights sum to σ *within one run*, so two chunks are two
+independent estimates.
 
-This affects **all four generators**. GiBUU is not exempt: its weights sum to σ
-*within one run* (`num_runs_SameEnergy = 1` per chunk), so two chunks are two
-independent estimates and adding them double-counts exactly as elsewhere.
+`merge_hdf5_files` therefore scales chunk *c* by `D_c / Σ D`, turning
+concatenation into a weighted average. The merged weights are what a single run
+of `Σ D` events would have produced.
 
-Each chunk declares its own `D` as HDF5 metadata `xsec_norm_count`, and
-`merge_hdf5_files` scales chunk *c* by `D_c / Σ D` — turning concatenation into a
-weighted average. Equivalently, the merged weights are what a single run of `Σ D`
-events would have produced.
-
-Properties:
-
-- A single input is a no-op (share = 1), so one-chunk runs are unchanged.
+- A single input is a no-op (share = 1).
 - The merged file records the summed `Σ D`, so merging merged files stays correct.
-- Stub output declares no count and is left untouched — its weights are
-  placeholders, not cross sections — and a set mixing declared with undeclared
-  inputs is refused rather than half-rescaled.
+- Stub output declares no count and is left untouched (its weights are
+  placeholders). A set mixing declared with undeclared inputs is refused.
+- Universe and variation weights are ratios; merging concatenates them and never
+  rescales them.
 
-Validation (local Docker, same physics at different chunk counts):
-
-| Generator | Events | 1 chunk | 2 chunks | 4 chunks |
-|---|---|---|---|---|
-| NEUT (vs its own evtrt/flux per bin) | 4000 | 1.015 | 1.018 | 1.011 |
-| GiBUU (relative to 1 chunk) | 40000 | 1.000 | 0.929 | 1.005 |
-| NuWro (relative to 1 chunk) | 4000 | 1.000 | 0.956 | — |
-
-The residual spread is Monte-Carlo noise. GiBUU needs the larger sample for a
-meaningful comparison: its weights are heavy-tailed, and in a 1000-event run a
-single event carried 72% of one chunk's total.
+Validated on NEUT, GiBUU and NuWro: see [Validation](#chunk-merging).
 
 ## Flux
 
@@ -115,150 +99,125 @@ A flux is a callable returning a number proportional to the flux **density**
 versus energy in GeV, in arbitrary units (`flux.py:1-18`). Each concrete flux
 knows its support `[emin_gev, emax_gev]` and the probe it describes;
 `to_histogram` produces the binned form handed to generators and used to draw
-synthetic energies in stub mode.
+synthetic energies in stub mode. `PowerLawFlux` takes `gamma` directly from the
+config, so an E^-2 spectrum is `gamma: -2.0`.
 
-Two facts dominate every generator's flux handling:
+Three facts govern every generator's flux handling:
 
-- **Density versus per-bin integral.** ROOT-based samplers
-  (`TH1::GetRandom` and NEUT's `Ufm2TH1dist`) pick a bin in proportion to its raw
-  bin *content*, ignoring the bin width. Feeding a density on an unequal-width
-  grid therefore generates a spectrum tilted by one power of the bin width.
-  GENIE has a `WIDTH` flag that performs the multiplication for you; NEUT has no
-  such switch, so the adapter writes per-bin integrals directly.
+- **Density versus per-bin integral.** ROOT-based samplers (`TH1::GetRandom`
+  and NEUT's `Ufm2TH1dist`) pick a bin in proportion to its raw bin *content*,
+  ignoring the bin width. Feeding a density on an unequal-width grid generates a
+  spectrum tilted by one power of the bin width. Each adapter either hands over
+  per-bin integrals or tells the generator to multiply by the width.
   `HistogramFlux.from_root_file(..., contents_are_counts=True)` is the inverse
   conversion on readback.
 - **The generated flux is piecewise constant on the input bin edges.** Energy is
   uniform *within* a bin for every histogram-driven generator here, so the
-  reconstructed σ(E) can carry no structure finer than the flux binning. This is
-  why GENIE and NEUT use 1000 **log-spaced** bins (~0.3–0.6%/bin over
-  0.1–50 GeV) rather than equal-width bins: constant relative resolution is the
-  only sensible choice for a steeply falling spectrum.
+  reconstructed σ(E) can carry no structure finer than the flux binning. The
+  number of flux bins is a **resolution setting**. Log-spaced bins give constant
+  relative resolution, the sensible choice for a steeply falling spectrum.
+- **Normalize against what was actually sampled.** The flux in the
+  `xsec_weight` denominator must be the histogram the generator drew from, on
+  its own binning. GENIE and NEUT stamp that histogram into their output, and
+  their normalizers read it back with no fallback to the config. Rebuilding
+  from the config would silently restore a normalization bug whose output still
+  looks physical. NuWro does not stamp its flux; its normalizer rebuilds the
+  histogram from the config with the same call the translator used, which is
+  identical by construction.
 
-**Normalize against what was actually sampled, never against the config.** GENIE
-and NEUT both stamp the flux histogram they used into their own output, and both
-normalizers read it back on its *native* binning rather than rebuilding the flux
-from the run configuration. There is deliberately no fallback: reconstructing the
-flux from the config would silently restore a normalization bug whose output
-still looks physical.
-
-`PowerLawFlux` takes `gamma` directly from the config, so an E^-2 spectrum is
-`gamma: -2.0`.
+| Generator | Bins handed over | Normalized against |
+|---|---|---|
+| GENIE | 1000 log bins of density, `WIDTH` flag ([genie.md](generators/genie.md#flux)) | `input-flux.root`, written by `gevgen` |
+| NuWro | 500 equal-width bins inline in `beam_energy` ([nuwro.md](generators/nuwro.md#flux)) | the same histogram, rebuilt from config |
+| NEUT | 1000 log bins of per-bin integrals ([neut.md](generators/neut.md#flux)) | `flux_<flavour>` from NEUT's output |
+| GiBUU | 500 equidistant bin centres in a text table ([gibuu.md](generators/gibuu.md#flux)) | the unit-normalized config flux |
 
 ## Probes and targets
 
-*Moved here from `design_decisions.md` (2026-07).*
-
-`flux.particle` accepts the six neutrino probes — `nue`, `numu`, `nutau` and
-their antineutrinos — and `particles.py` is the single table mapping them to PDG
+`flux.particle` accepts the six neutrino probes: `nue`, `numu`, `nutau` and
+their antineutrinos. `particles.py` is the single table mapping them to PDG
 codes. Every translator derives its generator-native beam setting from it
 (GENIE's numeric `-p`, NuWro's `beam_particle`, NEUT's `EVCT-IDPT`, GiBUU's
 `flavor_ID` plus the sign of `process_ID`), so a flavour is supported by all four
-generators or by none.
+generators or by none. An unknown name fails at `validate-config`. Whether a
+generator also has *cross sections* for a flavour is a separate question: GENIE's
+shipped splines, for example, have no ν_τ ([genie.md](generators/genie.md#known-limitations)).
 
-- **`validate_flux` rejects an unknown name**, so a typo fails at
-  `validate-config` rather than as a `KeyError` deep inside a translator once
-  Slurm tasks are already running.
-- **The antineutrino sign comes from the PDG code, never from the name.**
-  `translators/gibuu.py` used to negate `process_ID` when the flavour string
-  ended in `bar`; a name-based test silently produces a *neutrino* run for any
-  probe spelled differently. `particles.is_antineutrino` asks the table instead.
+The antineutrino sign is always taken from the PDG code
+(`particles.is_antineutrino`), never from the probe's name.
 
 Targets are parsed from names (`C12`, `Ar40`) into `Z`, `A` and the PDG
 `10LZZZAAAI` nuclear code by `nucleus_z_a` / `nucleus_pdg` /
-`nucleus_composition` (`particles.py:77-117`) — there is no nuclide table, so any
+`nucleus_composition` (`particles.py:77-117`). There is no nuclide table, so any
 element-plus-mass-number name resolves.
 
 ## Weak current
 
-*Moved here from `design_decisions.md`.*
-
 `physics.current` (`cc` | `nc` | `inclusive`) is applied through each generator's
 **own** configuration rather than by filtering the normalized output. Filtering
-after the fact would waste the discarded events against the requested count and,
-worse, leave `xsec_weight` normalized to the inclusive cross section while the
-surviving sample covered only one current. The native switches are
-`--event-generator-list` (GENIE), the `dyn_*` parameters (NuWro), `NEUT-MODE -1`
-plus a `NEUT-CRS` mask (NEUT) and `process_ID` (GiBUU);
-[configuration.md](configuration.md) tabulates them and each generator doc
-explains its own.
+afterwards would waste the discarded events and leave `xsec_weight` normalized to
+the inclusive cross section while the sample covered only one current.
+
+| Generator | Native mechanism | Details |
+|---|---|---|
+| GENIE | `--event-generator-list CC`/`NC`; the spline sum is filtered to match | [genie.md](generators/genie.md#weak-current) |
+| NuWro | the `dyn_*` channel switches | [nuwro.md](generators/nuwro.md#weak-current) |
+| NEUT | `NEUT-MODE -1` plus a `NEUT-CRS` slot mask | [neut.md](generators/neut.md#weak-current) |
+| GiBUU | `process_ID`; `inclusive` is two concatenated passes | [gibuu.md](generators/gibuu.md#weak-current) |
+
+[configuration.md](configuration.md#weak-current-physicscurrent) is the user-facing
+reference for the setting.
 
 **`is_cc` is a required column with no default.** The `interaction` label cannot
-stand in for it: `qel` covers CCQE and NC elastic alike (GENIE's `qel` gst flag
-does, and NEUT modes 1 and 51/52 both map to it), so an inclusive run without
-this column is unusable for anything current-specific. Since a default would be
-indistinguishable from a measured value, `write_common_hdf5` raises instead.
+stand in for it: `qel` covers CCQE and NC elastic alike, so an inclusive run
+without this column is unusable for anything current-specific. A default would be
+indistinguishable from a measured value, so `write_common_hdf5` raises instead.
 
-Two cross-generator consequences:
-
-- **GENIE's spline sum must track the generator list.** The reconstructed σ has
-  to cover exactly the channels `gevgen` was allowed to generate, so it is
-  filtered on `proc:Weak[CC]` / `proc:Weak[NC]`. Without the filter a
-  CC-restricted run would be normalized to the CC+NC total — for numu on carbon,
-  an overstatement of roughly a third. Both settings derive from the same
-  `physics.current` value in the translator so they cannot drift apart.
-- **GiBUU `inclusive` is two passes, not one run**, concatenated. This is exact
-  rather than an approximation only because GiBUU is cross-section weighted; the
-  same trick would not work for the other three.
-
-Validation (local Docker, numu on C12, power-law flux over 0.5–5 GeV; 400 events
-for GENIE, 2000 for the rest):
-
-| Generator | CC fraction, `cc` run | `nc` run | `inclusive` run | NC share of σ, inclusive |
-|---|---|---|---|---|
-| GENIE | 1.000 | 0.000 | 0.750 | 0.204 |
-| NuWro | 1.000 | 0.000 | 0.744 | 0.278 |
-| NEUT | 1.000 | 0.000 | 0.735 | 0.261 |
-| GiBUU | 1.000 | 0.000 | 0.449 | 0.308 |
-
-GiBUU's inclusive *event* fraction is near half because it samples phase space
-rather than the cross section; its CC:NC ratio lives in the weights, so the NC
-share of σ is the number to compare. The exact reference is GENIE's spline
-decomposition, which is deterministic: summing the staged splines for numu/C12
-filtered on `Weak[CC]` and `Weak[NC]` gives 1.03736 and 0.39137, whose sum
-reproduces the unfiltered total to all six printed digits — an NC share of 0.274,
-consistent with every measured value above.
+Validated for all four generators: see [Validation](#weak-current-1).
 
 ## Interaction taxonomy
 
 The common `interaction` column takes one of `qel`, `res`, `dis`, `coh`, `mec`,
-`other`. GENIE's `gst` and NuWro's `treeout` expose parallel boolean branches
-with these very names and share one priority chain,
+`other`. GENIE's `gst` and NuWro's `treeout` expose boolean branches with these
+very names and share one priority chain,
 `normalizers/base.interaction_from_flags` (qel → res → dis → coh → mec → other).
-GiBUU maps an integer `evType` and NEUT a mode number; both use explicit,
-closed tables that raise on an unknown code rather than falling through to
-`other`.
+GiBUU maps an integer `evType` and NEUT a mode number; both use explicit, closed
+tables that raise on an unknown code rather than falling through to `other`.
 
 **The categories are pinned to GENIE**: an event gets the category it would have
 had if GENIE had produced it. `qel` deliberately covers NC elastic as well as
 CCQE, which is why `is_cc` cannot be inferred from `interaction`.
 
-**The shallow-inelastic region (roughly 1.2 < W < 2.0 GeV) is the one place the
-four generators genuinely disagree**, because each decomposes it differently and
-none of them exposes a `sis` category:
+### The shallow-inelastic region
+
+**The region roughly 1.2 < W < 2.0 GeV is the one place the four generators
+genuinely disagree.** Each decomposes it differently, and none exposes a `sis`
+category:
 
 | Generator | How the region is produced | Our label |
 |---|---|---|
-| GENIE | RES generator (full below `Wcut`, zero above) **plus** the DIS generator supplying non-resonant background with the KNO multiplicity tune, which extends *below* `Wcut` too | `res` / `dis` respectively |
-| GiBUU | non-resonant 1π/2π background, `evType` 32/33/37, resonances subtracted | `dis` |
+| GENIE | RES generator (full below the tune's `Wcut`, zero above) **plus** the DIS generator supplying non-resonant background, which extends *below* `Wcut` too | `res` / `dis` respectively ([genie.md](generators/genie.md#the-resdis-boundary-is-the-tunes-wcut)) |
+| GiBUU | non-resonant 1π/2π background, `evType` 32/33/37, resonances subtracted | `dis` ([gibuu.md](generators/gibuu.md#the-non-resonant-background-is-dis)) |
 | NEUT | multi-π modes 21/41 (1.3 < W < 2.0); single-π modes 11/12/13 lump resonant *and* non-resonant together | `dis` / `res` |
-| NuWro | `dyn_res` / `dyn_dis`, disjoint at a hard `res_dis_cut` = 1.9 GeV; but the RES channel blends non-resonant background into *itself* from W = 1.08 GeV upward, so its `res` is nowhere purely resonant above the Δ | `res` / `dis` |
+| NuWro | `dyn_res` / `dyn_dis`, disjoint at a hard `res_dis_cut` = 1.9 GeV; but the RES channel blends non-resonant background into *itself* from W = 1.08 GeV upward | `res` / `dis` ([nuwro.md](generators/nuwro.md#the-resdis-split-is-a-hard-cut-plus-a-blend-inside-res)) |
 
 Labelling GiBUU's background `dis` reproduces what GENIE would have called the
-same event. NEUT is the one that cannot be aligned by relabelling, since its
-single-pion modes do not separate the resonant and non-resonant pieces at all.
+same event, since GENIE's non-resonant background comes out of its DIS generator.
+NEUT is the one that cannot be aligned by relabelling: its single-pion modes do
+not separate the resonant and non-resonant pieces at all. NuWro's `res` is
+likewise not purely resonant near the boundary. The
+[`resonant_primary`](#the-resonant_primary-column) column says which mechanism
+made each event where the generator can tell.
+
+A future `sis` label would have to be introduced for all four generators at once,
+and for GENIE it is not recoverable from the gst output.
 
 **This is why the common output carries W.** The `w_gev` and `w_true_gev` columns
 (see [derived kinematic variables](#derived-kinematic-variables)) are computed by
 one formula from four-vectors every generator supplies, so a cut on them is a cut
-on the same physical quantity in all four — which no relabelling of the channel
-flags can achieve. Every W threshold quoted in the table above is a cut those
-columns can now express. `w_true_gev` is the one to compare against a generator's
-own threshold; `w_gev` is the one to compare *between* generators.
-
-Classifying by hadron content is the other candidate axis — see the NEUT code
-below. Detail in
-[generators/genie.md](generators/genie.md#the-shallow-inelastic-region-genie-splits-it-neut-and-gibuu-do-not)
-and [generators/gibuu.md](generators/gibuu.md#why-the-non-resonant-background-is-dis).
+on the same physical quantity in all four, which no relabelling of the channel
+flags can achieve. `w_true_gev` is the one to compare against a generator's own
+threshold; `w_gev` is the one to compare *between* generators.
 
 ### The NEUT code as a candidate cross-generator axis
 
@@ -267,29 +226,35 @@ fine-grained channels, but **only two of the four generators emit one**:
 
 | Generator | NEUT code | Source |
 |---|---|---|
-| NEUT | native — `mode` **is** the NEUT code | generated channel |
-| GENIE | native — gst `neut_code` | `genie::utils::ghep::NeutReactionCode`, counts primary hadrons |
+| NEUT | native: `mode` **is** the NEUT code | generated channel |
+| GENIE | native: gst `neut_code` | `genie::utils::ghep::NeutReactionCode`, counts primary hadrons |
 | NuWro | **none**; only `e/dyn` plus the `flag.*` booleans | derivable: NUISANCE's `ConvertNuwroMode` counts `e/out` |
 | GiBUU | **none**; only `evType` | derivable: NUISANCE's `ConvertModeGiBUUtoNEUT`, a code→code switch |
 
 Two properties to be clear about before treating it as a topology label:
 
 - **It classifies the primary hadronic system, not the observable final state.**
-  GENIE's routine counts particles "in the primary hadronic system (_before_
-  intranuclear rescattering)"; NUISANCE's NuWro converter counts `e/out`, which
-  NuWro's own header documents as "outgoing particles (before fsi)" — not
-  `e/post`, "particles leaving the nucleus"; and NEUT's `mode` is assigned at
-  production. So it is a *pre-FSI topological* classification: generator-agnostic
-  and finer than "which module produced the event", but not an observable.
+  GENIE counts particles "in the primary hadronic system (_before_ intranuclear
+  rescattering)"; NUISANCE's NuWro converter counts the pre-FSI `e/out`; NEUT's
+  `mode` is assigned at production. So it is a *pre-FSI topological*
+  classification: generator-agnostic and finer than "which module produced the
+  event", but not an observable.
 - **The derived mappings are lossy, and the GiBUU one is partly invalid.**
   `ConvertModeGiBUUtoNEUT` collapses all 30 resonance codes (2–31) onto
   single-pion modes regardless of how the resonance decayed, returns **10** (CC)
-  and **30** (NC) for the 1π background — neither is a NEUT mode — and maps NC
-  2p2h to **42**, which in NEUT means NC 1η. It is not a faithful round trip.
+  and **30** (NC) for the 1π background (neither is a NEUT mode), and maps NC
+  2p2h to **42**, which in NEUT means NC 1η.
+
+It also disagrees substantially with our labels where the generator's own
+module and the produced topology differ. In GENIE, a few percent of `res` events
+carry multi-π codes and a few percent of `dis` events carry single-π codes
+([genie.md](generators/genie.md#neut_code-against-our-labels)). Neither labelling
+is wrong: one is *which generator produced it*, the other *what came out*. Only
+the second is commensurable with NEUT.
 
 The common output carries each generator's own code verbatim in
-`native_interaction_code` (see [final-state content](#final-state-content)): the
-NEUT code itself for NEUT and GENIE, but `e/dyn` and `evType` for NuWro and
+[`native_interaction_code`](#native_interaction_code-is-the-one-non-universal-column):
+the NEUT code itself for NEUT and GENIE, but `e/dyn` and `evType` for NuWro and
 GiBUU, so it is not yet a cross-generator axis.
 
 ### The `resonant_primary` column
@@ -297,34 +262,28 @@ GiBUU, so it is not yet a cross-generator axis.
 `interaction` says which channel the generator assigned an event.
 `resonant_primary` says how the primary hadronic system was actually *made*:
 `1` resonant, `0` non-resonant, `-1` unknown or not applicable
-(`common_output.RESONANT_PRIMARY_*`). The two are not the same question, and the
-difference between them is exactly where the taxonomy stops being comparable.
+(`common_output.RESONANT_PRIMARY_*`).
 
 | Generator | Source | Agrees with `interaction`? |
 |---|---|---|
-| GENIE | the channel itself — `res` is the Rein–Sehgal/Berger–Sehgal calculation, `dis` the DIS generator that supplies the non-resonant background | yes, by construction |
-| GiBUU | `evType` — 2–31 are resonances, 32/33 (1π background), 34 (DIS) and 37 (2π background) are not | yes, by construction |
-| NuWro | `e/flag/flag.res_delta` | **no** — see below |
+| GENIE | the channel itself: `res` is the Rein–Sehgal/Berger–Sehgal calculation, `dis` the DIS generator that supplies the non-resonant background | yes, by construction |
+| GiBUU | `evType`: 2–31 are resonances, 32/33 (1π background), 34 (DIS) and 37 (2π background) are not | yes, by construction |
+| NuWro | `e/flag/flag.res_delta` ([nuwro.md](generators/nuwro.md#resonant_primary-comes-from-flagres_delta)) | **no**: see below |
 | NEUT | none; modes 11/12/13 lump the two mechanisms and no flag separates them | `-1` for every event |
 
 **NuWro is why this is a column rather than a footnote.** Its RES channel blends
-non-resonant background into itself between `res_dis_blending_start` and
-`res_dis_blending_end` (see
-[nuwro.md](generators/nuwro.md#the-resdis-split-is-a-hard-cut-at-res_dis_cut-plus-a-blend-inside-res)),
-so a large part of what it labels `res` is what GENIE would have produced from
-its DIS generator and labelled `dis`. Measured on the 20k-event numu CC C12 run:
-**10.0% of NuWro's `res` events, but 38.6% of its `res` cross section**, carry
+non-resonant background into itself, so a large part of what it labels `res` is
+what GENIE would have labelled `dis`. On a 20k-event numu CC C12 run, **10.0% of
+NuWro's `res` events, but 38.6% of its `res` cross section**, carry
 `resonant_primary = 0`. Re-bucketing those into `dis` would move NuWro from
-`res` 46.5% / `dis` 23.2% of the total cross section to 28.5% / 41.1% — from
-being the clear outlier among the four generators to sitting inside the range the
-others span (GENIE 37.2/38.0, NEUT 34.1/41.1, GiBUU 26.1/46.7).
+`res` 46.5% / `dis` 23.2% of the total cross section to 28.5% / 41.1%, inside the
+range the other generators span (GENIE 37.2/38.0, NEUT 34.1/41.1, GiBUU
+26.1/46.7).
 
-That re-bucketing is deliberately **not** applied to `interaction`. Doing so
-would make one generator's `interaction` column mean something different from the
-others', which is the property the column exists to guarantee; and it could not
-be done for NEUT at all, so it would trade a visible inconsistency for a hidden
-partial one. Downstream code that wants the mechanism should cut on
-`resonant_primary` directly, and treat `-1` as "this generator cannot say".
+That re-bucketing is deliberately **not** applied to `interaction` (see
+[Design notes](#resonant_primary-instead-of-relabelling)). Downstream code that
+wants the mechanism should cut on `resonant_primary` directly, and treat `-1` as
+"this generator cannot say".
 
 **`resonant_primary` is only meaningful for `res` and `dis`.** Quasi-elastic,
 coherent and 2p2h have no pion-production mechanism to attribute, so they carry
@@ -332,272 +291,166 @@ coherent and 2p2h have no pion-production mechanism to attribute, so they carry
 
 ## Derived kinematic variables
 
-*Moved here from `design_decisions.md`.*
-
-Ten lab-frame columns are derived in one shared module, `kinematics.py`:
-`q2_gev2`, `bjorken_x`, `w_gev`, `w_true_gev`, `inelasticity_y`,
-`lepton_energy_gev`, `lepton_momentum_gev`, `lepton_p_parallel_gev`,
-`lepton_p_transverse_gev`, `lepton_costheta`.
+Ten lab-frame columns are derived in one shared module, `kinematics.py`, by the
+same formula for every generator: `q2_gev2`, `bjorken_x`, `w_gev`, `w_true_gev`,
+`inelasticity_y`, `lepton_energy_gev`, `lepton_momentum_gev`,
+`lepton_p_parallel_gev`, `lepton_p_transverse_gev`, `lepton_costheta`. Native
+precomputed branches (such as GENIE's `Q2`/`x`/`y`) are not used; see
+[Design notes](#kinematics-are-recomputed-not-read).
 
 ### The two hadronic-mass columns
 
 W gets **two** columns, because the two useful definitions genuinely differ and
-both are wanted — see [the interaction taxonomy](#interaction-taxonomy) for why W
+both are wanted. See [the interaction taxonomy](#interaction-taxonomy) for why W
 is carried at all.
 
 | Column | Definition | Needs |
 |---|---|---|
-| `w_gev` | `W² = M_N² + 2 M_N ν − Q²`, the same fixed isoscalar `NUCLEON_MASS_GEV` Bjorken-x uses, with the nucleon taken at rest | the two four-vectors only |
-| `w_true_gev` | `W² = (p_ν + p_N − p_l)²`, against the per-event struck system | the struck nucleon, which each generator exposes differently (NuWro stores only the unbound one, so its `p_N` is inferred from the outgoing hadrons) |
+| `w_gev` | `W² = M_N² + 2 M_N ν − Q²`, with the fixed isoscalar `NUCLEON_MASS_GEV` and the nucleon taken at rest | the two lepton four-vectors only |
+| `w_true_gev` | `W² = (p_ν + p_N − p_l)²`, against the per-event struck system | the struck system `p_N`, which each generator exposes differently (table below) |
 
-`w_gev` is the observable, experimental W: frame-dependent by construction, and
-smeared relative to the true one because Fermi motion and binding are not in the
-formula. It is identically defined for every generator, present or future,
-including any that never exposes a hit nucleon.
+**`w_gev` is the observable, experimental W.** It is frame-dependent and smeared
+relative to the true one, because Fermi motion and binding are not in the
+formula. It is identically defined for every generator, including any that never
+exposes a hit nucleon. Use it to compare *between* generators.
 
-**"Smeared" is accurate only for the single-nucleon channels.** Measured on the
-20k runs, the median gap `w_true_gev - w_gev` is at most 0.07 GeV for `qel`,
-`res` and `dis` — genuine Fermi/binding smearing, with no consistent sign. For
-`mec` it is **+1.04 to +1.08 GeV** in all three generators that supply it, which
-is not smearing but a *definitional* offset of one nucleon mass: `w_gev` assumes
-a single stationary nucleon of mass `M_N`, while `w_true_gev` uses the struck 2N
-cluster, whose mass is about 2 `M_N`. 100% of MEC `w_true_gev` lies above
-2 `M_N`; 0% of MEC `w_gev` does. The two columns sit on opposite sides of the
-pair-mass threshold by construction, so **MEC `w_true_gev` must not be read on
-the same axis as the other channels'** — it is the invariant mass of a
-two-nucleon final state, not of a single-nucleon one.
-
-Both are nonetheless correct, and GENIE says so itself: on its MEC events gst
-`W` (its lepton-only variant) has median 1.161 against our `w_gev`'s 1.161, and
-gst `Ws` (its selected W) has 2.184 against our `w_true_gev`'s 2.183. GENIE
-carries the same two quantities and gets the same two numbers.
-
-`w_true_gev` is the invariant mass the generators themselves cut on — GENIE's
-`Wcut`, NEUT's 1.3 < W < 2.0 multi-π window — so it is the column that
-reproduces their thresholds. It is a real Lorentz invariant, which the unit tests
-use as its defining property (boosting an event leaves it unchanged and moves
-`w_gev`). Being tied to each generator's off-shell and binding treatment, it is
-not comparable across generators to the precision `w_gev` is: GiBUU's default
-`storeNucleon = 2` stores the *bound* nucleon, whose invariant mass sits below
-`M_N`, and GENIE's is likewise a bound nucleon.
+**`w_true_gev` is the invariant mass the generators themselves cut on**:
+GENIE's `Wcut`, NEUT's 1.3 < W < 2.0 multi-π window, NuWro's `res_dis_cut`. It
+is a real Lorentz invariant. Because it is tied to each generator's off-shell and
+binding treatment, it is not comparable across generators at better than ~5%
+(see [how each QE vertex closes](#how-each-generators-qe-vertex-closes)).
 
 **`p_N` is the struck initial-state hadronic *system*, not a single nucleon.**
 For 2p2h it is the correlated pair. That choice is forced by GENIE, whose
-struck-nucleon branches carry the two-nucleon cluster for MEC events
-(`GHepRecord::HitNucleon` returns an `Is2NucleonCluster` code); summing the pair
-everywhere else is what keeps the column meaning one thing. The consequence is
-worth knowing before plotting all channels together: MEC `w_true_gev` is a *pair*
-mass and sits roughly `M_N` above the quasi-elastic peak — measured minima of
-1.928 (GENIE), 1.908 (NEUT) and 1.877 (NuWro) GeV, all just above 2 `M_N`.
+struck-nucleon branches carry the two-nucleon cluster for MEC events. Two
+consequences:
 
-**GiBUU cannot supply this, and so is blanked for 2p2h.** Its own 2p2h cross
-section is built from `eN%boson%mom + eN%nucleon%mom + eN%nucleon2%mom`
-(`lepton2p2h.f90`), but `doStoreNeutrinoInfo` passes `neutrinoProdInfo` only
-`eN%nucleon`, whose `mom_nuc` field holds a single four-vector; `nucleon2` never
-reaches the RootTuple, surviving only in the nuclear-residue bookkeeping. Filling
-`w_true_gev` from the one stored nucleon produced a *one-nucleon* invariant mass
-— median 0.924 GeV against 2.18–2.25 for the other three, and starting near `M_N`
-rather than 2 `M_N` — which is a different physical quantity under the same column
-name, exactly the kind of value that is indistinguishable from a real one
-downstream. Those events therefore carry the placeholder. `w_gev`, needing no
-nucleon, is unaffected and remains comparable across all four (MEC medians
-0.99–1.18).
+- **MEC `w_true_gev` is a *pair* mass** and must not be read on the same axis as
+  the other channels. It sits above 2 `M_N` (measured minima 1.88–1.93 GeV),
+  roughly one nucleon mass above the quasi-elastic peak, while MEC `w_gev` sits
+  below it. For `qel`, `res` and `dis` the median gap `w_true_gev − w_gev` is at
+  most 0.07 GeV, genuine Fermi/binding smearing.
+- **GiBUU cannot supply the pair**, so its 2p2h events carry the `w_true_gev`
+  placeholder ([gibuu.md](generators/gibuu.md#w_true_gev-is-blank-for-2p2h)).
+  `w_gev` is unaffected.
 
 Where each generator's `p_N` comes from:
 
 | Generator | Source | Absent when |
 |---|---|---|
-| GENIE | gst `En/pxn/pyn/pzn`, flagged by `hitnuc` | `hitnuc == 0`, which on a 20k numu/C12 run is *exactly* the coherent set |
-| NuWro | `e/in` beyond index 0, selected by `in.pdg` and summed | coherent (`e/in` holds only the beam); an atomic electron there is not counted |
+| GENIE | gst `En/pxn/pyn/pzn`, flagged by `hitnuc` | `hitnuc == 0`, which is exactly the coherent set |
+| NuWro | inferred from the pre-FSI outgoing hadrons, `Σ e/out[1:] − p_ν + p_l`, because `e/in` stores the nucleon before binding ([nuwro.md](generators/nuwro.md#w_true_gev-is-nuwros-own-w)) | `e/in` holds no nucleon (ν-e); coherent events are blank anyway |
 | NEUT | summed by `nf_flatten.C` into `nuc_*_gev`, with `n_nuc` | `n_nuc == 0` |
-| GiBUU | `nuc_E/nuc_Px/nuc_Py/nuc_Pz` from `neutrinoProdInfo` | **2p2h** (`evType` 35/36) — only one of the pair's two nucleons is written, so the defined quantity cannot be formed |
+| GiBUU | `nuc_E/nuc_Px/nuc_Py/nuc_Pz`, the *bound* nucleon (`storeNucleon = 2`) | **2p2h** (`evType` 35/36): only one of the pair is written |
 
-All three ROOT generators write **zeros, not a sentinel**, when there is no
-struck nucleon. A zero four-vector is finite, so the finiteness check cannot
-catch it and each normalizer passes an explicit validity mask instead.
+The ROOT-based generators write **zeros, not a sentinel**, when there is no
+struck nucleon. A zero four-vector is finite, so each normalizer passes an
+explicit validity mask instead of relying on a finiteness check.
 
-**Recomputed, not read.** GENIE's `gst` tree already precomputes `Q2`, `x`, `y`
-and `cthl`, and it would have been less code to use them. They are recomputed
-from the four-vectors for every generator anyway, because the promise of the
-common format is that a Q² histogram from GENIE means exactly the same thing as
-one from GiBUU — which only holds if one formula produces all of them. GENIE
-further ships *two* variants (`Q2`/`x`/`y` true, and `Q2s`/`xs`/`ys`
-reconstructed from the hadronic system), so "use the native branch" is not even
-unambiguous within one generator. `tests/test_genie_normalizer.py` pins these
-definitions against GENIE's own branches for a reference scatter.
+### How each generator's QE vertex closes
 
-Conventions:
+For a quasi-elastic event nothing is produced but the lepton and one nucleon, so
+`p_ν + p_N(initial) − p_l = p_N(final)`. An escaping nucleon is on shell, so if
+the reported `p_N` is the one the vertex used, `w_true_gev` for `qel` is a delta
+function at `m_p` or `m_n`. How close each generator comes is a direct measure
+of how its stored nucleon relates to the one its vertex used (medians, 20k-event
+numu CC C12 runs):
+
+| Generator | stored initial `m_N`, `qel` | stored initial `m_N`, all channels | `qel` `w_true_gev` | offset |
+|---|---|---|---|---|
+| GENIE | 0.9006 (off shell) | 0.9045 | 0.9383 | exact (1st and 99th percentiles both 0.9383) |
+| NuWro | 0.8965 (off shell) | — | 0.9383 | exact by construction since `p_N` is inferred from the outgoing hadrons; from `e/in` it would be +1 MeV with a 0.78–1.12 spread |
+| NEUT | 0.9396 (**on shell**, = `m_n`) | 0.9396 | 0.9922 | +53 MeV, 1–99% spread 0.96–1.05 |
+| GiBUU | 0.8878 (bound, potential included) | 0.8895 | 0.8963 | −43 MeV, 0.72–1.05 |
+
+The two `m_N` columns come from different validation passes (the `qel`
+medians from the vertex-closure study, the all-channel medians from the
+2026-08-05 W validation, whose GiBUU run had 16.6k events).
+
+GENIE reports the off-shell nucleon that makes its own vertex exactly two-body.
+NuWro's offset has been traced to a local-density-dependent binding energy
+([nuwro.md](generators/nuwro.md#binding-energy-at-the-vertex)). NEUT's and
+GiBUU's binding treatments have not been read; see
+[Open questions](#open-questions).
+
+The practical consequence: **`w_true_gev` reproduces a generator's own W exactly
+only where `p_N` is the nucleon the generator solved the vertex against**, which
+holds for GENIE and (by inference from the hadrons) NuWro. For NEUT and GiBUU it
+is displaced by tens of MeV.
+
+### Conventions
 
 - The beam axis is taken **per event** from the incoming neutrino three-momentum,
   never assumed to be +z, so the parallel/transverse split and `cos θ` stay
   correct for off-axis or divergent beams.
 - Bjorken-x and `w_gev` use a **fixed** isoscalar nucleon mass `NUCLEON_MASS_GEV`
-  ((m_p + m_n)/2 = 0.9389187543 GeV), not the per-event struck-nucleon mass. All
-  four generators do expose the hit nucleon, but each with its own off-shell and
-  binding treatment; a fixed mass makes these two variables identically defined
-  everywhere, and `w_true_gev` is the column that carries the per-event system.
-- `Q² = -(p_ν - p_l)²` is non-negative for this process up to floating-point
-  noise near forward scattering, so it is clamped at 0 rather than blanked.
-- **Negative `W²` is blanked, not clamped** — the opposite of the Q² rule above,
-  and for the opposite reason. The Q² clamp removes rounding near forward
-  scattering; negative `W²` is a real high-Q², low-ν corner (`w_gev`) or a real
-  off-shell threshold effect (`w_true_gev`). Clamping either would pile those
-  events at exactly 0, where nothing downstream could tell them from a measured
-  value.
-- `inelasticity_y` can come out slightly **negative** when Fermi motion of the
-  struck nucleon pushes the outgoing lepton above the beam energy. That is
-  physical and is passed through; only `bjorken_x` (which would diverge) is
-  blanked when the energy transfer is non-positive.
-- The lepton variables are filled for NC as well as CC events — for NC the
-  "lepton" is the scattered neutrino. Detector observability is a downstream
-  question, not the generator-harmonization layer's to decide.
+  ((m_p + m_n)/2 = 0.9389187543 GeV), not the per-event struck-nucleon mass, so
+  these two variables are identically defined everywhere.
+- `Q² = -(p_ν - p_l)²` is clamped at 0, because it is non-negative up to
+  floating-point noise near forward scattering.
+- **Negative `W²` is blanked, not clamped.** It is a real high-Q², low-ν corner
+  (`w_gev`) or a real off-shell threshold effect (`w_true_gev`). Clamping would
+  pile those events at exactly 0, indistinguishable from a measured value.
+- `inelasticity_y` can come out slightly **negative** when Fermi motion pushes
+  the outgoing lepton above the beam energy. That is physical and passed through.
+- The lepton variables are filled for NC as well as CC events; for NC the
+  "lepton" is the scattered neutrino.
 
-**Placeholders**, two of them, because `-1` is a physical value for the signed
-quantities: `MISSING = -1.0` for the non-negative-definite columns and
+**Placeholders.** `MISSING = -1.0` for the non-negative-definite columns and
 `MISSING_SIGNED = -999.0` for `lepton_p_parallel_gev` and `lepton_costheta` (a
 backward-scattered lepton genuinely has `cos θ = -1`). Blanking rules:
-`bjorken_x`, `w_gev` and `w_true_gev` for coherent events, which scatter off the
-nucleus as a whole and so have no struck nucleon to define any of the three
-against; `bjorken_x` additionally for non-positive energy transfer, which it
-divides by — the two W columns do not divide by ν and are kept there, so a
-slightly sub-nucleon W from Fermi motion is reported rather than hidden;
-`w_true_gev` alone wherever the generator supplied no struck nucleon;
-`lepton_costheta` when the lepton momentum is zero; the directional variables
-when the beam momentum is zero; and the whole block when the generator supplies
-no outgoing lepton (NuWro's `e/out` can be empty) or the four-vectors are
-non-finite.
 
-**Verified on real generator output (2026-07-28).** 20k-event GENIE, NuWro and
-NEUT runs plus an 83k-event GiBUU run, all `numu` CC on C12 with a γ=-2 power-law
-flux over 0.5–5 GeV, pass the structural invariants event by event (Q² ≥ 0, exact
-energy-transfer closure, |cos θ| ≤ 1, p_∥² + p_T² = |p|², coherent events blanked
-and only those) and agree on the cross-section-weighted distributions. Bjorken-x
-for quasi-elastic peaks at 0.75–0.85 with a weighted median of 0.825 (GENIE),
-0.815 (NuWro), 0.825 (NEUT) and 0.809 (GiBUU) — a broad peak *below* 1, not the
-sharp x=1 of free-nucleon QE, because Fermi motion and binding smear it and the
-fixed `M_N` does not absorb that. The GiBUU number is quoted with a bootstrap CI
-of [0.797, 0.851] rather than as a point estimate, because its QE weight is
-extremely concentrated (see weight efficiency below).
-
-**The two W columns verified on real generator output (2026-08-05).** 20k-event
-GENIE, NuWro and NEUT runs plus a 16.6k-event GiBUU run, all `numu` CC on C12
-with a γ=-2 power-law flux over 0.5–5 GeV. Figures from
-`scripts/plot_w_validation.py`.
-
-*Against GENIE's own branches.* `w_gev` reproduces gst `W` — which is the same
-lepton-only formula, with a nucleon mass differing from ours by 7e-9 GeV — to a
-maximum of **5.1e-8 GeV** over 19 862 events (mean 9.8e-9), so the two agree to
-the constant. `w_true_gev` reproduces gst `Ws`, GENIE's own selected W, to
-**2.2e-13 GeV** over the 18 251 non-MEC events. The MEC events deliberately
-differ (up to 0.22 GeV): `Ws` is not the pair mass, whereas `w_true_gev` is built
-from the two-nucleon cluster four-vector.
-
-*Where the columns are blank.* GENIE 138 of 20 000, of which 136 are the
-coherent events — and `hitnuc == 0` turns out to be **exactly** that same set, so
-the two blanking criteria coincide rather than compete. The remaining 2 are
-genuine negative-`W²` events outside `coh`, the case the blank-not-clamp rule
-exists for. NuWro blanks 131, NEUT 105, GiBUU none (it has no coherent channel
-and always writes `nuc_*`).
-
-*Against thresholds the code was never told about* — the sharpest check, since
-these are cuts each generator applies internally:
-
-- **NEUT** modes 21/41 (multi-π): all 2770 events land inside
-  **[1.301, 2.000] GeV**, reproducing NEUT's own 1.3 < W < 2.0 window to the bin.
-  In the by-channel figure NEUT's `dis` switches on abruptly at 1.3 and its `res`
-  stops abruptly at 2.0.
-- **NuWro** splits at its `res_dis_cut` = **1.9 GeV**, exactly: `res` stops at
-  1.89997 and `dis` starts at 1.90054 GeV, the two dynamics being disjoint by
-  construction. This holds because NuWro's `w_true_gev` is the mass of the
-  outgoing pre-FSI hadrons, NuWro's own `event::W()`. A reconstruction from the
-  stored initial nucleon misses NuWro's binding energy and leaked 2.8% of `res`
-  above the cut — see
-  [nuwro.md](generators/nuwro.md#w_true_gev-is-nuwros-own-w-taken-from-the-outgoing-hadrons).
-  **`w_true_gev` reproduces a generator's internal W only when `p_N` is the
-  nucleon the generator solved the vertex against**, which for GENIE and NuWro
-  it is.
-- **GENIE**'s `res` terminates at **1.927742 GeV** with *zero* events above it —
-  the tune's `Wcut` of **1.927862** GeV, matched to 1.2e-4 GeV, which is one
-  event's sampling granularity. The RES/DIS joining scheme is therefore a hard
-  cut on exactly the quantity `w_true_gev` computes, not an approximate one.
-  What GENIE does *not* have is a boundary between the two channels: its
-  non-resonant DIS background carries 51% of the DIS cross section *below*
-  `Wcut`, overlapping RES throughout. So `res` and `dis` coexist on the low side
-  and only `res` stops at the line — precisely the structural difference that
-  makes the channel labels unalignable with NEUT's.
-- **MEC** `w_true_gev` sits entirely above `Wcut` in GENIE (0% below), as the
-  pair-mass definition requires — a 2N cluster starts near 2 M_N.
-
-*The struck nucleon each generator hands over*, median invariant mass against
-`M_N = 0.9389` GeV: NEUT **0.9396** (on shell), GENIE **0.9045** and GiBUU
-**0.8895** (both bound, off shell). This is the quantitative form of the caveat
-above — `w_true_gev` is not commensurable across generators at better than
-~5%, which is exactly why `w_gev` exists alongside it.
-
-*NEUT's `n_nuc`* came out 1 for 18 365 events, **2 for 1531 — all of them mode 2**,
-and 0 for 104. The 2p2h layout the flattener assumes is therefore confirmed per
-event rather than asserted.
+| Column(s) | Blank when |
+|---|---|
+| `bjorken_x`, `w_gev`, `w_true_gev` | coherent events (no struck nucleon to define them against) |
+| `bjorken_x` | additionally, energy transfer ν ≤ 0 (it divides by ν; the W columns do not, so a slightly sub-nucleon W is kept) |
+| `w_true_gev` | additionally, the generator supplied no struck system |
+| `w_gev`, `w_true_gev` | `W² < 0` |
+| `lepton_costheta` | lepton momentum is zero |
+| directional variables | beam momentum is zero |
+| the whole block | no outgoing lepton (NuWro's `e/out` can be empty) or non-finite four-vectors |
 
 ## Final-state content
 
 Fifteen columns summarize the particles that leave the nucleus, derived by one
 shared function, `final_state.summarize_final_state`, from each generator's
-post-FSI particle list: `n_proton`, `n_neutron`, `n_pi_plus`, `n_pi_minus`,
-`n_pi_zero`, `n_other_mesons`, `hadronic_energy_gev` (Σ E),
-`hadronic_kinetic_energy_gev` (Σ (E − m)); the kinetic energy and beam angle of
-the leading charged pion (`leading_pi_charged_kinetic_energy_gev`,
-`leading_pi_charged_costheta`) and of the leading π⁰
-(`leading_pi_zero_kinetic_energy_gev`, `leading_pi_zero_costheta`); and the
-kinetic energy, beam angle and lepton opening angle of the leading proton,
-`leading_proton_kinetic_energy_gev`, `leading_proton_costheta` and
-`leading_proton_lepton_costheta`. A sixteenth, `native_interaction_code`,
-carries the generator's own channel code.
+post-FSI particle list:
 
-**Summaries, not particle lists.** The common format is strictly rectangular —
-one 1-D dataset per column (see `common_output.py`). Multiplicities, energy sums
-and the leading particles are what selections such as CC0π, CC1π⁺ or a
-hadronic-energy threshold are made on, and they fit the format as it stands. They
-are enough to apply MINERvA's CC1π⁺ signal definition at the generator level —
-one π⁺, no other meson, W_exp < 1.4 GeV (`w_gev`, whose formula is the paper's
-Eqs. 1–3), 1.5 < p_μ < 20 GeV, θ_μ < 20°, T_π < 350 MeV (Granados 2026,
-arXiv:2605.24224, §5) — and MicroBooNE's νe CC0π one, whose 1eNp0π / 1e0p0π split
-is a cut at 50 MeV on the leading proton's T, whose charged-pion veto
-(T_π± < 40 MeV, no π⁰) is `n_pi_zero == 0` plus a cut on the leading charged
-pion's T, and whose five unfolded variables are E_e, cos θ_e, T_p, cos θ_p and
-cos θ_ep (MicroBooNE 2026, arXiv:2603.13593, §3.2) — and NOvA's ν̄_μ CCπ⁰ one,
-at least one π⁰ with 0.5 ≤ p_μ < 2.5 GeV and θ_μ < 60°, unfolded in p_π⁰, θ_π⁰,
-p_μ, θ_μ, Q² and W_EXP (`w_gev` again, Eq. 3) (NOvA 2025, arXiv:2511.05807, §2,
-§3.4). Comparing to MicroBooNE's Wiener-SVD unfolded results additionally takes
-the paper's published A_c regularization matrices, applied to the binned
-prediction.
+- counts: `n_proton`, `n_neutron`, `n_pi_plus`, `n_pi_minus`, `n_pi_zero`,
+  `n_other_mesons`;
+- energy sums: `hadronic_energy_gev` (Σ E), `hadronic_kinetic_energy_gev`
+  (Σ (E − m));
+- the leading charged pion: `leading_pi_charged_kinetic_energy_gev`,
+  `leading_pi_charged_costheta`;
+- the leading π⁰: `leading_pi_zero_kinetic_energy_gev`, `leading_pi_zero_costheta`;
+- the leading proton: `leading_proton_kinetic_energy_gev`,
+  `leading_proton_costheta`, `leading_proton_lepton_costheta`.
+
+A sixteenth, `native_interaction_code`, carries the generator's own channel code.
+
+**Summaries, not particle lists.** The common format is strictly rectangular, one
+1-D dataset per column (see `common_output.py`). Multiplicities, energy sums and
+leading particles are what generator-level signal definitions are made of. They
+suffice, for example, for MINERvA's CC1π⁺ (Granados 2026, arXiv:2605.24224, §5),
+MicroBooNE's νe CC0π with its 1eNp0π / 1e0p0π split (arXiv:2603.13593, §3.2), and
+NOvA's ν̄_μ CCπ⁰ (arXiv:2511.05807, §2, §3.4), where W_exp is `w_gev`.
+Comparing to MicroBooNE's Wiener-SVD unfolded results additionally takes the
+paper's published A_c regularization matrices, applied to the binned prediction.
 
 ### The particle list is post-FSI, and FSI is on in every generator
 
 | Generator | List read | FSI switch |
 |---|---|---|
-| GENIE | `gst` `pdgf`/`Ef`/`pxf`/`pyf`/`pzf` (the `f` family; `i` is pre-FSI) | the tune's `HadronTransp-Enable` / `HadronTransp-Model` in `config/<tune>/ModelConfiguration.xml`; the framework does not override it, and all 33 tunes in the R-3_06_00 source tree set it `true` |
-| NuWro | `e/post` ("particles leaving the nucleus"), not `e/out` | `FSI_on = 1`, pinned in `params.txt`; also NuWro's default (`params_all.h`, nuwro_25.11). With it off, NuWro copies `e/out` into `e/post` |
-| NEUT | the `NeutVect` particles with `fIsAlive && fStatus == 0`, selected in `nf_flatten.C` | `NEUT-NEFF 0` (pion FSI) and `NUCRES-RESCAT 1` (nucleon rescattering), pinned in the card; both are NEUT's defaults per `necard.h` and the shipped `neut_5.4.0_*` cards |
-| GiBUU | the perturbative particles `write_pert` writes after transport, minus the nucleons still bound in the nucleus (see below) | `numTimeSteps = 150`, `delta_T = 0.2` fm (30 fm) — see [generators/gibuu.md](generators/gibuu.md#final-state-interactions-are-switched-on) |
+| GENIE | `gst` `pdgf`/`Ef`/`pxf`/`pyf`/`pzf` (the `f` family; `i` is pre-FSI) | the tune's own hadron-transport setting; not overridden ([genie.md](generators/genie.md#tunes-config_version)) |
+| NuWro | `e/post` ("particles leaving the nucleus"), not `e/out` | `FSI_on = 1`, pinned ([nuwro.md](generators/nuwro.md#run-stage-and-paramstxt)) |
+| NEUT | the `NeutVect` particles with `fIsAlive && fStatus == 0` | `NEUT-NEFF 0`, `NUCRES-RESCAT 1`, pinned ([neut.md](generators/neut.md#flattening-nf_flattenc)) |
+| GiBUU | the perturbative particles after transport, minus nucleons still bound in the nucleus | 150 × 0.2 fm of transport ([gibuu.md](generators/gibuu.md#fsi-transport)) |
 
-NEUT's array is filtered on its own flags rather than by index because it also
-holds the initial-state nucleons (status −1) and particles killed or replaced
-during the cascade.
-
-**GiBUU's list needs one more step, because it is a snapshot rather than a list
-of escaped particles.** At the end of transport some nucleons are still inside
-the mean-field potential, which GiBUU folds into their energy, so their
-four-vectors are off shell. On a 3435-event numu CC Ar40 run, 25% of the listed
-nucleons had `E < m_N` and sat inside the nucleus (median radius 3.7 fm): bound,
-and never leaving it. Another 12% were unbound but still inside (four-vector mass
-~0.90 GeV). Escaped nucleons come out exactly on shell at GiBUU's single nucleon
-mass, 0.938 GeV. The normalizer (`normalizers/gibuu._leave_nucleus`) therefore
-drops nucleons with `E < m_N`, which is GiBUU's own
-`neutrinoAnalysis/IsBound` test (kinetic energy plus potential below zero). It
-puts the remaining nucleons on shell at their energy, which a static potential
-conserves on the way out, so their kinetic energy is the asymptotic `E − m_N`.
-GENIE's, NuWro's and NEUT's final-state nucleons and pions are all exactly on
-shell at their vacuum masses in the same run, and none has `E < m`.
+GiBUU's list is a snapshot at the end of transport rather than a list of escaped
+particles. Its normalizer drops nucleons that are still bound and puts the rest
+on shell ([gibuu.md](generators/gibuu.md#the-particle-list-is-a-snapshot)). The
+other three generators' final-state nucleons and pions are on shell at their
+vacuum masses.
 
 ### Conventions
 
@@ -612,40 +465,34 @@ one from NuWro means:
   ω, charmed mesons and excited states, and no baryon, lepton, photon or nucleus.
 * **The leading charged pion, the leading π⁰ and the leading proton are each
   the highest-kinetic-energy particle of their species.** Charged and neutral
-  pions lead separately because selections treat them separately: a CCNπ⁰
-  signal admits charged pions, and in 11–26% of π⁰ events (by generator, in the
-  runs below) a charged pion carries more kinetic energy than the leading π⁰, so
-  one leading pion of either charge would describe the wrong particle. All
-  `*_costheta` columns are measured against the event's own incoming-neutrino
-  three-momentum, the same axis as `lepton_costheta`;
+  pions lead separately because selections treat them separately: in 11–26% of
+  π⁰ events (by generator) a charged pion carries more kinetic energy than the
+  leading π⁰. All `*_costheta` columns are measured against the event's own
+  incoming-neutrino three-momentum, the same axis as `lepton_costheta`;
   `leading_proton_lepton_costheta` against the outgoing lepton's. It cannot be
   rebuilt from the two beam angles, which lack the azimuth between the proton
   and the lepton.
 * **"Hadronic" means non-leptonic**: every particle except `|pdg|` in 11..16.
-  Photons and kaons therefore count toward the energy sums — a slight abuse of
+  Photons and kaons therefore count toward the energy sums, a slight abuse of
   the name, chosen over silently dropping species that carry energy out of the
-  interaction. Any outgoing lepton in a generator's list is excluded by this
-  rule; it has its own columns.
+  interaction.
 * **Nuclear remnants are excluded** (`|pdg| > 1e9`, the `10LZZZAAAI` ion codes).
   GENIE's list carries the residual nucleus, whose rest mass (~37 GeV for argon)
   would otherwise dominate `hadronic_energy_gev`.
-* **Mass from the four-vector**, `m = sqrt(E² − |p|²)`, never a lookup table.
-  All four generators supply full four-vectors, so a table would only add a way
-  to disagree with the generator about what it produced. The one exception is
-  GiBUU's in-medium nucleons, put on shell at GiBUU's own `m_N` as described
-  above.
+* **Mass from the four-vector**, `m = sqrt(E² − |p|²)`, never a lookup table, so
+  the summary cannot disagree with the generator about what it produced. The one
+  exception is GiBUU's in-medium nucleons, put on shell at GiBUU's own `m_N`.
 * `hadronic_kinetic_energy_gev` is **not** the energy transfer ν. It runs ~85% of
   ν on average and exceeds it for a minority of events, because FSI-ejected
   nucleons carry Fermi motion that did not come from the neutrino. Nor is it
   GENIE's `sumKEf`.
 
-**Placeholders.** The counts default to `-1` and the energies to `-1.0`, both
-unmistakably "not available"; an event with nothing hadronic out is a real zero.
-The leading-particle columns are the exception: an event without a pion (or
-proton) has no leading one, so it keeps `-1.0` for the kinetic energy and
-`-999.0` for the cosines (−1 is a physical cosine), as does a particle at rest,
-or an event without a lepton momentum, for the angle that needs it. Stub
-mode leaves every column at its placeholder.
+**Placeholders.** The counts default to `-1` and the energies to `-1.0`; an event
+with nothing hadronic out is a real zero. An event without a pion (or proton) has
+no leading one, so it keeps `-1.0` for the kinetic energy and `-999.0` for the
+cosines (−1 is a physical cosine), as does a particle at rest, or an event
+without a lepton momentum, for the angle that needs it. Stub mode leaves every
+column at its placeholder.
 
 ### `native_interaction_code` is the one non-universal column
 
@@ -655,7 +502,7 @@ recovered without the raw files, and nothing in the framework interprets it.
 | Generator | Source | Notes |
 | --- | --- | --- |
 | `genie` | `gst` branch `neut_code` | GENIE has no native integer of its own in `gst`; `gntpc` re-encodes its scattering type into NEUT's mode scheme |
-| `neut` | `mode` | signed — negative for antineutrino channels |
+| `neut` | `mode` | signed: negative for antineutrino channels |
 | `gibuu` | `evType` | 1 = QE, 2..31 resonances, 32/33/37 background, 34 = DIS, 35/36 = 2p2h |
 | `nuwro` | `e/dyn` | distinguishes the CC and NC variant of each dynamics |
 
@@ -663,19 +510,231 @@ Its placeholder is `-2**31`: not `0`, because NuWro's `dyn = 0` is CC
 quasi-elastic, and not a small negative number, because NEUT negates its mode
 for antineutrinos.
 
-### Verification
+## Weighted statistics and weight efficiency
 
-**With FSI on (2026-10-05).** numu CC on Ar40, E^-2 power law over 0.5–5 GeV,
-local Docker: 2000 events each from GENIE (G18_10a_02_11b), NuWro and NEUT, and
-a 4000-ensemble GiBUU run giving 3435 events. FSI demonstrably ran in each: GENIE's
-`gst` has a post-FSI list differing from the pre-FSI one (`ni` ≠ `nf`) in 70% of
-events; NuWro's `e/post` differs from `e/out` in 47%; 1251 of 2000 NEUT events
-carry FSI status codes (3 = absorbed, 7 = cascade products, …); and GiBUU's
-particles per event rose from 1.87 without transport to 4.57 with it, on the same
-seed. The GENIE multiplicities agree *exactly*, event by event, with `gst`'s own
-independently filled `nfp`, `nfn`, `nfpip`, `nfpim` and `nfpi0`, and
-`hadronic_kinetic_energy_gev ≤ hadronic_energy_gev` holds for every event in all
-four. Per quasi-elastic event, after the GiBUU bound-nucleon step:
+`analyze-kinematics` (`kinematics_report.py`) reports every mean and median
+**weighted by `xsec_weight`**, never raw. Unweighted event distributions are not
+the physical ones for a cross-section-weighted generator, and the failure is
+silent: a 100k-event GiBUU run reports a healthy-looking quasi-elastic sample
+whose effective size is 35 events.
+
+It therefore prints a weight-efficiency table alongside: Kish
+`n_eff = (Σw)² / Σw²` per interaction channel, plus the share of weight in the
+heaviest 1% of events. The efficiency is computed on `|w|` so GiBUU's negative
+interference weights cannot cancel into a meaningless ratio, while `Σw` is
+reported signed. **Negative weights are physical and must be summed as they
+are.** For GiBUU channel statistics, quote bootstrap intervals rather than point
+estimates, and check the efficiency table before trusting a number.
+
+Placeholders are excluded per variable and counted, so `bjorken_x` for a coherent
+selection reports "0 used, 127 blank" rather than silently averaging in `-1`.
+The weighted quantile uses the **midpoint convention**: cumulative weight
+evaluated at the centre of each point's weight, not its upper edge. The naive
+cumulative sum biases the median low by half a bin.
+
+## Reweight universes
+
+A **universe** is one setting of a generator's physics parameters, drawn from
+independent Gaussian priors. For an event *i* and universe *k*,
+`events/universe_weights[i, k]` is the ratio of the differential cross section
+under universe *k* to the one under the generation's own parameters (the
+central values), both evaluated at the event's stored kinematics. A universe's
+cross section in a bin is therefore `Σ xsec_weight · universe_weights[:, k]` over
+the bin. The weights are ratios, so merging chunks concatenates them and never
+averages or rescales them.
+
+NuWro and GENIE support them; NEUT and GiBUU do not. The configuration schema is
+in [configuration.md](configuration.md#reweight-universes-and-variations). What
+each generator can reweight is listed in
+[generators/nuwro.md](generators/nuwro.md#reweight-universes) and
+[generators/genie.md](generators/genie.md#reweight-universes-and-variations).
+The sampling below is the same for both; only the parameter tables and the
+binary that computes the ratios differ.
+
+**Sampling.** Each parameter has `z ~ N(0, 1)`, drawn from its own stream seeded
+by `(universes.seed, crc32(name))`. Adding a parameter therefore leaves the
+others' throws unchanged, and a larger `count` extends the existing universes
+instead of redrawing them. The seed is explicit, never derived from the run seed
+or the job label, so universe *k* means the same parameter values in every job
+that uses it. That shared meaning is what makes bin-to-bin correlations
+*between* jobs (targets, flavours, fluxes) estimable. The value depends on the
+parameter's flag:
+
+| Mode | Value in universe *k* | What `sigma` is |
+|---|---|---|
+| linear (default) | `central + sigma·z` | Absolute error, in the units of `central` |
+| `log: true` | `central · exp(sigma·z)` | Standard deviation of `ln(value)`; for small sigma about the fractional error (0.15 → roughly ±15 %) |
+
+A linear throw at or below zero for a physically positive parameter is an
+error, not clipped. In log mode the median is `central`, every value is
+positive, and `ln(value/central) = sigma·z` exactly, so a covariance for such a
+parameter can be formed in log space, which avoids Peelle's Pertinent Puzzle.
+
+**What `central` means is per generator.**
+
+| Generator | `central` | `sigma` |
+|---|---|---|
+| NuWro, physics parameters | the generation's own value, read from the output, in NuWro units | absolute in linear mode (MeV for an axial mass, not a fraction) |
+| NuWro, channel norms | 1 | fractional |
+| GENIE | 1: every dial is a scale on the generation tune's own value | fractional in either mode: linear gives `1 + sigma·z`, log gives `exp(sigma·z)` |
+
+Either way the spread is exactly the configured `sigma`. Neither generator's
+built-in uncertainty table enters the throws. Those tables are a starting point
+for choosing `sigma`, listed per parameter in
+[generators/genie.md](generators/genie.md#supported-dials) and
+[generators/nuwro.md](generators/nuwro.md#supported-parameters).
+
+The `universes` metadata stores everything needed to rebuild or extend the
+throws: the seed, the count, each parameter's central value, sigma, log flag
+and optional source, the `z` throws, and the values.
+
+**Variations.** Some knobs are not parameters with an uncertainty but switches
+between two models, interpolated on [0, 1]. Examples are GENIE's `RPA_CCQE`
+(RPA on → off) and `DecayAngMEC` (isotropic → 3 cos²θ). A Gaussian throw has no
+meaning for them. Each is therefore stored as one deterministic column of
+`events/variation_weights`: that knob at its configured value, everything else
+nominal. The `variations` metadata gives the column order, each value, and what
+0 and 1 mean. Such a column is a model alternative to compare against, or to
+add as a separate one-sided systematic. It is never a universe, and folding it
+into the universe covariance would treat a two-point model choice as if it
+were Gaussian.
+
+**What the spread means.**
+
+- The covariance from `count` universes has rank at most `count − 1`, so it
+  cannot be inverted for more bins than that.
+- Its correlation coefficients carry a statistical precision of roughly
+  `1/√count`.
+- Every universe reweights the same events, so the universe covariance holds
+  almost no MC statistical noise. The central sample's own statistical
+  covariance, from `Σ xsec_weight²` per bin, must be added separately.
+- The spread covers only the parameters that can be reweighted, so it is a lower
+  bound on the generator's model uncertainty.
+
+## Design notes
+
+### `xsec_norm_count` has no default
+
+`ConfigTranslator.xsec_norm_count` is abstract rather than defaulting to
+`len(events)` so that the GiBUU case, where `D` is the number of runs, cannot be
+got wrong silently (`translators/base.py:40-61`).
+
+### The taxonomy is pinned to GENIE
+
+Some reference is needed for labels to mean the same across generators. GENIE is
+the reference because its gst flags already name the five categories, and NuWro
+uses the same names. Keeping the coarse GENIE categories, even where another
+generator can make a finer distinction (GiBUU's own NuHepMC exporter separates
+SIS from DIS), keeps cross-generator comparability.
+
+### `resonant_primary` instead of relabelling
+
+Moving NuWro's non-resonant `res` events into `dis` would make one generator's
+`interaction` column mean something different from the others', which is the
+property the column exists to guarantee. It could not be done for NEUT at all, so
+it would trade a visible inconsistency for a hidden partial one. The mechanism is
+therefore a separate column. Dated entry:
+[design_decisions.md](design_decisions.md#resonant_primary-as-a-column-rather-than-relabelling-nuwros-res-2026-08-05).
+
+### Kinematics are recomputed, not read
+
+GENIE's `gst` tree already precomputes `Q2`, `x`, `y` and `cthl`. They are
+recomputed from the four-vectors for every generator anyway, because the promise
+of the common format is that a Q² histogram from GENIE means exactly the same
+thing as one from GiBUU, which only holds if one formula produces all of them.
+GENIE also ships *two* variants (`Q2`/`x`/`y` and `Q2s`/`xs`/`ys`), so "use the
+native branch" is not even unambiguous within one generator.
+`tests/test_genie_normalizer.py` pins these definitions against GENIE's own
+branches for a reference scatter.
+
+### A fixed nucleon mass for `bjorken_x` and `w_gev`
+
+All four generators expose the hit nucleon, but each with its own off-shell and
+binding treatment. A fixed mass makes `bjorken_x` and `w_gev` identically defined
+everywhere; `w_true_gev` is the column that carries the per-event system.
+
+## Validation
+
+Measurements backing the conventions above. Unless stated otherwise the samples
+are numu CC on C12 with a γ = −2 power-law flux over 0.5–5 GeV.
+
+### Chunk merging
+
+Before the fix, a 2-chunk NEUT run reported 2.06× the cross section of its
+correct single-chunk equivalent. After it (local Docker, same physics at
+different chunk counts):
+
+| Generator | Events | 1 chunk | 2 chunks | 4 chunks |
+|---|---|---|---|---|
+| NEUT (vs its own evtrt/flux per bin) | 4000 | 1.015 | 1.018 | 1.011 |
+| GiBUU (relative to 1 chunk) | 40000 | 1.000 | 0.929 | 1.005 |
+| NuWro (relative to 1 chunk) | 4000 | 1.000 | 0.956 | — |
+
+The residual spread is Monte-Carlo noise. GiBUU needs the larger sample because
+its weights are heavy-tailed: in a 1000-event run a single event carried 72% of
+one chunk's total.
+
+### Weak current
+
+Local Docker, numu on C12; 400 events for GENIE, 2000 for the rest:
+
+| Generator | CC fraction, `cc` run | `nc` run | `inclusive` run | NC share of σ, inclusive |
+|---|---|---|---|---|
+| GENIE | 1.000 | 0.000 | 0.750 | 0.204 |
+| NuWro | 1.000 | 0.000 | 0.744 | 0.278 |
+| NEUT | 1.000 | 0.000 | 0.735 | 0.261 |
+| GiBUU | 1.000 | 0.000 | 0.449 | 0.308 |
+
+GiBUU's inclusive *event* fraction is near half because it samples phase space;
+its NC share of σ is the number to compare. The exact reference is GENIE's
+spline decomposition: the staged numu/C12 splines filtered on `Weak[CC]` and
+`Weak[NC]` give 1.03736 and 0.39137, an NC share of 0.274, and their sum
+reproduces the unfiltered total to all six printed digits.
+
+### Derived kinematics (2026-07-28)
+
+20k-event GENIE, NuWro and NEUT runs plus an 83k-event GiBUU run pass the
+structural invariants event by event: Q² ≥ 0, exact energy-transfer closure,
+|cos θ| ≤ 1, p_∥² + p_T² = |p|², coherent events blanked and only those. The
+cross-section-weighted distributions agree. Quasi-elastic Bjorken-x peaks at
+0.75–0.85 (weighted medians 0.825 GENIE, 0.815 NuWro, 0.825 NEUT, 0.809 GiBUU
+with bootstrap CI [0.797, 0.851]): a broad peak below 1, because Fermi motion and
+binding smear it and the fixed `M_N` does not absorb that.
+
+### The two W columns (2026-08-05)
+
+20k-event GENIE, NuWro and NEUT runs plus a 16.6k-event GiBUU run; figures from
+`scripts/plot_w_validation.py`.
+
+- **Against GENIE's own branches.** `w_gev` reproduces gst `W` (the same
+  lepton-only formula) to 5.1e-8 GeV over 19 862 events. `w_true_gev` reproduces
+  gst `Ws`, GENIE's selected W, to 2.2e-13 GeV over the 18 251 non-MEC events.
+  MEC events differ by design: `Ws` is not the pair mass. On MEC, gst `W` and
+  `w_gev` both have median 1.161; gst `Ws` 2.184 and `w_true_gev` 2.183.
+- **Blanking.** GENIE blanks `w_true_gev` for 138 of 20 000 events: the 136
+  coherent events (exactly the `hitnuc == 0` set) and 2 genuine negative-`W²`
+  events. NuWro blanks 131, NEUT 105, GiBUU none.
+- **Thresholds the code was never told about.** NEUT modes 21/41: all 2770 events
+  inside [1.301, 2.000] GeV, NEUT's own 1.3 < W < 2.0 window. GENIE `res` ends
+  1.2e-4 GeV below the tune's `Wcut`
+  ([genie.md](generators/genie.md#wcut-is-a-sharp-cut-on-w_true_gev)). NuWro
+  `res`/`dis` split exactly at `res_dis_cut`
+  ([nuwro.md](generators/nuwro.md#w_true_gev-reproduces-res_dis_cut)).
+- **MEC is a pair mass.** 100% of MEC `w_true_gev` lies above 2 `M_N`, 0% of MEC
+  `w_gev` does. MEC `w_true_gev` minima: 1.928 (GENIE), 1.908 (NEUT), 1.877
+  (NuWro) GeV; medians 2.18–2.25 GeV. MEC `w_gev` medians 0.99–1.18 in all four.
+- **NEUT's `n_nuc`** is 1 for 18 365 events, 2 for 1531 (all of them mode 2) and
+  0 for 104, confirming the 2p2h layout the flattener assumes.
+
+### Final-state content
+
+**With FSI on (2026-10-05).** numu CC on Ar40, local Docker: 2000 events each
+from GENIE (G18_10a_02_11b), NuWro and NEUT, and 3435 GiBUU events. FSI
+demonstrably ran in each: GENIE's pre- and post-FSI lists differ in 70% of
+events, NuWro's `e/post` differs from `e/out` in 47%, 1251 of 2000 NEUT events
+carry FSI status codes, and GiBUU's particles per event rose from 1.87 to 4.57
+with transport. The GENIE multiplicities agree *exactly*, event by event, with
+`gst`'s own `nfp`, `nfn`, `nfpip`, `nfpim` and `nfpi0`. Per quasi-elastic event:
 
 | | GENIE | NuWro | NEUT | GiBUU |
 |---|---|---|---|---|
@@ -685,51 +744,23 @@ four. Per quasi-elastic event, after the GiBUU bound-nucleon step:
 | no nucleon out | 0.3% | 2.2% | 0% | 9.1% |
 
 The spread is model physics: GENIE's hA cascade knocks out the most nucleons,
-and GiBUU's potential captures the most slow ones. Without the bound-nucleon
-step GiBUU would have read 1.37 protons and 0.63 neutrons, and no QE event would
-have lost its nucleon.
+and GiBUU's potential captures the most slow ones.
 
-**Other mesons and the leading particles (2026-10-06), on the same four runs.**
-The leading charged-pion and π⁰ columns are set exactly for the events with
-`n_pi_plus + n_pi_minus > 0` and `n_pi_zero > 0` respectively in every
-generator, `cos θ` stays within [−1, 1], and the leading T never exceeds
-`hadronic_kinetic_energy_gev`. An independent per-event loop over GENIE's `gst`
-(`Ef − m_π` at the PDG mass, direction against `p*v`) reproduces them to
-3.4 × 10⁻⁶ GeV and 3 × 10⁻¹⁶ in its 636 charged-pion and 414 π⁰ events. The π⁰
-events that also hold a harder charged pion number 108/414 (GENIE), 68/327
-(NuWro), 72/341 (NEUT) and 33/300 (GiBUU). `n_other_mesons` equals
-`gst`'s own kaon counters `nfkp + nfkm + nfk0` in all 2000 events (24 have a
-kaon, none another meson). Events with a non-pion meson: GENIE 1.2%, NuWro 1.2%,
-NEUT 3.8%, GiBUU 0.3%. The leading-proton columns are likewise set exactly for
-the events with `n_proton > 0`, and an independent per-event loop over GENIE's
-`gst` (`pdgf`/`Ef`/`p*f` against `p*v` and `p*l`) reproduces all three to
-2 × 10⁻⁶ GeV and 4 × 10⁻¹⁶ in 1863 events. Fraction of events with a proton
-above MicroBooNE's 50 MeV visibility threshold: GENIE 0.78, NuWro 0.77, NEUT
-0.80, GiBUU 0.65, in line with GiBUU's lower QE proton multiplicity above
-(median leading-proton T 0.114 GeV against 0.160–0.177 GeV for the other three).
+**Leading particles and other mesons (2026-10-06), same runs.** An independent
+per-event loop over GENIE's `gst` reproduces the leading charged-pion, π⁰ and
+proton columns to ≤ 3.4 × 10⁻⁶ GeV. `n_other_mesons` equals `gst`'s kaon
+counters in all 2000 events. Events with a non-pion meson: GENIE 1.2%, NuWro
+1.2%, NEUT 3.8%, GiBUU 0.3%. Fraction of events with a proton above MicroBooNE's
+50 MeV threshold: GENIE 0.78, NuWro 0.77, NEUT 0.80, GiBUU 0.65.
 
 **Before FSI was enabled in GiBUU (2026-07-30).** 300-event Docker runs of all
-four generators. The GENIE multiplicities and `native_interaction_code` agreed
-exactly with `gst`'s `nfp`/`nfn`/`nfpip`/`nfpim`/`nfpi0`/`neut_code`, and NuWro's
-`dyn` maps one-to-one onto the common labels (0→qel, 2→res, 4→dis, 6→coh,
-8→mec).
+four generators: the GENIE multiplicities and `native_interaction_code` agreed
+exactly with `gst`, and NuWro's `dyn` maps one-to-one onto the common labels
+(0→qel, 2→res, 4→dis, 6→coh, 8→mec).
 
-## Weighted statistics and weight efficiency
+## Open questions
 
-`analyze-kinematics` (`kinematics_report.py`) reports every mean and median
-**weighted by `xsec_weight`**, never raw. Unweighted event distributions are
-simply not the physical ones for a cross-section-weighted generator, and the
-failure is silent: a 100k-event GiBUU run reports a perfectly healthy-looking
-quasi-elastic sample whose effective size is 35 events.
-
-It therefore prints a weight-efficiency table alongside — Kish
-`n_eff = (Σw)² / Σw²` per interaction channel, plus the share of weight in the
-heaviest 1% of events. The efficiency is computed on `|w|` so GiBUU's negative
-interference weights cannot cancel into a meaningless ratio, while `Σw` is
-reported signed.
-
-Placeholders are excluded per variable and counted, so `bjorken_x` for a coherent
-selection reports "0 used, 127 blank" rather than silently averaging in `-1`.
-The weighted quantile uses the **midpoint convention** — cumulative weight
-evaluated at the centre of each point's weight, not its upper edge; the naive
-cumulative sum biases the median low by half a bin.
+- **NEUT's and GiBUU's QE vertex offsets** (+53 MeV and −43 MeV in `w_true_gev`)
+  have not been traced to their binding treatments. That NEUT is the only
+  generator storing an on-shell nucleon and has the only upward offset is
+  suggestive but not established.

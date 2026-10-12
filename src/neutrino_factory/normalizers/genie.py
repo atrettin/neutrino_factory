@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .. import universes
 from ..common_output import version_metadata, write_common_hdf5
 from ..final_state import (
     NATIVE_CODE_FIELD,
@@ -241,4 +242,22 @@ class GenieNormalizer(OutputNormalizer):
             event.update(event_fields(final_state, i))
             events.append(event)
 
-        return write_common_hdf5(out_path, metadata, events)
+        universe_weights = variation_weights = None
+        if translated.get("universes") or translated.get("variations"):
+            resolved = universes.read_resolved(root_path.parent)
+            # gntpc writes one gst entry per GHEP entry, in order, so the
+            # reweighter's rows line up with these events.
+            universe_weights, variation_weights = universes.load_weights(
+                root_path.parent, resolved, len(events)
+            )
+            for key in ("universes", "variations"):
+                if resolved.get(key):
+                    metadata[key] = resolved[key]
+
+        return write_common_hdf5(
+            out_path,
+            metadata,
+            events,
+            universe_weights=universe_weights,
+            variation_weights=variation_weights,
+        )
