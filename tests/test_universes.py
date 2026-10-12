@@ -362,11 +362,12 @@ class GenieValidationTests(unittest.TestCase):
             }
             found = {}
             for path in sorted(config_dir.glob("*/ModelConfiguration.xml")):
-                models = {
-                    keys[p.get("name")]: (p.text or "").strip().removeprefix("genie::")
-                    for p in ET.parse(path).getroot().iter("param")
-                    if p.get("name") in keys
-                }
+                models = {}
+                for p in ET.parse(path).getroot().iter("param"):
+                    name = p.get("name")
+                    if name is None or name not in keys:
+                        continue
+                    models[keys[name]] = (p.text or "").strip().removeprefix("genie::")
                 if len(models) == len(keys):
                     found[path.parent.name] = universes.GenieModels(**models)
             self.assertEqual(found, by_cmc)
