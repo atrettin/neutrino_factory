@@ -224,7 +224,9 @@ genie:
   default 1) with every other dial at nominal. They never enter the universes.
 - **Allowed names** are listed in
   [generators/nuwro.md](generators/nuwro.md#supported-parameters) and
-  [generators/genie.md](generators/genie.md#supported-dials).
+  [generators/genie.md](generators/genie.md#supported-dials). Every GENIE dial,
+  at GENIE's default 1σ and with its incompatibilities as comments, is in
+  `configs/schema/genie_dials.yaml`, ready to copy into a job.
   Known-broken parameters fail validation with the reason. A switch listed under
   `universes`, or a Gaussian dial under `variations`, is refused. GENIE also
   refuses dial combinations that select incompatible engine modes (`MaCCQE`
@@ -234,8 +236,11 @@ genie:
   that cannot work under the tune's models, for example an FSI dial under hN2018
   or `MaCCQE` under a z-expansion form factor. It also refuses universes on a
   code version without `nf_genie_reweight`. A dial whose model differs from the
-  one it was checked under only logs a warning, once per tune and dial. The
-  rules are in [generators/genie.md](generators/genie.md#which-dials-a-tune-allows).
+  one it was checked under only logs a warning, once per tune and dial. So does
+  a non-resonant background dial that cannot act on the job's probe or current
+  (e.g. `NonRESBGvbarpCC1pi` on a numu job), once per flavor and current, so
+  one block can serve every flavor. The rules are in
+  [generators/genie.md](generators/genie.md#which-dials-a-tune-allows).
 - **Not part of the job label.** Two jobs that differ only in their universes
   need distinct `name:`s, otherwise they collide.
 

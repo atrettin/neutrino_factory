@@ -178,23 +178,34 @@ Stage: builder
     # Same as the Dockerfile's step: build Reweight in place against $GENIE, link
     # the driver with grwght1p's Makefile rule, and copy the libraries and the
     # binary into $GENIE/lib and $GENIE/bin so the payload wrapper needs no extra
-    # paths.
-    export GENIE_REWEIGHT=/opt/genie-reweight
-    export LD_LIBRARY_PATH="/opt/genie/lib:${LD_LIBRARY_PATH}"
-    git clone --depth 1 --branch "{{ GENIE_REWEIGHT_TAG }}" \
-        https://github.com/GENIE-MC/Reweight.git /opt/genie-reweight
-    cd /opt/genie-reweight
-    make
-    cp /opt/nf-src/nf_genie_reweight.cc src/Apps/nf_genie_reweight.cxx
-    cd src/Apps
-    sed -n '/^\$(GENIE_REWEIGHT_BIN_PATH)\/grwght1p:/,/\$(LD)/p' Makefile \
-        | sed 's#grwght1p#nf_genie_reweight#g; s#gRwght1Param#nf_genie_reweight#g' >> Makefile
-    make /opt/genie-reweight/bin/nf_genie_reweight
-    cp -a /opt/genie-reweight/lib/. /opt/genie/lib/
-    cp -a /opt/genie-reweight/src/RwFramework /opt/genie-reweight/src/RwCalculators \
-      /opt/genie-reweight/src/RwIO /opt/genie/src/
-    cp /opt/genie-reweight/bin/nf_genie_reweight /opt/genie/bin/
-    test -x /opt/genie/bin/nf_genie_reweight
+    # paths. Only for the Generator tags GENIE_REWEIGHT_TAG builds against:
+    # Reweight R-1_04_02 goes with R-3_06_00 and fails to compile against
+    # R-3_04_00. Other tags get a payload without nf_genie_reweight; the final
+    # stage keys off the binary's presence, and validate-config refuses
+    # universes on them (GENIE_TUNE_MODELS in src/neutrino_factory/universes.py).
+    case "{{ GENIE_TAG }}" in
+    R-3_06_00)
+        export GENIE_REWEIGHT=/opt/genie-reweight
+        export LD_LIBRARY_PATH="/opt/genie/lib:${LD_LIBRARY_PATH}"
+        git clone --depth 1 --branch "{{ GENIE_REWEIGHT_TAG }}" \
+            https://github.com/GENIE-MC/Reweight.git /opt/genie-reweight
+        cd /opt/genie-reweight
+        make
+        cp /opt/nf-src/nf_genie_reweight.cc src/Apps/nf_genie_reweight.cxx
+        cd src/Apps
+        sed -n '/^\$(GENIE_REWEIGHT_BIN_PATH)\/grwght1p:/,/\$(LD)/p' Makefile \
+            | sed 's#grwght1p#nf_genie_reweight#g; s#gRwght1Param#nf_genie_reweight#g' >> Makefile
+        make /opt/genie-reweight/bin/nf_genie_reweight
+        cp -a /opt/genie-reweight/lib/. /opt/genie/lib/
+        cp -a /opt/genie-reweight/src/RwFramework /opt/genie-reweight/src/RwCalculators \
+          /opt/genie-reweight/src/RwIO /opt/genie/src/
+        cp /opt/genie-reweight/bin/nf_genie_reweight /opt/genie/bin/
+        test -x /opt/genie/bin/nf_genie_reweight
+        ;;
+    *)
+        echo "GENIE {{ GENIE_TAG }}: no compatible GENIE Reweight; building without nf_genie_reweight"
+        ;;
+    esac
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 Bootstrap: docker
@@ -240,7 +251,12 @@ Stage: final
     # per-generator wrapper in nf-base.def). The wrapper locates its own payload
     # root at run time, so its text is version-independent, and dispatches on its
     # own basename so one body serves gevgen, gntpc and nf_genie_reweight.
-    for gbin in gevgen gntpc nf_genie_reweight; do
+    # nf_genie_reweight exists only for the tags the builder built Reweight for.
+    BINARIES="gevgen gntpc"
+    if [ -x "$PREFIX/genie/bin/nf_genie_reweight" ]; then
+        BINARIES="$BINARIES nf_genie_reweight"
+    fi
+    for gbin in $BINARIES; do
     cat > "$PREFIX/bin/$gbin" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -258,8 +274,9 @@ EOF
 
     # Descriptor consumed by the generic composition/verification in
     # build_apptainer_images.sh (no per-generator knowledge in the script).
+    BINARIES_JSON="$(printf '"%s",' $BINARIES)"
     cat > "$PREFIX/nf-payload.json" <<EOF
-{"schema_version":1,"generator":"genie","code_version":"$CV","binaries":["gevgen","gntpc","nf_genie_reweight"],"default_binary":"gevgen","smoke_paths":["genie/data","genie/config"]}
+{"schema_version":1,"generator":"genie","code_version":"$CV","binaries":[${BINARIES_JSON%,}],"default_binary":"gevgen","smoke_paths":["genie/data","genie/config"]}
 EOF
 
 %environment
@@ -275,8 +292,11 @@ EOF
 %test
     test -x /opt/nf/generators/genie/{{ GENIE_TAG }}/bin/gevgen
     test -x /opt/nf/generators/genie/{{ GENIE_TAG }}/genie/bin/gevgen
-    test -x /opt/nf/generators/genie/{{ GENIE_TAG }}/bin/nf_genie_reweight
-    test -x /opt/nf/generators/genie/{{ GENIE_TAG }}/genie/bin/nf_genie_reweight
+    # nf_genie_reweight only where the descriptor lists it (tags with Reweight).
+    if grep -q '"nf_genie_reweight"' /opt/nf/generators/genie/{{ GENIE_TAG }}/nf-payload.json; then
+        test -x /opt/nf/generators/genie/{{ GENIE_TAG }}/bin/nf_genie_reweight
+        test -x /opt/nf/generators/genie/{{ GENIE_TAG }}/genie/bin/nf_genie_reweight
+    fi
 
 %labels
     org.neutrino-factory.image genie

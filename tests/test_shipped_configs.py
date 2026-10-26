@@ -9,6 +9,9 @@ from neutrino_factory.config import resolve_config
 
 CONFIG_ROOT = Path(__file__).resolve().parents[1] / "configs"
 
+# Fragments to copy from, not runnable configs; each has its own test.
+FRAGMENTS = {"schema/genie_dials.yaml"}  # tests/test_universes.py::GenieDialCatalogTests
+
 
 class ShippedConfigTests(unittest.TestCase):
     """Every configuration in the repository must still load.
@@ -19,7 +22,10 @@ class ShippedConfigTests(unittest.TestCase):
     """
 
     def test_every_shipped_config_resolves_to_at_least_one_job(self) -> None:
-        paths = sorted(CONFIG_ROOT.rglob("*.yaml"))
+        paths = [
+            path for path in sorted(CONFIG_ROOT.rglob("*.yaml"))
+            if str(path.relative_to(CONFIG_ROOT)) not in FRAGMENTS
+        ]
         self.assertTrue(paths, "no shipped configurations found")
 
         for path in paths:

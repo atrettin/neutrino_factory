@@ -268,6 +268,15 @@ def _validate_generator_section(
         )
         errors += tune_errors
         warnings.update(tune_warnings)
+        particle = (job.get("flux") or {}).get("particle")
+        if isinstance(particle, str) and particle in particles.PARTICLE_PDG:
+            inert = universes.genie_inert_dials(
+                names,
+                particles.is_antineutrino(particle),
+                str((job.get("physics") or {}).get("current", "cc")).lower(),
+            )
+            if inert:
+                warnings.add(inert)
     return errors
 
 

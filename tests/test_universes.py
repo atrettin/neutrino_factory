@@ -303,6 +303,85 @@ class GenieValidationTests(unittest.TestCase):
             with self.assertRaisesRegex(ConfigError, f"{dial}' needs a dipole.*ZExp"):
                 self._tune("AR23_20i_00_000", universes=_block(**{dial: {"sigma": 0.1}}))
 
+    def test_ccqe_dials_under_zexp_point_to_the_zexp_dials(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "MaCCQE' needs a dipole.*use ZNormCCQE"):
+            self._tune("AR23_20i_00_000", universes=_block(MaCCQE={"sigma": 0.1}))
+
+    def test_zexp_dials_need_a_zexp_form_factor(self) -> None:
+        for tune, model in (
+            ("G18_10a_02_11a", "NievesQELCCPXSec/Dipole"),
+            ("G18_02a_00_000", "LwlynSmithQELCCPXSec/Dipole"),
+            ("G21_11a_00_000", "HybridXSecAlgorithm/SuSAv2-QEL"),
+        ):
+            for dial in universes.GENIE_ZEXP_DIALS:
+                with self.subTest(tune=tune, dial=dial):
+                    with self.assertRaisesRegex(ConfigError, f"{dial}' needs a z-expansion.*{model}"):
+                        self._tune(tune, universes=_block(**{dial: {"sigma": 0.1}}))
+
+    def test_zexp_dials_on_their_validated_tune_do_not_warn(self) -> None:
+        dials = {dial: {"sigma": 0.1, "log": True} for dial in universes.GENIE_ZEXP_DIALS}
+        with self.assertLogs("neutrino_factory.config", "WARNING") as logs:
+            self._tune("AR23_20i_00_000", universes=_block(**dials, MFP_pi={"sigma": 0.2}))
+        self.assertFalse([line for line in logs.output if "unvalidated" in line])
+
+    def test_coulomb_needs_the_nieves_model(self) -> None:
+        for tune in ("G18_10a_02_11a", "AR23_20i_00_000"):
+            self._tune(tune, universes=_block(CoulombCCQE={"sigma": 0.2, "log": True}))
+        with self.assertRaisesRegex(ConfigError, "CoulombCCQE' needs the Nieves.*LwlynSmith"):
+            self._tune("G18_02a_00_000", universes=_block(CoulombCCQE={"sigma": 0.2}))
+
+    def _inert_warnings(self, jobs: list[dict]) -> list[str]:
+        with self.assertLogs("neutrino_factory.config", "WARNING") as logs:
+            run_config(jobs)
+        return [line for line in logs.output if "cannot act on" in line]
+
+    def _nonresbg_job(self, particle: str, current: str, **parameters) -> dict:
+        return job(
+            **GENIE_JOB,
+            flux={"type": "power_law", "particle": particle, "emin_gev": 0.5, "emax_gev": 10.0,
+                  "gamma": -2.0},
+            physics={"mode": "inclusive", "current": current},
+            genie={"universes": _block(MFP_pi={"sigma": 0.2}, **parameters)},
+        )
+
+    def test_nonresbg_dial_of_the_other_probe_or_current_warns(self) -> None:
+        for particle, current, dial in (
+            ("numu", "inclusive", "NonRESBGvbarpCC1pi"),
+            ("numubar", "inclusive", "NonRESBGvpCC1pi"),
+            ("numu", "cc", "NonRESBGvpNC1pi"),
+            ("numubar", "nc", "NonRESBGvbarnCC2pi"),
+        ):
+            with self.subTest(particle=particle, current=current, dial=dial):
+                warnings = self._inert_warnings(
+                    [self._nonresbg_job(particle, current, **{dial: {"sigma": 0.5}})]
+                )
+                self.assertEqual(len(warnings), 1)
+                self.assertIn(dial, warnings[0])
+
+    def test_nonresbg_dial_of_the_job_probe_and_current_does_not_warn(self) -> None:
+        for particle, current, dial in (
+            ("numu", "inclusive", "NonRESBGvpNC2pi"),
+            ("numubar", "cc", "NonRESBGvbarpCC1pi"),
+            ("nuebar", "nc", "NonRESBGvbarnNC1pi"),
+        ):
+            with self.subTest(particle=particle, current=current, dial=dial):
+                warnings = self._inert_warnings(
+                    [self._nonresbg_job(particle, current, **{dial: {"sigma": 0.5}})]
+                )
+                self.assertEqual(warnings, [])
+
+    def test_inert_warning_is_logged_once_per_flavor(self) -> None:
+        dials = {"NonRESBGvpCC1pi": {"sigma": 0.5}, "NonRESBGvbarpCC1pi": {"sigma": 0.5}}
+        jobs = [
+            {**self._nonresbg_job(particle, "cc", **dials), "target": {"nucleus": nucleus}}
+            for particle in ("numu", "numubar")
+            for nucleus in ("C12", "Ar40")
+        ]
+        warnings = self._inert_warnings(jobs)
+        self.assertEqual(len(warnings), 2)
+        self.assertTrue(any("NonRESBGvbarpCC1pi cannot act on neutrino" in w for w in warnings))
+        self.assertTrue(any("NonRESBGvpCC1pi cannot act on antineutrino" in w for w in warnings))
+
     def test_rpa_needs_the_nieves_model(self) -> None:
         with self.assertRaisesRegex(ConfigError, "RPA_CCQE' needs the Nieves.*LwlynSmith"):
             self._tune("G18_02a_00_000", variations={"RPA_CCQE": {}})
@@ -382,6 +461,48 @@ class GenieValidationTests(unittest.TestCase):
         self.assertEqual(
             driver, set(universes.GENIE_SCALE_DIALS) | set(universes.GENIE_SWITCH_DIALS)
         )
+
+
+class GenieDialCatalogTests(unittest.TestCase):
+    """configs/schema/genie_dials.yaml lists every accepted dial at GENIE's 1 sigma."""
+
+    CATALOG = Path(__file__).parent.parent / "configs/schema/genie_dials.yaml"
+
+    def _entries(self) -> dict[str, float]:
+        # Commented-out entries (the fate cushions) count as listed.
+        import re
+
+        found = re.findall(
+            r"^\s*#?\s*(\w+): \{sigma: ([\d.]+)", self.CATALOG.read_text(), re.MULTILINE
+        )
+        return {name: float(sigma) for name, sigma in found}
+
+    def test_lists_exactly_the_allowlist(self) -> None:
+        import yaml
+
+        self.assertEqual(set(self._entries()), set(universes.GENIE_SCALE_DIALS))
+        block = yaml.safe_load(self.CATALOG.read_text())["genie"]
+        self.assertEqual(set(block["variations"]), set(universes.GENIE_SWITCH_DIALS))
+
+    def test_sigmas_are_genie_defaults(self) -> None:
+        import xml.etree.ElementTree as ET
+
+        for path in (
+            Path("/opt/nf/generators/genie/R-3_06_00/genie/config/GSystUncertaintyTable.xml"),
+            Path(__file__).parent.parent / "scratch/GSystUncertaintyTable.xml",
+        ):
+            if path.is_file():
+                break
+        else:
+            self.skipTest("no GSystUncertaintyTable.xml here")
+        table = {
+            p.get("name"): float(p.text or "nan")
+            for p in ET.parse(path).getroot().iter("param")
+            if p.get("type") == "double"
+        }
+        for name, sigma in self._entries().items():
+            larger = max(table[f"{name}@PlusOneSigma"], table[f"{name}@MinusOneSigma"])
+            self.assertAlmostEqual(sigma, larger, msg=name)
 
 
 class LoadWeightsTests(unittest.TestCase):

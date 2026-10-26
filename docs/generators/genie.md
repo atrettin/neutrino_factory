@@ -207,17 +207,24 @@ Every dial is a **scale on the generation tune's own value**: central 1, and
 
 ### Supported dials
 
-Dials outside this table fail config validation. Every dial was checked on
-G18_10a_02_11a numu CC events ([Validation](#per-dial-checks)); NC and
-antineutrino variants have not been checked.
+Dials outside this table fail config validation. Every one is listed, at
+GENIE's default 1σ and with its incompatibilities as comments, in
+`configs/schema/genie_dials.yaml`, a block to copy into a job. Every dial passed
+a per-dial check on a real sample ([Validation](#per-dial-checks)): the first
+round on G18_10a_02_11a numu CC events, the dials marked † (added 2026-10-23)
+on AR23_20i and G18_10a_02_11a samples of the probe and current they act on.
 
 | Dials (config names) | Engine | Moves | GENIE default 1σ |
 |---|---|---|---|
 | `MaCCQE` | CCQE, `kModeMa` | `qel` (closure-tested) | ±3 % |
 | `NormCCQE` | CCQE, default mode | `qel` | +20 / −15 % |
+| `ZNormCCQE` † | CCQE, z-expansion mode | `qel` | +20 / −15 % |
+| `ZExpA1CCQE`–`ZExpA4CCQE` † | CCQE, z-expansion mode | `qel` (axial form factor coefficients a₁–a₄) | ±14, ±67, ±100, ±75 % |
+| `CoulombCCQE` † | CCQE, any mode | `qel` (Nieves Coulomb potential scale) | ±20 % |
 | `MaCCRES`, `MvCCRES` | CCRES, `kModeMaMv` | `res` | ±20 %, ±10 % |
 | `NormCCRES` | CCRES, default mode | `res` | ±20 % |
 | `NonRESBGv{p,n}CC{1,2}pi` | non-resonant background | `dis` events with W < 2 GeV only | ±50 % each |
+| `NonRESBGv{p,n}NC{1,2}pi`, `NonRESBGvbar{p,n}{CC,NC}{1,2}pi` † | non-resonant background | as above | ±50 % each |
 | `AhtBY`, `BhtBY`, `CV1uBY`, `CV2uBY` | DIS (Bodek-Yang) | `dis` | ±25 %, ±25 %, ±30 %, ±40 % |
 | `MaCOHpi`, `R0COHpi`, `NormCCCOH` | COH | `coh` | ±40 %, ±10 %, ±100 % |
 | `NormCCMEC` | MEC | `mec` | ±50 % |
@@ -229,8 +236,9 @@ antineutrino variants have not been checked.
 a fractional error on the tune's value. Use it as is in linear mode, or as an
 approximate log-space sigma with `log: true`. Two caveats:
 
-- **Asymmetric entries.** `NormCCQE` is +20 / −15 %, and a universe throw is
-  symmetric, so one value has to be chosen.
+- **Asymmetric entries.** `NormCCQE` and `ZNormCCQE` are +20 / −15 %, and a
+  universe throw is symmetric, so one value has to be chosen
+  (`genie_dials.yaml` takes the larger side).
 - **Non-positive throws.** At ±100 %, `NormCCCOH` in linear mode throws a
   non-positive scale in about one universe in six, which fails the run. Use
   `log: true`.
@@ -255,6 +263,14 @@ Validation enforces these:
 - Of each FSI fate group, at most three may be varied. GENIE needs one fate left
   as the "cushion" that absorbs unitarity.
 
+Validation also **warns**, once per flavor and current, about non-resonant
+background dials that cannot act on a job. `GReWeightNonResonanceBkg` picks the
+dial per event from the interaction type, probe and hit nucleon
+(`GSyst::RBkg`), so `NonRESBGv*` gives weight 1 on antineutrino events,
+`NonRESBGvbar*` on neutrino events, and the `NC` (`CC`) dials in a CC-only
+(NC-only) run. One block holding all 16 can therefore serve every flavor, and
+universe *k* is the same throws in all of them.
+
 One effect is expected and not an error: the fate weights are 0 for an event
 whose cushion fate's scale factor is driven below 0. At +20 % on one nucleon
 fate this hits 10–50 of 20k events.
@@ -274,6 +290,8 @@ high-energy configurations) as unknown.
 |---|---|---|---|
 | `MFP_*`, `Fr*` | hA2018 FSI | `GReWeightINuke`'s constructor exits for any other FSI model | hN2018, INCL, Geant4 and the old hA: G00_00a/b/z, G18_01b, G18_02b–d, G18_10b–d, G18_10j, G21_11b–d, G24_20j–l, GDM18_00a/b |
 | `MaCCQE`, `NormCCQE` | a dipole axial form factor | the CCQE engine accepts them only with a dipole (or running-M_A) form factor; the SuSAv2 hybrid and linear-combination QE models do not set one | z-expansion: AR23_20i, G18_10i, G18_10j, G24_20i–l, N24_20i; SuSAv2 QE: G21_11a–d; GPRD18_10a |
+| `ZNormCCQE`, `ZExpA*CCQE` | a z-expansion axial form factor | the CCQE engine switches itself to `kModeZExp` only when the tune's form factor is `ZExpAxialFormFactorModel`, and handles these dials only there | dipole: G00_00a/b/z, G18_01a/b, G18_02a–d, G18_10a–d, GDM18_00a/b; SuSAv2 QE: G21_11a–d; GPRD18_10a |
+| `CoulombCCQE` | the Nieves CCQE model | the engine sets `CoulombScale` on a copy of the tune's CCQE model; only `NievesQELCCPXSec` reads it (in its Coulomb potential), so elsewhere every weight would be 1 | as for `RPA_CCQE` |
 | `RPA_CCQE` | the Nieves CCQE model | it switches the `RPA` flag of the tune's CCQE model, which only `NievesQELCCPXSec` has; under any other model every weight would be 1 | Llewellyn Smith: G00_00a/b/z, G18_01a/b, G18_02a–d, GDM18_00a/b; SuSAv2 QE: G21_11a–d; GPRD18_10a |
 | `XSecShape_CCMEC` | a MEC model other than Empirical | the alternative shape is the Empirical model's own, so under an Empirical-MEC tune the column equals the nominal | G00_00a/b/z, G18_01a/b, G18_02a–d, GDM18_00a/b |
 
@@ -290,9 +308,9 @@ same DIS model as G18_10a.
 - **`AGKYxF1pi`, `AGKYpT1pi`:** not σ-preserving, with single weights up to 5.
 - **`DISNuclMod`:** its `CalcWeight` exits for any non-zero value.
 - **`FrElas_*`:** not a fate in this Reweight version.
-- **Untested, so not accepted:** the z-expansion dials (`ZNormCCQE`,
-  `ZExpA*CCQE`, which AR23_20i and other z-expansion tunes would need in place
-  of `MaCCQE`) and every dial not listed above.
+- **Untested, so not accepted:** every dial not listed above, among them the
+  NC dials `MaNCRES`, `MvNCRES`, `NormNCRES`, `MaNCEL`, `EtaNCEL`, `NormNCCOH`,
+  `NormNCMEC`, and the z-expansion vector form factor dials `ZExpELFF*`.
 
 ### Coverage
 
@@ -304,7 +322,11 @@ The universe spread is therefore a lower bound on GENIE's model uncertainty.
 **Runtime** is about 1 ms per event per universe with 22 scale dials. 100
 universes on a 20k-event chunk cost ~35 min, comparable to generating the chunk
 with G18_10a_02_11a (~25 min). Dials outside the cross-section engines are
-cheaper ([Validation](#reweight-runtime)).
+cheaper ([Validation](#reweight-runtime)). The z-expansion and Coulomb dials each
+re-evaluate the CCQE cross section with a tweaked copy of the model, on top of
+the nominal one, so they add to the cost on `qel` events. Alone they are cheap:
+the six CCQE dials over 20k AR23_20i events took 0.07 ms per event per column
+including startup ([Validation](#per-dial-checks)).
 
 ## Known limitations
 
@@ -312,8 +334,10 @@ cheaper ([Validation](#reweight-runtime)).
   set that includes it.
 - **A tune can pass validation and still fail at run start** if the code payload
   lacks its configuration directory ([Tunes](#tunes-config_version)).
-- **Reweight universes require R-3_06_00.** The tune-model snapshot covers that
-  version only.
+- **Reweight universes require R-3_06_00.** The R-3_04_00 image has no
+  `nf_genie_reweight` ([Container build](#container-build)), and the tune-model
+  snapshot covers R-3_06_00 only, so `validate-config` refuses `genie.universes`
+  and `genie.variations` on any other code version.
 
 ---
 
@@ -475,6 +499,16 @@ every further line is one column set. The output is TTree `weights`, branch
   `exit(1)` in its constructor unless the tune's FSI model is hA2018.
 - It exits 2 on a dial its table does not know, or one no adopted engine handles
   under the tune. Validation refuses those dials earlier; this is a backstop.
+  `CoulombCCQE` passes this backstop under every tune (the engine reports it
+  handled regardless of the CCQE model), and `ZExpA<i>CCQE` with i above the
+  tune's `QEL-Kmax` is accepted but ignored by the engine; validation's model
+  rules and the per-dial checks cover both. The R-3_06_00
+  `ZExpAxialFormFactorModel.xml` sets `QEL-Kmax = 4` (a₁–a₄ = 2.30, −0.6, −3.8,
+  2.3) and AR23_20i's `CommonParam.xml` does not override it, so under AR23_20i
+  all four coefficients act.
+- It sets the CCQE engine to `kModeMa` when `MaCCQE` is present. Otherwise the
+  engine picks its mode from the tune's form factor (`kModeZExp` under a
+  z-expansion form factor, where the `ZNorm`/`ZExpA` dials act).
 - It loops universes outer and events inner, so `Reconfigure()` runs once per
   column, and re-reads each event for every column, because the engines modify
   the interaction while computing a weight.
@@ -517,6 +551,12 @@ test compares it with the payload wherever the payload is present.
   cling "Missing FileEntry" errors for every Reweight class. The Apptainer
   payload exposes the driver as `bin/nf_genie_reweight` through the same wrapper
   body as `gevgen`.
+- **Reweight is built only for `GENIE_TAG` R-3_06_00.** Reweight R-1_04_02 goes
+  with Generator R-3_06_00 and fails to compile against R-3_04_00, so the
+  R-3_04_00 image is built without it. The Apptainer runtime stage adds
+  `nf_genie_reweight` to the wrapper set and to `nf-payload.json`'s `binaries`
+  only when the builder produced it, so the payload verification in
+  `build_apptainer_images.sh` checks exactly what was built.
 
 ## Design notes
 
@@ -643,6 +683,31 @@ Rejections: `FormZone` moved the mean DIS weight to 0.854 and logged FATAL
 `AGKYxF1pi`/`AGKYpT1pi` gave a DIS mean of 0.986 with single weights up to 2.4
 and 5.0. `MaCCQE` under AR23_20i's z-expansion form factor made the driver exit
 (25k-event AR23_20i C12 sample).
+
+**The † dials** (2026-10-26) were checked with the same criteria on four
+20k-event C12 samples (0.5–5 GeV, E⁻², R-3_06_00) from
+`configs/smoke/genie_dialcheck.yaml`, by `scripts/check_genie_dials.py`. No
+event outside the expected channel moved, for any dial. Mean weight over the
+expected channel at +20 %:
+
+| Dial | Sample | Mean weight |
+|---|---|---|
+| `ZNormCCQE` | AR23_20i numu CC | CC qel 1.199 |
+| `ZExpA1CCQE`–`ZExpA4CCQE` | AR23_20i numu CC | CC qel 0.800, 0.991, 1.009, 1.005 |
+| `CoulombCCQE` | AR23_20i / G18_10a numu CC; G18_10a numubar | CC qel 1.003 / 1.003; 0.997 |
+| `NonRESBGvbar{p,n}CC{1,2}pi` | G18_10a numubar inclusive | CC dis, W < 2 GeV: 1.050, 1.004, 1.077, 1.043 (35–620 events move) |
+| `NonRESBGvbar{p,n}NC{1,2}pi` | G18_10a numubar inclusive | NC dis, W < 2 GeV: 1.070, 1.016, 1.025, 1.059 (67–292 events move) |
+| `NonRESBGv{p,n}NC{1,2}pi` | G18_10a numu NC | NC dis, W < 2 GeV: 1.019, 1.072, 1.050, 1.025 (265–1026 events move) |
+
+`ZExpA1CCQE` responds strongly and with the opposite sign to the other
+coefficients: at +20 % the median CC qel weight is 0.85 and 8 % of the moved
+events fall below 0.5 (minimum 0.04; 2000-event AR23_20i sample). a₁ = 2.30
+is the leading coefficient and the axial form factor is negative, so raising a₁
+shrinks |F_A|. GENIE varies the four coefficients independently, although a
+z-expansion fit correlates them. `CoulombCCQE` lowers the numubar weight where
+it raises numu, as the Coulomb potential's sign follows the lepton charge.
+A closure of `ZExpA1CCQE` against a directly generated sample, as for `MaCCQE`,
+has not been done.
 
 ### MaCCQE closure
 

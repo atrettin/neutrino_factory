@@ -504,8 +504,8 @@ with the same output contract.
 
 **What was ruled out.** `FormZone` and the AGKY dials, which are not
 σ-preserving and log FATAL errors or give single weights up to 5. NC and
-antineutrino variants and the z-expansion dials for AR23_20i are not ruled out,
-only unchecked. Under a tune without
+antineutrino variants and the z-expansion dials for AR23_20i were not ruled out,
+only unchecked; they were added in the second round (2026-10, below). Under a tune without
 hA2018 FSI the FSI dials cannot work at all, and validation refuses them (see
 the 2026-10 section on checking dials against the tune). Details and measurements are in
 [generators/genie.md](generators/genie.md#reweight-universes-and-variations).
@@ -530,3 +530,29 @@ checked under (G18_10a) is a warning, logged once per dial and CMC. A large
 matrix such as `keystone_prod_v2.yml` would otherwise repeat it for every job.
 Rules and lists are in
 [generators/genie.md](generators/genie.md#which-dials-a-tune-allows).
+
+## GENIE dials for z-expansion tunes and every probe (2026-10)
+
+**The problem.** Under AR23_20i (and every other z-expansion tune) no CCQE dial
+was accepted, so a universe set varied no CCQE parameter at all. The four
+accepted non-resonant background dials act only on neutrino CC events
+(`GReWeightNonResonanceBkg` picks the dial per event via `GSyst::RBkg`), so
+antineutrino jobs and NC events had no non-resonant background variation, and
+nothing said so.
+
+**The decision.** Accept `ZNormCCQE`, `ZExpA1CCQE`–`ZExpA4CCQE`, `CoulombCCQE`
+and the remaining 12 `NonRESBG*` dials, each read off the R-1_04_02 engine
+sources: the CCQE engine picks its z-expansion mode by itself under a
+z-expansion form factor, and `CoulombCCQE` acts only through the Nieves model's
+`CoulombScale`, so both get a tune rule. The z-expansion dials cannot act under
+G18_10a, so the CMC a dial was checked under is now per dial
+(`GENIE_DIAL_VALIDATED_CMC`, AR23_20i for them). A dial that cannot act on a
+job's probe or current is a warning, not an error: refusing it would force one
+parameter list per flavor, while a shared block keeps universe *k* the same
+throws in every job, which is what makes cross-flavor correlations estimable.
+All 18 passed the per-dial checks of `scripts/check_genie_dials.py` on four
+20k-event samples (2026-10-26); a dial that fails a later check moves to the
+rejected list. `configs/schema/genie_dials.yaml` lists every accepted dial at
+GENIE's default 1σ, so a config can be assembled by copying rather than from
+the documentation's tables; a test keeps it equal to the allowlist and, where
+`GSystUncertaintyTable.xml` is present, to GENIE's values.

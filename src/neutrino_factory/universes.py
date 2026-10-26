@@ -89,14 +89,21 @@ NUWRO_BROKEN_PARAMS: dict[str, str] = {
 # multiplicative scale on the generation tune's own value (central 1):
 # nf_genie_reweight overrides GENIE's 1-sigma table to 1, so GENIE's
 # p = p_def * (1 + dial * err) becomes p = p_def * value. Each was checked on a
-# 20k numu C12 CC G18_10a_02_11a sample (docs/generators/genie.md): nominal
-# weight exactly 1, finite weights, an effect on the expected channel only, and
-# for MaCCQE closure against a directly generated sample. Each also needs the
-# tune's model to be the one the engine handles; nf_genie_reweight fails loudly
-# where it is not (e.g. MaCCQE under the z-expansion of AR23_20i).
+# 20k C12 sample of its validated CMC (GENIE_VALIDATED_CMC, or
+# GENIE_DIAL_VALIDATED_CMC; docs/generators/genie.md): nominal weight exactly 1,
+# finite weights, an effect on the expected channel only, and for MaCCQE closure
+# against a directly generated sample. Each also needs the tune's model to be the
+# one the engine handles; nf_genie_reweight fails loudly where it is not (e.g.
+# MaCCQE under the z-expansion of AR23_20i).
 GENIE_SCALE_DIALS: dict[str, str] = {
     "MaCCQE": "CCQE axial mass (dipole form factor; shape and normalization)",
     "NormCCQE": "CCQE normalization",
+    "ZNormCCQE": "CCQE normalization (z-expansion axial form factor)",
+    **{
+        f"ZExpA{i}CCQE": f"CCQE z-expansion axial form factor coefficient a{i}"
+        for i in range(1, 5)
+    },
+    "CoulombCCQE": "Coulomb potential scale in the Nieves CCQE model",
     "MaCCRES": "CC resonance axial mass (shape and normalization)",
     "MvCCRES": "CC resonance vector mass (shape and normalization)",
     "NormCCRES": "CC resonance normalization",
@@ -104,6 +111,16 @@ GENIE_SCALE_DIALS: dict[str, str] = {
     "NonRESBGvnCC1pi": "non-resonant background, nu n CC 1pi (DIS events with W < 2 GeV)",
     "NonRESBGvpCC2pi": "non-resonant background, nu p CC 2pi (DIS events with W < 2 GeV)",
     "NonRESBGvnCC2pi": "non-resonant background, nu n CC 2pi (DIS events with W < 2 GeV)",
+    **{
+        f"NonRESBG{probe}{nuc}{cur}{npi}pi": (
+            f"non-resonant background, {label} {nuc} {cur} {npi}pi (DIS events with W < 2 GeV)"
+        )
+        for probe, label in (("v", "nu"), ("vbar", "nubar"))
+        for cur in ("CC", "NC")
+        for npi in (1, 2)
+        for nuc in ("p", "n")
+        if (probe, cur) != ("v", "CC")
+    },
     "AhtBY": "Bodek-Yang higher-twist A",
     "BhtBY": "Bodek-Yang higher-twist B",
     "CV1uBY": "Bodek-Yang valence-u correction CV1u",
@@ -335,19 +352,30 @@ GENIE_TUNE_MODELS: dict[str, dict[str, GenieModels]] = {
     },
 }
 
-# The CMC every dial in GENIE_SCALE_DIALS and GENIE_SWITCH_DIALS was checked on.
+# The CMC every dial in GENIE_SCALE_DIALS and GENIE_SWITCH_DIALS was checked on,
+# except those in GENIE_DIAL_VALIDATED_CMC.
 GENIE_VALIDATED_CMC = ("R-3_06_00", "G18_10a")
+
+# Dials that cannot act under G18_10a's models, checked on another CMC: the
+# z-expansion dials need a z-expansion axial form factor.
+GENIE_ZEXP_DIALS = ("ZNormCCQE", *(f"ZExpA{i}CCQE" for i in range(1, 5)))
+GENIE_DIAL_VALIDATED_CMC: dict[str, tuple[str, str]] = dict.fromkeys(
+    GENIE_ZEXP_DIALS, ("R-3_06_00", "AR23_20i")
+)
+
+# The non-resonant background dials, each acting only on one probe (nu or nubar)
+# and one current: GReWeightNonResonanceBkg picks the dial per event from
+# GSyst::RBkg(interaction type, probe, hit nucleon, n_pi).
+GENIE_NONRESBG_DIALS = tuple(name for name in GENIE_SCALE_DIALS if name.startswith("NonRESBG"))
 
 # The model each dial's engine takes its defaults from, by GenieModels field.
 GENIE_DIAL_MODEL: dict[str, str] = {
-    **dict.fromkeys(("MaCCQE", "NormCCQE", "RPA_CCQE"), "qel_cc"),
+    **dict.fromkeys(("MaCCQE", "NormCCQE", "RPA_CCQE", "CoulombCCQE", *GENIE_ZEXP_DIALS), "qel_cc"),
     **dict.fromkeys(("MaCCRES", "MvCCRES", "NormCCRES", "Theta_Delta2Npi"), "res_cc"),
     **dict.fromkeys(("MaCOHpi", "R0COHpi", "NormCCCOH"), "coh_cc_pion"),
-    **dict.fromkeys(
-        ("NonRESBGvpCC1pi", "NonRESBGvnCC1pi", "NonRESBGvpCC2pi", "NonRESBGvnCC2pi",
-         "AhtBY", "BhtBY", "CV1uBY", "CV2uBY"),
-        "dis_cc",
-    ),
+    # The NC non-resonant background dials too: every CMC uses the same DIS
+    # model for CC and NC, and the snapshot records only the CC one.
+    **dict.fromkeys((*GENIE_NONRESBG_DIALS, "AhtBY", "BhtBY", "CV1uBY", "CV2uBY"), "dis_cc"),
     **dict.fromkeys(("NormCCMEC", "XSecShape_CCMEC", "DecayAngMEC"), "mec_cc"),
     **dict.fromkeys(
         ("MFP_pi", "MFP_N", *GENIE_FATE_GROUPS[0], *GENIE_FATE_GROUPS[1]), "fsi"
@@ -367,7 +395,25 @@ def _genie_dial_problem(name: str, models: GenieModels) -> str | None:
     ):
         # GReWeightNuXSecCCQE handles both only with a dipole (or running-MA)
         # axial form factor; the CMCs' QEL-CC configs name it.
-        return f"needs a dipole axial form factor, but the tune's CCQE model is {models.qel_cc}"
+        hint = "; use ZNormCCQE and ZExpA1CCQE-ZExpA4CCQE" if qel_config.startswith("ZExp") else ""
+        return (
+            f"needs a dipole axial form factor, but the tune's CCQE model is {models.qel_cc}{hint}"
+        )
+    if name in GENIE_ZEXP_DIALS and not (
+        qel_alg in ("LwlynSmithQELCCPXSec", "NievesQELCCPXSec") and qel_config.startswith("ZExp")
+    ):
+        # The engine switches itself to its z-expansion mode only under a
+        # z-expansion axial form factor; elsewhere it does not handle them.
+        return (
+            f"needs a z-expansion axial form factor, but the tune's CCQE model is {models.qel_cc}"
+        )
+    if name == "CoulombCCQE" and (qel_alg != "NievesQELCCPXSec" or "NoCoulomb" in qel_config):
+        # The engine sets "CoulombScale" on a copy of the tune's CCQE model; only
+        # the Nieves model reads it, and only with its Coulomb correction on.
+        return (
+            f"needs the Nieves CCQE model with its Coulomb correction, but the tune's is "
+            f"{models.qel_cc}"
+        )
     if name == "RPA_CCQE" and qel_alg != "NievesQELCCPXSec":
         # The engine switches the "RPA" flag of the tune's CCQE model, which
         # only the Nieves model has: elsewhere every weight would be 1.
@@ -402,7 +448,6 @@ def validate_genie_tune(
             f"{where}: GENIE tune '{tune}' (model configuration '{cmc}') is not in the "
             f"reweighting model table for {code_version}; known: {', '.join(by_cmc)}"
         ], []
-    validated = GENIE_TUNE_MODELS[GENIE_VALIDATED_CMC[0]][GENIE_VALIDATED_CMC[1]]
     errors: list[str] = []
     warnings: list[str] = []
     for name in names:
@@ -411,13 +456,42 @@ def validate_genie_tune(
             errors.append(f"{where}: GENIE dial '{name}' {problem}")
             continue
         field = GENIE_DIAL_MODEL[name]
+        checked_version, checked_cmc = GENIE_DIAL_VALIDATED_CMC.get(name, GENIE_VALIDATED_CMC)
+        validated = GENIE_TUNE_MODELS[checked_version][checked_cmc]
         if getattr(models, field) != getattr(validated, field):
             warnings.append(
                 f"GENIE dial '{name}' under tune {cmc}* is unvalidated: it was checked with "
-                f"{getattr(validated, field)} ({GENIE_VALIDATED_CMC[1]}), the tune uses "
+                f"{getattr(validated, field)} ({checked_cmc}), the tune uses "
                 f"{getattr(models, field)}"
             )
     return errors, warnings
+
+
+def genie_inert_dials(names: Iterable[str], antineutrino: bool, current: str) -> str | None:
+    """A warning naming the non-resonant background dials that cannot act on a job, or None.
+
+    Each acts only on its own probe (nu or nubar) and current, so in a job of the
+    other flavor, or a CC- or NC-only job of the other current, its weights are 1.
+    That is accepted, so that one block can serve every flavor and universe k
+    stays the same throws everywhere; the message has no job index, so a matrix
+    logs it once per flavor and current.
+    """
+    inert = []
+    for name in names:
+        if name not in GENIE_NONRESBG_DIALS:
+            continue
+        rest = name.removeprefix("NonRESBG")
+        dial_nubar = rest.startswith("vbar")
+        dial_current = "nc" if "NC" in rest else "cc"
+        if dial_nubar != antineutrino or current not in ("inclusive", dial_current):
+            inert.append(name)
+    if not inert:
+        return None
+    probe = "antineutrino" if antineutrino else "neutrino"
+    return (
+        f"GENIE dials {', '.join(inert)} cannot act on {probe} jobs with physics.current "
+        f"'{current}' (wrong probe or current); their weights are 1 there"
+    )
 
 
 # ── Tables per generator ─────────────────────────────────────────────────────

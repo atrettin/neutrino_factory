@@ -79,6 +79,12 @@ static std::string engine_for(const std::string &name) {
   static const std::map<std::string, std::string> table = {
       {"MaCCQE", "xsec_ccqe"},
       {"NormCCQE", "xsec_ccqe"},
+      {"ZNormCCQE", "xsec_ccqe"},
+      {"ZExpA1CCQE", "xsec_ccqe"},
+      {"ZExpA2CCQE", "xsec_ccqe"},
+      {"ZExpA3CCQE", "xsec_ccqe"},
+      {"ZExpA4CCQE", "xsec_ccqe"},
+      {"CoulombCCQE", "xsec_ccqe"},
       {"MaCCRES", "xsec_ccres"},
       {"MvCCRES", "xsec_ccres"},
       {"NormCCRES", "xsec_ccres"},
@@ -86,6 +92,18 @@ static std::string engine_for(const std::string &name) {
       {"NonRESBGvnCC1pi", "xsec_nonresbkg"},
       {"NonRESBGvpCC2pi", "xsec_nonresbkg"},
       {"NonRESBGvnCC2pi", "xsec_nonresbkg"},
+      {"NonRESBGvpNC1pi", "xsec_nonresbkg"},
+      {"NonRESBGvpNC2pi", "xsec_nonresbkg"},
+      {"NonRESBGvnNC1pi", "xsec_nonresbkg"},
+      {"NonRESBGvnNC2pi", "xsec_nonresbkg"},
+      {"NonRESBGvbarpCC1pi", "xsec_nonresbkg"},
+      {"NonRESBGvbarpCC2pi", "xsec_nonresbkg"},
+      {"NonRESBGvbarpNC1pi", "xsec_nonresbkg"},
+      {"NonRESBGvbarpNC2pi", "xsec_nonresbkg"},
+      {"NonRESBGvbarnCC1pi", "xsec_nonresbkg"},
+      {"NonRESBGvbarnCC2pi", "xsec_nonresbkg"},
+      {"NonRESBGvbarnNC1pi", "xsec_nonresbkg"},
+      {"NonRESBGvbarnNC2pi", "xsec_nonresbkg"},
       {"AhtBY", "xsec_dis"},
       {"BhtBY", "xsec_dis"},
       {"CV1uBY", "xsec_dis"},
@@ -175,7 +193,8 @@ int main(int argc, char **argv) {
     // every weight into noise (docs/generators/genie.md, "Upstream issues").
     rw.WghtCalc(key)->UseOldWeightFromFile(false);
     // Pick the engine mode the dials belong to. Defaults otherwise: CCQE's
-    // follows the tune's axial form factor, RES's is NormAndMaMvShape.
+    // follows the tune's axial form factor (kModeZExp under a z-expansion one,
+    // which is where ZNormCCQE and ZExpA*CCQE act), RES's is NormAndMaMvShape.
     for (GSyst_t s : systs) {
       if (s == kXSecTwkDial_MaCCQE)
         dynamic_cast<GReWeightNuXSecCCQE *>(rw.WghtCalc(key))->SetMode(GReWeightNuXSecCCQE::kModeMa);

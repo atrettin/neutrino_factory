@@ -34,7 +34,6 @@ For the project pitch, installation and a quickstart, see the
 | [apptainer_image.md](apptainer_image.md) | How the unified `nf-base.sif` is composed from per-generator payload SIFs, and how adapters dispatch into it via `nf-run`. |
 | [mpp_cluster_usage.md](mpp_cluster_usage.md) | The MPCDF/ODSL runbook: execution model, filesystems, the mandatory `--partition=alma`, first-time setup, submitting a run, working up from a first scheduler-only submission, and troubleshooting. |
 | [performance.md](performance.md) | Measured generator runtimes on one machine: the machine facts, per-generator and per-GENIE-tune wall clocks and per-event rates at numu/Fe56/CC, the fixed overheads (GENIE's ~23 s spline load, NEUT's ~142 s), the 27× tune-rate spread and its model-construction cause, and Slurm-sizing formulae. |
-| [universes_cluster_verification.md](universes_cluster_verification.md) | The cluster-side checklist for the reweight-universe payloads (NuWro `nf_reweight`, GENIE `nf_genie_reweight`): rebuild, binary resolution in `nf-base.sif`, and end-to-end smoke runs with expected output. |
 
 ## Extending
 
