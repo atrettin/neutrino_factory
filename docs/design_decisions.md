@@ -556,3 +556,30 @@ rejected list. `configs/schema/genie_dials.yaml` lists every accepted dial at
 GENIE's default 1σ, so a config can be assembled by copying rather than from
 the documentation's tables; a test keeps it equal to the allowlist and, where
 `GSystUncertaintyTable.xml` is present, to GENIE's values.
+
+## Correlated universe parameters, and Meyer et al. for the z-expansion (2026-10)
+
+**The problem.** The 1000-universe pilot of
+`configs/high_stats_genie_universes.yml` threw `ZExpA1CCQE`–`ZExpA4CCQE`
+independently in log mode with GENIE's table sigmas. Under the 1/Q⁴ sum rules,
+F_A at high Q² is a near-cancellation between the z-expansion coefficients, so
+independent throws inflated it by orders of magnitude: single CCQE weights
+reached ~2500 and single universes 10× nominal in a 0.5–5 GeV bin. The
+coefficients come from one fit (Meyer et al. 2016) with strongly correlated
+errors, and the universes had no way to express that.
+
+**The decision.** A `universes` block takes optional `correlations`: groups of
+its parameters, each with a correlation matrix, applied as `z ← L z` with `L`
+the Cholesky factor. It is generic, not GENIE-specific, and acts on the
+standard-normal throws, so each parameter's `sigma` and `log` keep their
+meaning. The matrix is between the parameters *as thrown*: for GENIE, between
+the scale dials. The alternative, the paper's matrix as printed with the code
+flipping signs by the tune's coefficients, would put per-tune knowledge of
+GENIE's central values into the generic sampling code. The sign conversion
+lives in `configs/schema/genie_dials.yaml` instead, and a test recomputes it
+from the paper's Eq. 36 and 38. The four coefficients take Meyer et al.'s
+sigmas, not GENIE's table: the table does not match the fit, and only the fit's
+sigmas belong with its correlations. They are thrown linearly, because a
+coefficient may legitimately change sign. A z-expansion block without the group
+only warns, so that a single-dial study stays possible. Details and numbers are
+in [generators/genie.md](generators/genie.md#z-expansion-dials).

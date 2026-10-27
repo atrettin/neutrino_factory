@@ -268,6 +268,9 @@ def _validate_generator_section(
         )
         errors += tune_errors
         warnings.update(tune_warnings)
+        uncorrelated = universes.genie_uncorrelated_zexp(block.get("universes", {}))
+        if uncorrelated:
+            warnings.add(uncorrelated)
         particle = (job.get("flux") or {}).get("particle")
         if isinstance(particle, str) and particle in particles.PARTICLE_PDG:
             inert = universes.genie_inert_dials(

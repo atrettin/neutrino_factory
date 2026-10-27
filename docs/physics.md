@@ -535,7 +535,8 @@ cumulative sum biases the median low by half a bin.
 ## Reweight universes
 
 A **universe** is one setting of a generator's physics parameters, drawn from
-independent Gaussian priors. For an event *i* and universe *k*,
+Gaussian priors, independent unless a correlation group ties some of them
+together. For an event *i* and universe *k*,
 `events/universe_weights[i, k]` is the ratio of the differential cross section
 under universe *k* to the one under the generation's own parameters (the
 central values), both evaluated at the event's stored kinematics. A universe's
@@ -570,6 +571,23 @@ error, not clipped. In log mode the median is `central`, every value is
 positive, and `ln(value/central) = sigma·z` exactly, so a covariance for such a
 parameter can be formed in log space, which avoids Peelle's Pertinent Puzzle.
 
+**Correlated parameters.** A block may list correlation groups, each a set of
+its parameters with a correlation matrix ρ. The group's independent throws are
+mixed by the Cholesky factor `L` of ρ (`ρ = L Lᵀ`): `z_group ← L · z_group`.
+The mixed throws keep unit variance and have correlation ρ, and each parameter's
+mapping above then applies unchanged. Linear parameters are therefore correlated
+in their values, log parameters in `ln(value)`. `L` is lower triangular with
+`L₀₀ = 1`, so the group's first parameter keeps its own stream; the others now
+depend on every earlier member. Parameters outside any group are unaffected, so
+adding a group leaves their throws as they were.
+
+The matrix is the correlation *between the parameters as thrown*. Where a fit
+publishes the correlation of quantities that a scale multiplies, a negative
+central value flips the sign: for a scale `s` on a coefficient `a` (`a' = a·s`),
+`corr(s_i, s_j) = sign(a_i a_j) · corr(a_i, a_j)`. GENIE's z-expansion dials
+are the case in point
+([generators/genie.md](generators/genie.md#z-expansion-dials)).
+
 **What `central` means is per generator.**
 
 | Generator | `central` | `sigma` |
@@ -586,7 +604,8 @@ for choosing `sigma`, listed per parameter in
 
 The `universes` metadata stores everything needed to rebuild or extend the
 throws: the seed, the count, each parameter's central value, sigma, log flag
-and optional source, the `z` throws, and the values.
+and optional source, the `z` throws (after correlation), the values, and the
+correlation groups if there are any.
 
 **Variations.** Some knobs are not parameters with an uncertainty but switches
 between two models, interpolated on [0, 1]. Examples are GENIE's `RPA_CCQE`

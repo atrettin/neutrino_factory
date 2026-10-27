@@ -5,12 +5,13 @@
 # it is not valid for any single tune, because some dials exclude each other.
 #
 # sigma: GENIE's own fractional 1-sigma error on the tune's value, from
-#   config/GSystUncertaintyTable.xml of R-3_06_00 (one file for every tune).
+#   config/GSystUncertaintyTable.xml of R-3_06_00 (one file for every tune),
+#   except ZExpA1-4CCQE, which take Meyer et al. 2016 (see their section).
 #   Every dial is a scale on the generation tune's own value (central 1). Scale
 #   them to taste, e.g. 2x for a conservative band.
-# log: true everywhere: the throw is exp(sigma*z), always positive. In linear
-#   mode (1 + sigma*z) a dial at sigma >= 0.5 throws a non-positive scale in a
-#   few percent of universes, which fails the run.
+# log: true everywhere except ZExpA1-4CCQE: the throw is exp(sigma*z), always
+#   positive. In linear mode (1 + sigma*z) a dial at sigma >= 0.5 throws a
+#   non-positive scale in a few percent of universes, which fails the run.
 # Full reference: docs/generators/genie.md#reweight-universes-and-variations.
 #
 # Universes need code_version R-3_06_00. `validate-config` refuses any dial
@@ -34,10 +35,20 @@ genie:
       # WARNING: only under a z-expansion form factor (AR23_20i, G18_10i/j,
       #   G24_20*, N24_20i); refused elsewhere. Checked on AR23_20i.
       ZNormCCQE: {sigma: 0.20, log: true}      # GENIE: +20 / -15 %; larger side
-      ZExpA1CCQE: {sigma: 0.14, log: true}
-      ZExpA2CCQE: {sigma: 0.67, log: true}
-      ZExpA3CCQE: {sigma: 1.00, log: true}
-      ZExpA4CCQE: {sigma: 0.75, log: true}
+      # The coefficients a1-a4 are Meyer et al. 2016's fit (PRD 93, 113015,
+      #   Eq. 36: a = [2.30(13), -0.6(1.0), -3.8(2.5), 2.3(2.7)], exactly the
+      #   R-3_06_00 ZExpAxialFormFactorModel.xml values). sigma = delta_a / |a|.
+      #   GENIE's table (+-14 / 67 / 100 / 75 %) is not used: it does not match
+      #   the fit, and only Meyer's sigmas go with Meyer's correlations below.
+      # Linear, not log: a coefficient may change sign (a2 does in ~27 % of
+      #   universes), and GENIE Reweight passes negative scales through.
+      # WARNING: throw all four together with the correlations group at the end
+      #   of this block. Thrown independently they inflate F_A at high Q^2 by
+      #   orders of magnitude (docs/generators/genie.md, "z-expansion dials").
+      ZExpA1CCQE: {sigma: 0.0565, source: "Meyer et al. 2016, Eq. 36"}
+      ZExpA2CCQE: {sigma: 1.667, source: "Meyer et al. 2016, Eq. 36"}
+      ZExpA3CCQE: {sigma: 0.658, source: "Meyer et al. 2016, Eq. 36"}
+      ZExpA4CCQE: {sigma: 1.174, source: "Meyer et al. 2016, Eq. 36"}
 
       # ── CCQE, Coulomb correction ─────────────────────────────────────────
       # WARNING: only under the Nieves CCQE model (G18_10*, AR23_20i, G24_20*,
@@ -104,6 +115,22 @@ genie:
       FrAbs_N: {sigma: 0.20, log: true}
       FrPiProd_N: {sigma: 0.20, log: true}
       # FrInel_N: {sigma: 0.40, log: true}
+
+    # Correlations between dials, acting on their standard-normal throws (for
+    # these linear dials: on their values). Each matrix is in dial space, i.e.
+    # between the scales as thrown, not between the coefficients themselves.
+    correlations:
+      # Meyer et al. 2016, Eq. 38, the correlation of a1-a4, times
+      # sign(a_i * a_j): a2 and a3 are negative, so raising their scale lowers
+      # the coefficient, which flips the sign of their cross terms with a1, a4.
+      # Positive definite, if barely (smallest eigenvalue 0.002).
+      - parameters: [ZExpA1CCQE, ZExpA2CCQE, ZExpA3CCQE, ZExpA4CCQE]
+        matrix:
+          - [ 1.000, -0.350,  0.678,  0.611]
+          - [-0.350,  1.000, -0.898, -0.367]
+          - [ 0.678, -0.898,  1.000,  0.685]
+          - [ 0.611, -0.367,  0.685,  1.000]
+        source: "Meyer et al. 2016, PRD 93, 113015, Eq. 38 x sign(a_i a_j)"
 
   # Switches between two models, one deterministic weight column each at
   # `value` (in (0, 1], default 1 = the alternative model). Never universes.

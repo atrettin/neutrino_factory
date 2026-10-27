@@ -219,7 +219,7 @@ on AR23_20i and G18_10a_02_11a samples of the probe and current they act on.
 | `MaCCQE` | CCQE, `kModeMa` | `qel` (closure-tested) | ±3 % |
 | `NormCCQE` | CCQE, default mode | `qel` | +20 / −15 % |
 | `ZNormCCQE` † | CCQE, z-expansion mode | `qel` | +20 / −15 % |
-| `ZExpA1CCQE`–`ZExpA4CCQE` † | CCQE, z-expansion mode | `qel` (axial form factor coefficients a₁–a₄) | ±14, ±67, ±100, ±75 % |
+| `ZExpA1CCQE`–`ZExpA4CCQE` † | CCQE, z-expansion mode | `qel` (axial form factor coefficients a₁–a₄) | ±14, ±67, ±100, ±75 %; **use Meyer et al.'s instead** ([z-expansion dials](#z-expansion-dials)) |
 | `CoulombCCQE` † | CCQE, any mode | `qel` (Nieves Coulomb potential scale) | ±20 % |
 | `MaCCRES`, `MvCCRES` | CCRES, `kModeMaMv` | `res` | ±20 %, ±10 % |
 | `NormCCRES` | CCRES, default mode | `res` | ±20 % |
@@ -241,7 +241,65 @@ approximate log-space sigma with `log: true`. Two caveats:
   (`genie_dials.yaml` takes the larger side).
 - **Non-positive throws.** At ±100 %, `NormCCCOH` in linear mode throws a
   non-positive scale in about one universe in six, which fails the run. Use
-  `log: true`.
+  `log: true`. The z-expansion coefficients are the exception: they may change
+  sign, so they are thrown linearly ([z-expansion dials](#z-expansion-dials)).
+
+### z-expansion dials
+
+`ZExpA1CCQE`–`ZExpA4CCQE` scale the coefficients a₁–a₄ of the z-expansion axial
+form factor F_A. **Throw all four together, with the sigmas and correlation
+group from `configs/schema/genie_dials.yaml`.** Validation warns when two or
+more of them are thrown without one shared group.
+
+**Where the numbers come from.** The coefficients of every R-3_06_00
+z-expansion tune are Meyer et al. 2016 (PRD 93, 113015, Eq. 36): a = [2.30(13),
+−0.6(1.0), −3.8(2.5), 2.3(2.7)], from a fit to neutrino-deuterium data with
+Q² ≤ 1 GeV². The paper gives their correlation matrix C (Eq. 38) with
+E_ij = δa_i δa_j C_ij. The catalog uses
+
+- `sigma` = δa / |a| = 0.0565, 1.667, 0.658, 1.174, in **linear** mode. GENIE's
+  table (±14 / 67 / 100 / 75 %) does not match the fit, and only the fit's own
+  sigmas go with its correlations.
+- the matrix `C_ij · sign(a_i a_j)`, because the dials are scales: a2 and a3
+  are negative, so raising their scale lowers the coefficient. A test checks
+  the catalog against Eq. 36 and 38.
+
+a2 changes sign in about 27 % of universes. That is the fit's own uncertainty,
+and GENIE Reweight passes a negative scale through unclamped
+(`GReWeightNuXSecCCQE::Reconfigure`, `a' = a · (1 + dial · err)`).
+
+**Why independent throws fail.** With `QEL-Q4limit = true`, GENIE fixes a₀ and
+a₅–a₈ so that F_A(0) = g_A and F_A falls as 1/Q⁴. The resulting nine
+coefficients are all of order 1–4, and at high Q² F_A is a near-cancellation
+between them (F_A = −0.020 at Q² = 5 GeV², against −1.267 at 0). Moving one
+coefficient on its own breaks the cancellation. F_A² relative to nominal, from
+1000 throws evaluated with GENIE's constraint equations:
+
+| Throws of a₁–a₄ | 99th percentile at Q² = 2 GeV² | at Q² = 5 GeV² |
+|---|---|---|
+| independent, log, GENIE's sigmas (the 2026-10-26 pilot) | 55 | 1585 |
+| independent, Meyer's sigmas | 6.6 | 111 |
+| correlated, Meyer's sigmas and C | 2.9 | 11 |
+
+The remaining factor ~11 at 5 GeV² is the fit's genuine uncertainty far above
+its data.
+
+**In the pilot.** `configs/high_stats_genie_universes.yml` first threw the four
+independently in log mode with GENIE's sigmas. In the Fe56 numu job (10k
+events), 43 CCQE events with Q² > 1.5 GeV² got weights up to 2572 in single
+universes (ZExpA3CCQE thrown ×23), and in 25-bin cross sections between 0.5 and
+5 GeV single universes reached 10.75× nominal in a bin. Rerunning the same
+60 chunks with the correlated group (200 universes, all other dials unchanged):
+
+| 0.5–5 GeV, same 200 universes | independent (pilot) | correlated |
+|---|---|---|
+| largest universe/nominal in any bin | 6.73 | 1.96 |
+| universes with any bin above 2× | 3.0 % | 0 |
+| largest CCQE weight at Q² > 1.5 GeV² | 1386 | 5.5 |
+| CC QE σ in 2–5 GeV, 16–84 % band | 0.85–1.58 | 0.84–1.15 |
+
+The largest remaining weights (up to ~130) are RES events at Q² of tens of
+GeV² under `MaCCRES` near ×2.
 
 ### Switch variations
 

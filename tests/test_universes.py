@@ -102,6 +102,94 @@ class NormFactorTests(unittest.TestCase):
         np.testing.assert_array_equal(universes.norm_factors(values, flags, True), [[2.0], [2.0]])
 
 
+RHO = [[1.0, 0.6], [0.6, 1.0]]
+
+
+def _correlated(matrix=RHO, names=("qelNorm", "mecNorm"), count=50, **extra) -> dict:
+    block = _block(**{name: {"sigma": 0.1} for name in names}, **extra)
+    block["count"] = count
+    block["correlations"] = [{"parameters": list(names), "matrix": matrix, "source": "x"}]
+    return block
+
+
+class CorrelationTests(unittest.TestCase):
+    def test_throws_get_the_matrix_correlation(self) -> None:
+        resolved = universes.resolve_universes(
+            _correlated(count=20000), {"qelNorm": 1.0, "mecNorm": 1.0}
+        )
+        z = np.array([resolved["z"]["qelNorm"], resolved["z"]["mecNorm"]])
+        np.testing.assert_allclose(np.corrcoef(z), RHO, atol=0.02)
+        np.testing.assert_allclose(z.std(axis=1), 1.0, atol=0.02)
+        values = np.array([resolved["values"]["qelNorm"], resolved["values"]["mecNorm"]])
+        np.testing.assert_allclose(np.corrcoef(values), RHO, atol=0.02)
+
+    def test_first_member_keeps_its_stream_and_others_are_untouched(self) -> None:
+        # L is lower triangular with L[0, 0] = 1: the first member is unchanged.
+        plain = universes.resolve_universes(
+            _block(qelNorm={"sigma": 0.1}, mecNorm={"sigma": 0.1}, resNorm={"sigma": 0.1}),
+            {"qelNorm": 1.0, "mecNorm": 1.0, "resNorm": 1.0},
+        )
+        grouped = universes.resolve_universes(
+            _correlated(resNorm={"sigma": 0.1}),
+            {"qelNorm": 1.0, "mecNorm": 1.0, "resNorm": 1.0},
+        )
+        self.assertEqual(grouped["values"]["resNorm"], plain["values"]["resNorm"])
+        np.testing.assert_allclose(grouped["z"]["qelNorm"], plain["z"]["qelNorm"])
+        self.assertNotEqual(grouped["z"]["mecNorm"], plain["z"]["mecNorm"])
+        self.assertNotIn("correlations", plain)
+        self.assertEqual(grouped["correlations"][0]["parameters"], ["qelNorm", "mecNorm"])
+        self.assertEqual(grouped["correlations"][0]["matrix"], RHO)
+
+    def test_log_parameters_correlate_in_log_space(self) -> None:
+        block = _correlated(count=20000)
+        for spec in block["parameters"].values():
+            spec.update(sigma=0.5, log=True)
+        resolved = universes.resolve_universes(block, {"qelNorm": 1.0, "mecNorm": 1.0})
+        logs = np.log([resolved["values"]["qelNorm"], resolved["values"]["mecNorm"]])
+        np.testing.assert_allclose(np.corrcoef(logs), RHO, atol=0.02)
+
+    def _errors(self, block: dict) -> list[str]:
+        return universes.validate_universes(block, "u", "nuwro")
+
+    def test_valid_group(self) -> None:
+        self.assertEqual(self._errors(_correlated()), [])
+
+    def test_invalid_groups(self) -> None:
+        not_pd = [[1, 0.9, -0.9], [0.9, 1, 0.9], [-0.9, 0.9, 1]]
+        cases = {
+            "non-empty list": dict(correlations=[]),
+            "at least two": dict(correlations=[{"parameters": ["qelNorm"], "matrix": [[1]]}]),
+            "not in the block": dict(
+                correlations=[{"parameters": ["qelNorm", "resNorm"], "matrix": RHO}]
+            ),
+            "twice": dict(correlations=[{"parameters": ["qelNorm", "qelNorm"], "matrix": RHO}]),
+            "another group": dict(correlations=[
+                {"parameters": ["qelNorm", "mecNorm"], "matrix": RHO},
+                {"parameters": ["mecNorm", "qelNorm"], "matrix": RHO},
+            ]),
+            "2x2": dict(correlations=[{"parameters": ["qelNorm", "mecNorm"], "matrix": [[1, 0.5]]}]),
+            "diagonal must be 1": dict(
+                correlations=[{"parameters": ["qelNorm", "mecNorm"], "matrix": [[2, 0], [0, 1]]}]
+            ),
+            "symmetric": dict(
+                correlations=[{"parameters": ["qelNorm", "mecNorm"], "matrix": [[1, 0.5], [0.4, 1]]}]
+            ),
+            r"\[-1, 1\]": dict(
+                correlations=[{"parameters": ["qelNorm", "mecNorm"], "matrix": [[1, 1.5], [1.5, 1]]}]
+            ),
+            "unknown keys": dict(
+                correlations=[{"parameters": ["qelNorm", "mecNorm"], "matrix": RHO, "sigma": 1}]
+            ),
+        }
+        for message, override in cases.items():
+            with self.subTest(message):
+                block = {**_correlated(), **override}
+                self.assertRegex(" | ".join(self._errors(block)), message)
+        with self.subTest("positive definite"):
+            block = _correlated(matrix=not_pd, names=("qelNorm", "mecNorm", "resNorm"))
+            self.assertRegex(" | ".join(self._errors(block)), "not positive definite")
+
+
 class ConfigValidationTests(unittest.TestCase):
     def _config(self, block) -> None:
         run_config([job(**NUWRO_JOB, nuwro={"universes": block})])
@@ -324,6 +412,26 @@ class GenieValidationTests(unittest.TestCase):
             self._tune("AR23_20i_00_000", universes=_block(**dials, MFP_pi={"sigma": 0.2}))
         self.assertFalse([line for line in logs.output if "unvalidated" in line])
 
+    def _zexp_warnings(self, **block_extra) -> list[str]:
+        dials = {dial: {"sigma": 0.5} for dial in universes.GENIE_ZEXP_COEFF_DIALS}
+        block = {**_block(**dials), **block_extra}
+        with self.assertLogs("neutrino_factory.config", "WARNING") as logs:
+            self._tune("AR23_20i_00_000", universes=block, variations={"RPA_CCQE": None})
+        return [line for line in logs.output if "without a shared correlation group" in line]
+
+    def test_independent_zexp_coefficients_warn(self) -> None:
+        self.assertEqual(len(self._zexp_warnings()), 1)
+
+    def test_correlated_zexp_coefficients_do_not_warn(self) -> None:
+        group = {"parameters": list(universes.GENIE_ZEXP_COEFF_DIALS), "matrix": np.eye(4).tolist()}
+        self.assertEqual(self._zexp_warnings(correlations=[group]), [])
+
+    def test_zexp_coefficients_may_throw_negative_scales(self) -> None:
+        values = universes.universe_values("ZExpA2CCQE", 1.0, 1.667, False, np.array([-2.0]))
+        self.assertLess(values[0], 0)
+        with self.assertRaisesRegex(ValueError, "ZNormCCQE"):
+            universes.universe_values("ZNormCCQE", 1.0, 1.667, False, np.array([-2.0]))
+
     def test_coulomb_needs_the_nieves_model(self) -> None:
         for tune in ("G18_10a_02_11a", "AR23_20i_00_000"):
             self._tune(tune, universes=_block(CoulombCCQE={"sigma": 0.2, "log": True}))
@@ -501,8 +609,48 @@ class GenieDialCatalogTests(unittest.TestCase):
             if p.get("type") == "double"
         }
         for name, sigma in self._entries().items():
+            if name in universes.GENIE_ZEXP_COEFF_DIALS:
+                continue  # Meyer et al.'s, test_zexp_follows_meyer_2016
             larger = max(table[f"{name}@PlusOneSigma"], table[f"{name}@MinusOneSigma"])
             self.assertAlmostEqual(sigma, larger, msg=name)
+
+    def test_zexp_follows_meyer_2016(self) -> None:
+        # Meyer et al. 2016, PRD 93, 113015: Eq. 36 (a, delta_a) and Eq. 38 (C).
+        a = np.array([2.30, -0.6, -3.8, 2.3])
+        delta_a = np.array([0.13, 1.0, 2.5, 2.7])
+        corr = np.array([
+            [1, 0.350, -0.678, 0.611],
+            [0.350, 1, -0.898, 0.367],
+            [-0.678, -0.898, 1, -0.685],
+            [0.611, 0.367, -0.685, 1],
+        ])
+        import yaml
+
+        block = yaml.safe_load(self.CATALOG.read_text())["genie"]["universes"]
+        names = list(universes.GENIE_ZEXP_COEFF_DIALS)
+        for name, expected in zip(names, delta_a / np.abs(a)):
+            spec = block["parameters"][name]
+            self.assertAlmostEqual(spec["sigma"], expected, delta=5e-4, msg=name)
+            self.assertFalse(spec.get("log", False), msg=name)
+        (group,) = [g for g in block["correlations"] if set(g["parameters"]) & set(names)]
+        self.assertEqual(group["parameters"], names)
+        np.testing.assert_array_equal(group["matrix"], corr * np.outer(np.sign(a), np.sign(a)))
+        # The whole catalog holds exclusive dials on purpose; check this part only.
+        zexp = {"seed": 1, "count": 1, "parameters": {n: block["parameters"][n] for n in names},
+                "correlations": [group]}
+        self.assertEqual(universes.validate_universes(zexp, "catalog", "genie"), [])
+
+    def test_zexp_centrals_match_the_payload(self) -> None:
+        path = Path(
+            "/opt/nf/generators/genie/R-3_06_00/genie/config/ZExpAxialFormFactorModel.xml"
+        )
+        if not path.is_file():
+            self.skipTest("no GENIE payload here")
+        import xml.etree.ElementTree as ET
+
+        params = {p.get("name"): p.text for p in ET.parse(path).getroot().iter("param")}
+        payload = [float(params[f"QEL-Z_A{i}"] or "nan") for i in range(1, 5)]
+        self.assertEqual(payload, [2.30, -0.6, -3.8, 2.3])
 
 
 class LoadWeightsTests(unittest.TestCase):

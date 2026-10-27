@@ -205,6 +205,11 @@ genie:
     parameters:
       MaCCQE: {sigma: 0.15, log: true}   # a scale on the tune's value: sigma is fractional
       MFP_pi: {sigma: 0.2}
+      MFP_N: {sigma: 0.2}
+    correlations:         # optional; groups of the parameters above
+      - parameters: [MFP_pi, MFP_N]
+        matrix: [[1.0, 0.5], [0.5, 1.0]]
+        source: "<citation>"
   variations:             # switch-type knobs, one weight column each; no seed
     RPA_CCQE: {}          # value defaults to 1, the alternative model
     DecayAngMEC: {value: 0.5, source: "<citation>"}
@@ -218,6 +223,17 @@ genie:
   the generation tune's own value, so its central is 1 and `sigma` is a
   fractional error. Either way the central MC is the `config_version`'s; a
   different central value is a different `config_version`.
+- **`correlations`** is optional: a list of groups, each with `parameters` (two
+  or more names from `parameters`, none in two groups), `matrix` (their
+  correlation matrix, in the order listed) and an optional `source`. The matrix
+  must be symmetric with a unit diagonal and positive definite. It correlates
+  the standard-normal throws, so linear parameters correlate in their values and
+  log ones in `ln(value)` ([physics.md](physics.md#reweight-universes)). On
+  GENIE the matrix is between the dials as thrown, i.e. between scales, not
+  between the coefficients they scale. Validation warns when several GENIE
+  z-expansion coefficients (`ZExpA1CCQE`–`ZExpA4CCQE`) are thrown without one
+  shared group; `configs/schema/genie_dials.yaml` has the group to use
+  ([generators/genie.md](generators/genie.md#z-expansion-dials)).
 - **`variations`** (GENIE only) lists switch-type dials, which interpolate
   between the tune's model (0) and an alternative (1). They have no Gaussian
   prior, so each gets one deterministic weight column at `value` (in (0, 1],

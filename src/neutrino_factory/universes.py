@@ -1,7 +1,7 @@
 """Reweight universes and variations: parameter throws, tables and weight files.
 
 A universe is one setting of a generator's physics parameters, drawn from
-independent Gaussian priors. Its per-event weight is sigma_universe/sigma_central
+Gaussian priors, independent unless the block lists a correlation group. Its per-event weight is sigma_universe/sigma_central
 at the event's kinematics, so an existing MC set can be re-evaluated under many
 universes without being regenerated. A variation is one switch-type knob (an
 interpolation between two models on [0, 1]) moved to its alternate setting:
@@ -16,7 +16,9 @@ the job label: universe ``k`` must mean the same parameter values in every job
 that uses the seed, or bin-to-bin correlations *between* jobs are lost. Each
 parameter draws from its own stream, so adding a parameter leaves the others
 unchanged, and raising ``count`` extends the existing universes instead of
-redrawing them.
+redrawing them. A correlation group mixes its members' streams through the
+Cholesky factor of its matrix: parameters outside the group are unaffected, but
+a member's values depend on every member of its group.
 """
 
 from __future__ import annotations
@@ -85,8 +87,9 @@ NUWRO_BROKEN_PARAMS: dict[str, str] = {
 # ── GENIE ────────────────────────────────────────────────────────────────────
 
 # GENIE Reweight dials usable as Gaussian universe parameters, by their
-# GSyst::AsString names, each mapped to what it scales. Every one is a positive
-# multiplicative scale on the generation tune's own value (central 1):
+# GSyst::AsString names, each mapped to what it scales. Every one is a
+# multiplicative scale on the generation tune's own value (central 1), positive
+# except for the z-expansion coefficients (see POSITIVE_PARAMS):
 # nf_genie_reweight overrides GENIE's 1-sigma table to 1, so GENIE's
 # p = p_def * (1 + dial * err) becomes p = p_def * value. Each was checked on a
 # 20k C12 sample of its validated CMC (GENIE_VALIDATED_CMC, or
@@ -358,7 +361,8 @@ GENIE_VALIDATED_CMC = ("R-3_06_00", "G18_10a")
 
 # Dials that cannot act under G18_10a's models, checked on another CMC: the
 # z-expansion dials need a z-expansion axial form factor.
-GENIE_ZEXP_DIALS = ("ZNormCCQE", *(f"ZExpA{i}CCQE" for i in range(1, 5)))
+GENIE_ZEXP_COEFF_DIALS = tuple(f"ZExpA{i}CCQE" for i in range(1, 5))
+GENIE_ZEXP_DIALS = ("ZNormCCQE", *GENIE_ZEXP_COEFF_DIALS)
 GENIE_DIAL_VALIDATED_CMC: dict[str, tuple[str, str]] = dict.fromkeys(
     GENIE_ZEXP_DIALS, ("R-3_06_00", "AR23_20i")
 )
@@ -467,6 +471,29 @@ def validate_genie_tune(
     return errors, warnings
 
 
+def genie_uncorrelated_zexp(block: dict[str, Any]) -> str | None:
+    """A warning when z-expansion coefficients are thrown without one shared
+    correlation group, or None.
+
+    The tune's coefficients come from a fit whose errors are strongly correlated
+    (Meyer et al. 2016, Eq. 38). Under the 1/Q^4 sum rules F_A at high Q^2 is a
+    near-cancellation between them, so independent throws inflate it by orders of
+    magnitude there (docs/generators/genie.md, "z-expansion dials"). A single
+    coefficient alone stays legal, as a one-dial study.
+    """
+    thrown = [name for name in block.get("parameters", {}) if name in GENIE_ZEXP_COEFF_DIALS]
+    if len(thrown) < 2:
+        return None
+    for group in block.get("correlations") or []:
+        if set(thrown) <= set(group["parameters"]):
+            return None
+    return (
+        f"GENIE dials {', '.join(thrown)} are thrown without a shared correlation group: "
+        "independent z-expansion coefficients blow up F_A at high Q^2. Use the "
+        "correlations group from configs/schema/genie_dials.yaml (Meyer et al. 2016)"
+    )
+
+
 def genie_inert_dials(names: Iterable[str], antineutrino: bool, current: str) -> str | None:
     """A warning naming the non-resonant background dials that cannot act on a job, or None.
 
@@ -507,10 +534,13 @@ BROKEN_PARAMS: dict[str, dict[str, str]] = {
 }
 
 # Physically positive parameters: a non-positive throw is an error, not a value.
+# Not the z-expansion coefficients a1-a4: a coefficient may change sign (Meyer et
+# al.'s a2 = -0.6 +- 1.0), and GENIE Reweight passes a negative scale through
+# unclamped (GReWeightNuXSecCCQE::Reconfigure).
 POSITIVE_PARAMS = frozenset(
     {"qel_cc_axial_mass", "qel_nc_axial_mass", "qel_s_axial_mass", *NUWRO_NORM_PARAMS,
      *GENIE_SCALE_DIALS}
-)
+) - set(GENIE_ZEXP_COEFF_DIALS)
 
 
 def _check_name(name: str, generator: str, at: str, allowed: Iterable[str]) -> str | None:
@@ -567,6 +597,8 @@ def validate_universes(block: Any, where: str, generator: str) -> list[str]:
             errors.append(f"{at}.sigma: must be a number > 0 (got {sigma!r})")
         if not isinstance(spec.get("log", False), bool):
             errors.append(f"{at}.log: must be true or false")
+    if "correlations" in block:
+        errors += _validate_correlations(block["correlations"], f"{where}.correlations", parameters)
     if generator == "genie":
         names = set(parameters)
         for left, right in GENIE_EXCLUSIVE:
@@ -582,6 +614,68 @@ def validate_universes(block: Any, where: str, generator: str) -> list[str]:
                     "Reweight needs the fourth as the cushion term that keeps the fates "
                     "summing to 1"
                 )
+    return errors
+
+
+def _validate_correlations(groups: Any, where: str, parameters: dict[str, Any]) -> list[str]:
+    """Check a ``universes.correlations`` list of groups, returning error messages."""
+    if not isinstance(groups, list) or not groups:
+        return [f"{where}: must be a non-empty list of groups"]
+    errors: list[str] = []
+    grouped: set[str] = set()
+    for i, group in enumerate(groups):
+        at = f"{where}[{i}]"
+        if not isinstance(group, dict):
+            errors.append(f"{at}: must be a mapping with 'parameters' and 'matrix'")
+            continue
+        unknown = set(group) - {"parameters", "matrix", "source"}
+        if unknown:
+            errors.append(f"{at}: unknown keys {sorted(unknown)}")
+        names = group.get("parameters")
+        if (
+            not isinstance(names, list)
+            or len(names) < 2
+            or not all(isinstance(name, str) for name in names)
+        ):
+            errors.append(f"{at}.parameters: must be a list of at least two parameter names")
+            continue
+        if len(set(names)) != len(names):
+            errors.append(f"{at}.parameters: lists a parameter twice")
+        missing = [name for name in names if name not in parameters]
+        if missing:
+            errors.append(f"{at}.parameters: {missing} are not in the block's parameters")
+        twice = grouped & set(names)
+        if twice:
+            errors.append(f"{at}.parameters: {sorted(twice)} already belong to another group")
+        grouped |= set(names)
+        if not isinstance(group.get("source", ""), str):
+            errors.append(f"{at}.source: must be a string")
+        matrix = group.get("matrix")
+        n = len(names)
+        if (
+            not isinstance(matrix, list)
+            or len(matrix) != n
+            or not all(isinstance(row, list) and len(row) == n for row in matrix)
+            or not all(
+                isinstance(x, (int, float)) and not isinstance(x, bool) for row in matrix for x in row
+            )
+        ):
+            errors.append(f"{at}.matrix: must be a {n}x{n} list of rows of numbers, one per parameter")
+            continue
+        m = np.array(matrix, dtype=float)
+        if not np.allclose(np.diag(m), 1.0, rtol=0, atol=1e-12):
+            errors.append(f"{at}.matrix: the diagonal must be 1 (a correlation, not a covariance)")
+        if not np.allclose(m, m.T, rtol=0, atol=1e-9):
+            errors.append(f"{at}.matrix: must be symmetric")
+        if np.any(np.abs(m) > 1.0):
+            errors.append(f"{at}.matrix: entries must lie in [-1, 1]")
+        try:
+            np.linalg.cholesky(m)
+        except np.linalg.LinAlgError:
+            errors.append(
+                f"{at}.matrix: not positive definite (smallest eigenvalue "
+                f"{np.linalg.eigvalsh((m + m.T) / 2).min():.3g}), so it is no correlation matrix"
+            )
     return errors
 
 
@@ -700,19 +794,46 @@ def resolve_universes(block: dict[str, Any], centrals: dict[str, float]) -> dict
     ``nuwro_centrals``; GENIE's scale dials are all 1).
     """
     seed, count = int(block["seed"]), int(block["count"])
+    groups = block.get("correlations") or []
+    throws = correlate_z({name: draw_z(seed, name, count) for name in block["parameters"]}, groups)
     parameters: dict[str, dict[str, Any]] = {}
     z: dict[str, list[float]] = {}
     values: dict[str, list[float]] = {}
     for name, spec in block["parameters"].items():
         central = float(centrals[name])
         sigma, log = float(spec["sigma"]), bool(spec.get("log", False))
-        throws = draw_z(seed, name, count)
         parameters[name] = {
             "central": central, "sigma": sigma, "log": log, "source": spec.get("source", ""),
         }
-        z[name] = throws.tolist()
-        values[name] = universe_values(name, central, sigma, log, throws).tolist()
-    return {"seed": seed, "count": count, "parameters": parameters, "z": z, "values": values}
+        z[name] = throws[name].tolist()
+        values[name] = universe_values(name, central, sigma, log, throws[name]).tolist()
+    resolved: dict[str, Any] = {
+        "seed": seed, "count": count, "parameters": parameters, "z": z, "values": values,
+    }
+    if groups:
+        resolved["correlations"] = [
+            {"parameters": list(g["parameters"]), "matrix": g["matrix"], "source": g.get("source", "")}
+            for g in groups
+        ]
+    return resolved
+
+
+def correlate_z(z: dict[str, np.ndarray], groups: Iterable[dict[str, Any]]) -> dict[str, np.ndarray]:
+    """Correlate each group's standard-normal throws: ``z_group <- L z_group``.
+
+    ``L`` is the Cholesky factor of the group's correlation ``matrix``, so the
+    group's throws keep unit variance and gain that correlation. Each parameter's
+    ``sigma``/``log`` mapping then applies as usual: linear parameters correlate
+    in their values, log ones in ``ln(value)``. Parameters outside every group are
+    returned unchanged.
+    """
+    out = dict(z)
+    for group in groups:
+        names = list(group["parameters"])
+        chol = np.linalg.cholesky(np.array(group["matrix"], dtype=float))
+        mixed = chol @ np.stack([z[name] for name in names])
+        out.update(zip(names, mixed))
+    return out
 
 
 def resolve_variations(block: dict[str, Any], generator: str) -> dict[str, Any]:
