@@ -162,14 +162,20 @@ guidance, is in `docs/mpp_cluster_usage.md`.
 ## Common output format
 
 Every generator is normalized into the same HDF5 layout: a `metadata` group
-(version identity, flux, requested event count), a `run` group (`event_count`),
-and an `events` group holding one 1-D dataset per column.
+(version identity, initial state, flux, requested event count), a `run` group
+(`event_count`), and an `events` group holding one 1-D dataset per column.
+
+`interaction` is an HDF5 enum: one `int8` code per event (`qel`=0, `res`=1,
+`dis`=2, `coh`=3, `mec`=4, `other`=5), with the labels stored in the dataset's
+type. Plain `ds[()]` returns the codes; `h5py.check_enum_dtype(ds.dtype)` gives
+the mapping, e.g. for `pandas.Categorical.from_codes`. `generator`, `probe` and
+`target` are the same for every event of a file, so they are `metadata`
+attributes, not columns.
 
 | column | unit | meaning |
 | --- | --- | --- |
 | `event_id`, `seed` | – | bookkeeping |
-| `generator`, `probe`, `target` | – | `genie`/`gibuu`/`neut`/`nuwro`, flavour, nucleus |
-| `interaction` | – | `qel`, `res`, `dis`, `coh`, `mec`, `other` |
+| `interaction` | – | enum: `qel`, `res`, `dis`, `coh`, `mec`, `other` |
 | `resonant_primary` | – | was the primary hadronic system resonant? `1` yes, `0` no, `-1` unknown / not applicable |
 | `energy_gev` | GeV | incoming neutrino energy |
 | `weight` | generator-native | raw generator weight, passed through verbatim |

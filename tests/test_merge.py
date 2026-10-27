@@ -5,8 +5,11 @@ import unittest
 from pathlib import Path
 
 import h5py
+import numpy as np
 
 from neutrino_factory.common_output import (
+    FILE_LEVEL_FIELDS,
+    INTERACTION_CODES,
     MergeError,
     merge_hdf5_files,
     read_events,
@@ -225,6 +228,102 @@ class LegacyFileCompatibilityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StringColumnLayoutTests(unittest.TestCase):
+    """``interaction`` is an HDF5 enum; probe/target/generator are metadata attrs."""
+
+    def _event(self, i: int, **fields) -> dict:
+        event = {
+            "event_id": i, "seed": 1, "energy_gev": 1.0, "is_cc": True,
+            "interaction": "qel", "probe": "numu", "target": "Ar40", "generator": "genie",
+        }
+        event.update(fields)
+        return event
+
+    def test_interaction_is_an_enum_and_file_level_fields_are_attrs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "out.h5"
+            labels = ["qel", "res", "dis", "coh", "mec", "other"]
+            events = [self._event(i, interaction=label) for i, label in enumerate(labels)]
+            write_common_hdf5(path, {"generator": "genie"}, events)
+
+            with h5py.File(path) as handle:
+                dataset = handle["events"]["interaction"]
+                self.assertEqual(h5py.check_enum_dtype(dataset.dtype), INTERACTION_CODES)
+                self.assertEqual(dataset.dtype, np.int8)
+                np.testing.assert_array_equal(
+                    dataset[()], [INTERACTION_CODES[label] for label in labels]
+                )
+                for key in FILE_LEVEL_FIELDS:
+                    self.assertNotIn(key, handle["events"])
+                self.assertEqual(handle["metadata"].attrs["probe"], "numu")
+                self.assertEqual(handle["metadata"].attrs["target"], "Ar40")
+                self.assertEqual(handle["metadata"].attrs["generator"], "genie")
+
+            _, read_back = read_events(path)
+            self.assertEqual([e["interaction"] for e in read_back], labels)
+            self.assertEqual({e["target"] for e in read_back}, {"Ar40"})
+
+    def test_unknown_interaction_label_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaisesRegex(ValueError, "inclusive"):
+                write_common_hdf5(
+                    Path(tmpdir) / "bad.h5", {}, [self._event(0, interaction="inclusive")]
+                )
+
+    def test_missing_interaction_is_rejected(self) -> None:
+        event = self._event(0)
+        del event["interaction"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaisesRegex(KeyError, "interaction"):
+                write_common_hdf5(Path(tmpdir) / "bad.h5", {}, [event])
+
+    def test_mixed_targets_in_one_file_are_rejected(self) -> None:
+        events = [self._event(0), self._event(1, target="C12")]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaisesRegex(ValueError, "target"):
+                write_common_hdf5(Path(tmpdir) / "bad.h5", {}, events)
+
+    def test_metadata_disagreeing_with_events_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaisesRegex(ValueError, "probe"):
+                write_common_hdf5(Path(tmpdir) / "bad.h5", {"probe": "nue"}, [self._event(0)])
+
+    def test_merging_unlike_initial_states_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            write_common_hdf5(d / "a.h5", {"generator": "genie"}, [self._event(0)])
+            write_common_hdf5(d / "b.h5", {"generator": "genie"}, [self._event(1, probe="nue")])
+            with self.assertRaisesRegex(ValueError, "probe"):
+                merge_hdf5_files([d / "a.h5", d / "b.h5"], d / "merged.h5")
+
+    def test_string_column_file_is_read_and_converted_by_merging(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            legacy = d / "legacy.h5"
+            events = [self._event(0, interaction="dis"), self._event(1, interaction="coh")]
+            write_common_hdf5(legacy, {"generator": "genie"}, events)
+            # Rewrite into the old layout: variable-length string columns per event.
+            with h5py.File(legacy, "a") as handle:
+                group = handle["events"]
+                del group["interaction"]
+                group.create_dataset("interaction", data=["dis", "coh"], dtype=h5py.string_dtype())
+                for key, value in (("probe", "numu"), ("target", "Ar40"), ("generator", "genie")):
+                    group.create_dataset(key, data=[value] * 2, dtype=h5py.string_dtype())
+                del handle["metadata"].attrs["probe"]
+                del handle["metadata"].attrs["target"]
+
+            _, read_back = read_events(legacy)
+            self.assertEqual([e["interaction"] for e in read_back], ["dis", "coh"])
+            self.assertEqual({e["probe"] for e in read_back}, {"numu"})
+
+            merged = merge_hdf5_files([legacy], d / "merged.h5")
+            with h5py.File(merged) as handle:
+                self.assertIsNotNone(h5py.check_enum_dtype(handle["events"]["interaction"].dtype))
+                self.assertNotIn("probe", handle["events"])
+                self.assertEqual(handle["metadata"].attrs["probe"], "numu")
+                self.assertEqual(handle["metadata"].attrs["target"], "Ar40")
 
 
 def _write_normalized_chunk(

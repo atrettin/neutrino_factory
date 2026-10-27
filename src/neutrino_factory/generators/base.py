@@ -220,7 +220,9 @@ class GeneratorAdapter(ABC):
                     "energy_gev": round(energy, 6),
                     "weight": 1.0,
                     "is_cc": is_cc,
-                    "interaction": self.config["physics"].get("mode", "inclusive"),
+                    # A stub has no channel to report, and the column only
+                    # takes the common labels.
+                    "interaction": "other",
                     # No fallbacks: the job view always supplies these, and
                     # inventing a probe or target would put events labelled with
                     # the wrong initial state into a physics sample.

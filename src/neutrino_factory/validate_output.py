@@ -19,14 +19,16 @@ import h5py
 import numpy as np
 
 from . import catalog, layout
-from .common_output import EVENT_FIELDS, VERSION_IDENTITY_KEYS
+from .common_output import EVENT_DATASETS, FILE_LEVEL_FIELDS, VERSION_IDENTITY_KEYS
 from .slurm import build_task_manifest
 
 # Metadata attrs whose absence makes a file invalid: the version identity (what a
-# merge keys on), the simulated ``flux`` and the requested ``expected_events``
-# (both needed to make a run's output self-describing for plotting).
+# merge keys on), the per-file probe and target, the simulated ``flux`` and the
+# requested ``expected_events`` (both needed to make a run's output
+# self-describing for plotting).
 REQUIRED_METADATA_KEYS = (
     *VERSION_IDENTITY_KEYS,
+    *(key for key in FILE_LEVEL_FIELDS if key not in VERSION_IDENTITY_KEYS),
     "generator_version_id",
     "flux",
     "expected_events",
@@ -39,8 +41,10 @@ OPTIONAL_METADATA_KEYS = ("execution_mode", "run_name", "chunk_id", "seed")
 # the full set (missing values fall back to their defaults/placeholders), so this
 # tracks the schema directly. Files written before a column was introduced fail
 # validation and need regenerating, though ``read_events``/``merge_hdf5_files``
-# still handle them by synthesizing the absent columns from their defaults.
-REQUIRED_COLUMNS = EVENT_FIELDS
+# still handle them by synthesizing the absent columns from their defaults. Files
+# from before ``interaction`` became an enum and probe/target/generator moved to
+# metadata are converted by merging them again.
+REQUIRED_COLUMNS = EVENT_DATASETS
 
 DEFAULT_TOLERANCE = 0.05
 

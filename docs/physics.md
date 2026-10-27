@@ -183,6 +183,8 @@ very names and share one priority chain,
 `normalizers/base.interaction_from_flags` (qel → res → dis → coh → mec → other).
 GiBUU maps an integer `evType` and NEUT a mode number; both use explicit, closed
 tables that raise on an unknown code rather than falling through to `other`.
+The column is stored as an HDF5 enum with fixed codes
+(`common_output.INTERACTION_CODES`), and the writer rejects any other label.
 
 **The categories are pinned to GENIE**: an event gets the category it would have
 had if GENIE had produced it. `qel` deliberately covers NC elastic as well as

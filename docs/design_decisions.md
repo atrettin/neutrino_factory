@@ -583,3 +583,30 @@ sigmas belong with its correlations. They are thrown linearly, because a
 coefficient may legitimately change sign. A z-expansion block without the group
 only warns, so that a single-dial study stays possible. Details and numbers are
 in [generators/genie.md](generators/genie.md#z-expansion-dials).
+
+## Label columns: `interaction` as an HDF5 enum, the rest as metadata (2026-10)
+
+**The problem.** The four label columns (`interaction`, `probe`, `target`,
+`generator`) were variable-length UTF-8 strings. Loading a 1M-event merged
+file into pandas took 2.5 s, against 45 ms for all 17 numeric columns. Each
+string column cost ~400 ms just to read, because h5py builds one Python object
+per element. How it was decoded afterwards mattered much less. The strings were
+also half the file: 282 MB, versus 126 MB with integer codes.
+
+**The decision.** `interaction` is an HDF5 enum with base type `int8` and fixed
+codes (`common_output.INTERACTION_CODES`). The label of each code is stored in
+the dataset's type, so the file needs no outside convention to be read.
+`probe`, `target` and `generator` are constant within a file, since one file is
+one job, so they are written once as `metadata` attributes. `read_events` and
+the merger still hand them out per event. Loading the same file now takes
+~40 ms. The writer rejects interaction labels outside the enum and files that
+mix initial states, so merging unlike jobs now fails instead of producing a
+mixed file. Stub mode labels its events `other` instead of the physics mode.
+Files in the old layout are still readable, and merging them again converts
+them.
+
+**Ruled out.** Converting to categories at load time, with the format
+unchanged: only 1.25× faster, because the read itself is the cost.
+Fixed-length byte strings: 4.5× faster, still ~13× slower than the enum. Bare
+integer codes with a category list in an attribute: as fast as the enum, but
+the mapping becomes a convention the HDF5 type does not record.

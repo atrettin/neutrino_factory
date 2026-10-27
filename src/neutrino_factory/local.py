@@ -143,7 +143,7 @@ def run_local(config: dict[str, Any], manifest_path: str | Path | None = None) -
                 # The initial state, so a merged file says what physics it holds
                 # without anyone having to re-read the configuration.
                 "probe": job["flux"]["particle"],
-                "target_nucleus": job["target"]["nucleus"],
+                "target": job["target"]["nucleus"],
                 "task_count": len(outputs),
                 "config_path": config.get("config_path", ""),
             },

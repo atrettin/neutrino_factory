@@ -104,8 +104,8 @@ class LocalPipelineTests(unittest.TestCase):
                 self.assertEqual({event["probe"] for event in events},
                                  {metadata["probe"]})
                 self.assertEqual({event["target"] for event in events},
-                                 {metadata["target_nucleus"]})
-                seen[metadata["probe"]] = metadata["target_nucleus"]
+                                 {metadata["target"]})
+                seen[metadata["probe"]] = metadata["target"]
 
             self.assertEqual(seen, {"numu": "C12", "numubar": "Ar40"})
 

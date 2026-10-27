@@ -232,7 +232,8 @@ def _chunk(path: Path, n: int, weights: np.ndarray | None, universes_meta: dict 
     if universes_meta is not None:
         metadata["universes"] = universes_meta
     events = [
-        {"event_id": i, "seed": 1, "energy_gev": 1.0, "is_cc": True, "interaction": "qel"}
+        {"event_id": i, "seed": 1, "energy_gev": 1.0, "is_cc": True, "interaction": "qel",
+         "probe": "numu", "target": "C12", "generator": "nuwro"}
         for i in range(n)
     ]
     return write_common_hdf5(path, metadata, events, universe_weights=weights)
@@ -707,7 +708,8 @@ class VariationMergeTests(unittest.TestCase):
                     "seed": 1, "xsec_norm_count": float(len(rows)), "variations": meta,
                 }
                 events = [
-                    {"event_id": j, "seed": 1, "energy_gev": 1.0, "is_cc": True, "interaction": "qel"}
+                    {"event_id": j, "seed": 1, "energy_gev": 1.0, "is_cc": True, "interaction": "qel",
+                     "probe": "numu", "target": "C12", "generator": "genie"}
                     for j in range(len(rows))
                 ]
                 paths.append(write_common_hdf5(

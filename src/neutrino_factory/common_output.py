@@ -17,8 +17,6 @@ LOGGER = logging.getLogger(__name__)
 _MAX_LISTED_PATHS = 3
 
 
-STRING_DTYPE = h5py.string_dtype(encoding="utf-8")
-
 # Values of the ``resonant_primary`` column: was the primary hadronic system
 # produced by the generator's *resonant* term, or by its non-resonant one?
 #
@@ -69,8 +67,25 @@ NUMERIC_FIELD_SPECS: dict[str, tuple[type, Any]] = {
 }
 
 EVENT_NUMERIC_FIELDS = tuple(NUMERIC_FIELD_SPECS)
-EVENT_STRING_FIELDS = ("interaction", "probe", "target", "generator")
+
+# The common interaction labels and their fixed on-disk codes. ``interaction`` is
+# stored as an HDF5 enum: one byte per event, with the label of each code carried
+# in the dataset's own type, so the file stays self-describing. Variable-length
+# strings made reading this one column take ~10x longer than all numeric columns
+# together. The codes are part of the format -- append new labels, never renumber.
+INTERACTION_LABELS = ("qel", "res", "dis", "coh", "mec", "other")
+INTERACTION_CODES = {label: code for code, label in enumerate(INTERACTION_LABELS)}
+INTERACTION_DTYPE = h5py.enum_dtype(INTERACTION_CODES, basetype="i1")
+
+# Fields that are constant within a file -- one file holds one job, i.e. one
+# generator on one initial state -- and are stored once as ``metadata`` attrs
+# instead of as per-event columns. Readers still hand them out per event.
+FILE_LEVEL_FIELDS = ("probe", "target", "generator")
+
+EVENT_STRING_FIELDS = ("interaction", *FILE_LEVEL_FIELDS)
 EVENT_FIELDS = (*EVENT_NUMERIC_FIELDS, *EVENT_STRING_FIELDS)
+# The datasets an ``events`` group carries (besides the optional weight matrices).
+EVENT_DATASETS = (*EVENT_NUMERIC_FIELDS, "interaction")
 
 # Metadata keys that uniquely identify a generator version. Files that differ on
 # any of these describe different physics and must never be merged together.
@@ -149,6 +164,34 @@ def _decode_text_array(values: np.ndarray) -> np.ndarray:
     return np.asarray(values, dtype=object).astype(str)
 
 
+def read_interaction_column(dataset: h5py.Dataset) -> np.ndarray:
+    """Read an ``interaction`` dataset as an array of ``str`` labels.
+
+    Decodes the enum codes through the file's own mapping rather than
+    ``INTERACTION_CODES``, and still reads the variable-length strings of files
+    written before the column became an enum.
+    """
+    mapping = h5py.check_enum_dtype(dataset.dtype)
+    if mapping is None:
+        return _decode_text_array(np.asarray(dataset[()]))
+    labels = np.empty(max(mapping.values()) + 1, dtype=object)
+    for label, code in mapping.items():
+        labels[code] = label
+    return labels[np.asarray(dataset[()])]
+
+
+def read_file_level_field(handle: h5py.File, key: str) -> str:
+    """Read one of ``FILE_LEVEL_FIELDS`` from a file, whichever layout it uses."""
+    events = handle["events"]
+    if key in events:
+        values = set(_decode_text_array(np.asarray(events[key][()])).tolist())
+        if len(values) != 1:
+            raise ValueError(f"Expected one '{key}' value per file, found {sorted(values)}")
+        return values.pop()
+    value = handle["metadata"].attrs[key]
+    return value.decode() if isinstance(value, bytes) else str(value)
+
+
 def _read_event_columns(handle: h5py.File) -> dict[str, np.ndarray]:
     """Read the ``events`` group into per-column arrays.
 
@@ -168,8 +211,15 @@ def _read_event_columns(handle: h5py.File) -> dict[str, np.ndarray]:
         else:
             columns[key] = np.full(count, default, dtype=dtype)
 
-    for key in EVENT_STRING_FIELDS:
-        columns[key] = _decode_text_array(np.asarray(event_group[key][()]))
+    columns["interaction"] = read_interaction_column(event_group["interaction"])
+    for key in FILE_LEVEL_FIELDS:
+        # Files written before these moved to metadata carry them per event.
+        if key in event_group:
+            columns[key] = _decode_text_array(np.asarray(event_group[key][()]))
+        elif count == 0:
+            columns[key] = np.array([], dtype=object)
+        else:
+            columns[key] = np.full(count, read_file_level_field(handle, key), dtype=object)
     for key in WEIGHT_MATRICES:
         if key in event_group:
             columns[key] = np.asarray(event_group[key][()])
@@ -205,6 +255,51 @@ def _concat_event_columns(chunks: list[dict[str, np.ndarray]]) -> dict[str, np.n
     return merged
 
 
+def _encode_interactions(events: list[dict[str, Any]]) -> np.ndarray:
+    """Map each event's ``interaction`` label to its enum code.
+
+    Required, and restricted to ``INTERACTION_LABELS``: the enum has no slot for
+    anything else, and a defaulted label would be indistinguishable from a real one.
+    """
+    codes = np.empty(len(events), dtype=np.int8)
+    for index, event in enumerate(events):
+        if "interaction" not in event:
+            raise KeyError(f"Event {index} is missing the required column 'interaction'")
+        label = str(event["interaction"])
+        if label not in INTERACTION_CODES:
+            raise ValueError(
+                f"Event {index} has interaction '{label}'; expected one of "
+                f"{', '.join(INTERACTION_LABELS)}"
+            )
+        codes[index] = INTERACTION_CODES[label]
+    return codes
+
+
+def _file_level_values(metadata: dict[str, Any], events: list[dict[str, Any]]) -> dict[str, str]:
+    """Collapse the per-event ``FILE_LEVEL_FIELDS`` into one value each.
+
+    Every event must carry them and agree, and so must ``metadata`` where it
+    already names one: a file mixing initial states (e.g. a merge of unlike jobs)
+    has no single value to record. Without events, whatever ``metadata`` says is kept.
+    """
+    values: dict[str, str] = {}
+    for key in FILE_LEVEL_FIELDS:
+        missing = next((index for index, e in enumerate(events) if key not in e), None)
+        if missing is not None:
+            raise KeyError(f"Event {missing} is missing the required column '{key}'")
+        seen = {str(event[key]) for event in events}
+        if key in metadata:
+            seen.add(str(metadata[key]))
+        if len(seen) > 1:
+            raise ValueError(
+                f"Events and metadata disagree on '{key}': {sorted(seen)}. A common-output "
+                "file holds one generator on one initial state."
+            )
+        if seen:
+            values[key] = seen.pop()
+    return values
+
+
 def write_common_hdf5(
     output_path: str | Path,
     metadata: dict[str, Any],
@@ -237,18 +332,8 @@ def write_common_hdf5(
             values = [dtype(event.get(key, default)) for event in events]
         numeric_columns[key] = np.array(values, dtype=dtype) if events else np.array([], dtype=dtype)
 
-    string_defaults = {
-        "interaction": "unknown",
-        "probe": "unknown",
-        "target": "unknown",
-        "generator": metadata.get("generator", "unknown"),
-    }
-    string_columns = {
-        key: np.array(
-            [str(event.get(key, string_defaults[key])) for event in events], dtype=STRING_DTYPE
-        )
-        for key in EVENT_STRING_FIELDS
-    }
+    interaction_codes = _encode_interactions(events)
+    metadata = {**metadata, **_file_level_values(metadata, events)}
 
     with h5py.File(output, "w") as handle:
         meta_group = handle.create_group("metadata")
@@ -261,8 +346,7 @@ def write_common_hdf5(
         event_group = handle.create_group("events")
         for key, values in numeric_columns.items():
             event_group.create_dataset(key, data=values)
-        for key, values in string_columns.items():
-            event_group.create_dataset(key, data=values, dtype=STRING_DTYPE)
+        event_group.create_dataset("interaction", data=interaction_codes, dtype=INTERACTION_DTYPE)
         for key, matrix in matrices.items():
             if matrix is not None:
                 event_group.create_dataset(key, data=np.asarray(matrix, dtype=np.float32))

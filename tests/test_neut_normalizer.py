@@ -158,7 +158,7 @@ class NeutNormalizerJsonTests(unittest.TestCase):
                 "energy_gev": 1.0 + i * 0.5,
                 "weight": 1.0,
                 "is_cc": True,
-                "interaction": "inclusive",
+                "interaction": "other",
                 "probe": "numu",
                 "target": "C12",
                 "generator": "neut",
