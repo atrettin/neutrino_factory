@@ -47,6 +47,9 @@ ESSENTIAL_OVERLAY_FILENAME = "nf_messenger_essential.xml"
 # The universe reweighter built against GENIE Reweight by setup/Dockerfile.genie
 # and setup/apptainer/genie.def from setup/genie/nf_genie_reweight.cc.
 REWEIGHT_BINARY = "nf_genie_reweight"
+# Spec rows (universes, then variations) per nf_genie_reweight process; see
+# GenieAdapter._run_reweight_binary. ~1.2 GiB peak RSS per batch under AR23_20i.
+REWEIGHT_BATCH_ROWS = 100
 ESSENTIAL_OVERLAY_XML = """<?xml version="1.0" encoding="ISO-8859-1"?>
 <messenger_config>
   <priority msgstream="Ntp"> INFO </priority>
@@ -442,13 +445,69 @@ class GenieAdapter(GeneratorAdapter):
         )
 
     def _run_reweight_binary(self, work_dir: Path, code_version: str | None, tune: str) -> None:
+        """Run ``nf_genie_reweight`` over the spec in batches of rows and join the
+        batches' columns, in spec order, into ``universe_weights.root``.
+
+        Batching bounds memory: the process's RSS grows with every universe it
+        reconfigures (~9.4 MiB each under AR23_20i), so 1000 universes in one
+        process ran into an 8 GB Slurm limit near universe 840 and stalled there.
+        """
         # ponytail: ~1 ms per event per universe with every dial on (20k events x
         # 100 universes ~ 35 min, against ~25 min of G18_10a generation); split
         # chunks smaller if that ever dominates.
-        args = [
-            REWEIGHT_BINARY, "events.ghep.root", universes.SPEC_FILE, universes.WEIGHTS_FILE,
-            "--tune", tune,
-        ]
+        header, *rows = (work_dir / universes.SPEC_FILE).read_text(encoding="utf-8").splitlines()
+        rows = [row for row in rows if row.strip()]
+        if len(rows) <= REWEIGHT_BATCH_ROWS:
+            self._run_reweight_batch(
+                work_dir, code_version, tune, universes.SPEC_FILE, universes.WEIGHTS_FILE
+            )
+            return
+
+        n_batches = -(-len(rows) // REWEIGHT_BATCH_ROWS)
+        batch_files: list[tuple[Path, Path, int]] = []
+        for b in range(n_batches):
+            spec = work_dir / f"universes.batch{b:03d}.txt"
+            out = work_dir / f"universe_weights.batch{b:03d}.root"
+            batch_rows = rows[b * REWEIGHT_BATCH_ROWS : (b + 1) * REWEIGHT_BATCH_ROWS]
+            spec.write_text(header + "\n" + "".join(row + "\n" for row in batch_rows), encoding="utf-8")
+            out.unlink(missing_ok=True)
+            batch_files.append((spec, out, len(batch_rows)))
+
+        import uproot
+
+        columns: list[np.ndarray] = []
+        for b, (spec, out, width) in enumerate(batch_files):
+            LOGGER.info(
+                "GENIE reweight batch %d/%d (columns %d-%d of %d)",
+                b + 1, n_batches, b * REWEIGHT_BATCH_ROWS,
+                b * REWEIGHT_BATCH_ROWS + width - 1, len(rows),
+            )
+            self._run_reweight_batch(work_dir, code_version, tune, spec.name, out.name)
+            with uproot.open(out) as f:
+                columns.append(np.asarray(f["weights"]["weights"].array(library="np"), dtype=np.float64))
+            if columns[-1].ndim != 2 or columns[-1].shape[1] != width:
+                raise RuntimeError(f"{out.name} has shape {columns[-1].shape}, expected (*, {width})")
+        if len({c.shape[0] for c in columns}) != 1:
+            raise RuntimeError(
+                f"GENIE reweight batches disagree on the event count: {[c.shape[0] for c in columns]}"
+            )
+        weights = np.concatenate(columns, axis=1)
+        del columns
+        # Written in slices so no single basket approaches ROOT's 1 GB limit.
+        with uproot.recreate(work_dir / universes.WEIGHTS_FILE) as f:
+            tree = f.mktree("weights", {"weights": (np.float64, (weights.shape[1],))})
+            step = max(1, (64 << 20) // (8 * weights.shape[1]))
+            for start in range(0, weights.shape[0], step):
+                tree.extend({"weights": weights[start : start + step]})
+        for spec, out, _ in batch_files:
+            spec.unlink()
+            out.unlink()
+
+    def _run_reweight_batch(
+        self, work_dir: Path, code_version: str | None, tune: str, spec: str, out: str
+    ) -> None:
+        """One ``nf_genie_reweight`` process: spec file ``spec`` -> ``out``, both in ``work_dir``."""
+        args = [REWEIGHT_BINARY, "events.ghep.root", spec, out, "--tune", tune]
         thresholds = self._message_threshold_arg(
             self._log_level_from_sidecar(work_dir), work_dir
         )

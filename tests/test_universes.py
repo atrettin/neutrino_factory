@@ -597,6 +597,53 @@ class GenieSpecTests(unittest.TestCase):
             resolved = json.loads((tmp / universes.RESOLVED_FILE).read_text())
             self.assertEqual(resolved["universes"]["parameters"]["MaCCQE"]["central"], 1.0)
 
+    def test_binary_runs_in_batches_joined_in_spec_order(self) -> None:
+        from unittest import mock
+
+        import uproot
+
+        from neutrino_factory.generators import genie
+        from neutrino_factory.generators.genie import GenieAdapter
+
+        n_events, n_rows = 4, 7
+
+        def fake_binary(work_dir, code_version, tune, spec, out):
+            # Weight of (event i, spec row with first value v) is v + i / 10.
+            first = [float(line.split()[0]) for line in (work_dir / spec).read_text().splitlines()[1:]]
+            weights = np.array(first)[None, :] + np.arange(n_events)[:, None] / 10
+            with uproot.recreate(work_dir / out) as f:
+                f["weights"] = {"weights": weights}
+
+        with tempfile.TemporaryDirectory() as name:
+            tmp = Path(name)
+            universes.write_spec(tmp / universes.SPEC_FILE, ["MaCCQE:scale"], [[k] for k in range(n_rows)])
+            adapter = GenieAdapter.__new__(GenieAdapter)
+            with mock.patch.object(genie, "REWEIGHT_BATCH_ROWS", 3), mock.patch.object(
+                GenieAdapter, "_run_reweight_batch", side_effect=fake_binary
+            ) as run:
+                adapter._run_reweight_binary(tmp, "R-3_06_00", "AR23_20i_00_000")
+            self.assertEqual(run.call_count, 3)
+            with uproot.open(tmp / universes.WEIGHTS_FILE) as f:
+                weights = f["weights"]["weights"].array(library="np")
+            expected = np.arange(n_rows)[None, :] + np.arange(n_events)[:, None] / 10
+            np.testing.assert_array_equal(weights, expected)
+            self.assertEqual(sorted(p.name for p in tmp.iterdir()), [universes.WEIGHTS_FILE, universes.SPEC_FILE])
+
+    def test_small_spec_runs_the_binary_once_on_the_spec_itself(self) -> None:
+        from unittest import mock
+
+        from neutrino_factory.generators.genie import GenieAdapter
+
+        with tempfile.TemporaryDirectory() as name:
+            tmp = Path(name)
+            universes.write_spec(tmp / universes.SPEC_FILE, ["MaCCQE:scale"], [[1.0], [1.1]])
+            adapter = GenieAdapter.__new__(GenieAdapter)
+            with mock.patch.object(GenieAdapter, "_run_reweight_batch") as run:
+                adapter._run_reweight_binary(tmp, "R-3_06_00", "AR23_20i_00_000")
+            run.assert_called_once_with(
+                tmp, "R-3_06_00", "AR23_20i_00_000", universes.SPEC_FILE, universes.WEIGHTS_FILE
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

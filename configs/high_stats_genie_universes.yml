@@ -42,6 +42,11 @@
 #     of a chunk is events x 1000 doubles, 0.8 GB here), C12 30 (33k, ~17 h),
 #     Ar40 50 (20k, ~18 h), Fe56 60 (16.7k, ~18 h).
 # Total ~5100 core-hours. Merged universe weights: 4 GB per job (float32).
+#
+# Memory: GENIE Reweight grows ~9.4 MiB per universe, and the 2026-10-26 pilot
+# (1000 universes in one process) stalled at the 8G limit near universe 843.
+# The adapter now runs the reweighter in batches of 100 universes
+# (docs/generators/genie.md, "Upstream issues" 6).
 
 run:
   name: high_stats_genie_universes

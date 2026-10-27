@@ -521,6 +521,19 @@ then one row per variation (that switch at its value, everything else nominal),
 into `universes.txt` and `universes.json`, runs the driver, and the normalizer
 splits the columns into the two datasets.
 
+**Batches.** The driver's memory grows with every `Reconfigure()`, by about
+10 MB per column under AR23_20i ([upstream issue 6](#upstream-issues)). The
+adapter therefore runs it on at most `REWEIGHT_BATCH_ROWS` = 100 rows per
+process (`universes.batchNNN.txt` → `universe_weights.batchNNN.root`), logs one
+line per batch, and joins the batches' columns in row order into
+`universe_weights.root`. The batch files are deleted afterwards. A spec of 100
+rows or fewer runs as a single process on `universes.txt` itself. Each extra
+batch repeats the driver's startup, ~6 s.
+
+Batching does not change the weights: on 1000 H1 events under AR23_20i, columns
+0–199 of a 10-batch run of 1000 universes are bit-identical to one process
+running those 200 universes, and the run's peak RSS was 1.2 GiB.
+
 **Tune-model snapshot.** Validation uses `GENIE_TUNE_MODELS` in
 `src/neutrino_factory/universes.py`, a snapshot of each R-3_06_00 CMC's FSI,
 CCQE, RES, COH, DIS and MEC models from `config/<CMC>/ModelConfiguration.xml`. A
@@ -751,3 +764,12 @@ To report to the GENIE team.
    although generation did not treat them as such.
 5. **`FormZone` is not σ-preserving under hA2018,** and its engine reports
    events without a valid INTRANUKE rescattering code.
+6. **Memory grows with every `Reconfigure()`.** Under AR23_20i with 40 scale
+   dials, `nf_genie_reweight` reached the 8 GB Slurm limit (MaxRSS 7.98 GiB)
+   near column 843 for every nucleus and event count, so the growth is per
+   column, not per event. The cgroup then throttled the process instead of
+   killing it: each further column took hours, and the 2026-10-26 pilot of
+   `configs/high_stats_genie_universes.yml` stalled in all tasks. Measured on
+   odslserv01 over 1000 H1 events: peak RSS 728 / 1198 / 2146 MiB for 50 / 100 /
+   200 columns, i.e. ~260 MiB plus 9.4 MiB per column. *Workaround:* the adapter
+   runs the driver in batches of 100 columns. Not yet narrowed down to an engine.
