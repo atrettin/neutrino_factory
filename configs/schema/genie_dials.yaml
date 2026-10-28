@@ -1,0 +1,143 @@
+# Every GENIE Reweight dial neutrino-factory accepts, at GENIE's default 1 sigma.
+#
+# A catalog to copy from, not a config: paste the `genie:` block below into a
+# GENIE job and delete what does not fit (see the WARNING lines). As it stands
+# it is not valid for any single tune, because some dials exclude each other.
+#
+# sigma: GENIE's own fractional 1-sigma error on the tune's value, from
+#   config/GSystUncertaintyTable.xml of R-3_06_00 (one file for every tune),
+#   except ZExpA1-4CCQE, which take Meyer et al. 2016 (see their section).
+#   Every dial is a scale on the generation tune's own value (central 1). Scale
+#   them to taste, e.g. 2x for a conservative band.
+# log: true everywhere except ZExpA1-4CCQE: the throw is exp(sigma*z), always
+#   positive. In linear mode (1 + sigma*z) a dial at sigma >= 0.5 throws a
+#   non-positive scale in a few percent of universes, which fails the run.
+# Full reference: docs/generators/genie.md#reweight-universes-and-variations.
+#
+# Universes need code_version R-3_06_00. `validate-config` refuses any dial
+# that cannot work under the job's tune, and warns about dials that can act
+# but were checked under a different model, or that cannot act on the job's
+# flavor or current.
+
+genie:
+  universes:
+    seed: 20261023          # required; universe k means the same throws in every job using it
+    count: 100
+    parameters:
+      # ── CCQE, dipole axial form factor ───────────────────────────────────
+      # WARNING: only under a dipole (or running-M_A) form factor: refused under
+      #   the z-expansion tunes (AR23_20i, G18_10i/j, G24_20*, N24_20i) and
+      #   SuSAv2 QE (G21_11*). MaCCQE and NormCCQE exclude each other: keep one.
+      MaCCQE: {sigma: 0.03, log: true}
+      NormCCQE: {sigma: 0.20, log: true}       # GENIE: +20 / -15 %; larger side
+
+      # ── CCQE, z-expansion axial form factor ──────────────────────────────
+      # WARNING: only under a z-expansion form factor (AR23_20i, G18_10i/j,
+      #   G24_20*, N24_20i); refused elsewhere. Checked on AR23_20i.
+      ZNormCCQE: {sigma: 0.20, log: true}      # GENIE: +20 / -15 %; larger side
+      # The coefficients a1-a4 are Meyer et al. 2016's fit (PRD 93, 113015,
+      #   Eq. 36: a = [2.30(13), -0.6(1.0), -3.8(2.5), 2.3(2.7)], exactly the
+      #   R-3_06_00 ZExpAxialFormFactorModel.xml values). sigma = delta_a / |a|.
+      #   GENIE's table (+-14 / 67 / 100 / 75 %) is not used: it does not match
+      #   the fit, and only Meyer's sigmas go with Meyer's correlations below.
+      # Linear, not log: a coefficient may change sign (a2 does in ~27 % of
+      #   universes), and GENIE Reweight passes negative scales through.
+      # WARNING: throw all four together with the correlations group at the end
+      #   of this block. Thrown independently they inflate F_A at high Q^2 by
+      #   orders of magnitude (docs/generators/genie.md, "z-expansion dials").
+      ZExpA1CCQE: {sigma: 0.0565, source: "Meyer et al. 2016, Eq. 36"}
+      ZExpA2CCQE: {sigma: 1.667, source: "Meyer et al. 2016, Eq. 36"}
+      ZExpA3CCQE: {sigma: 0.658, source: "Meyer et al. 2016, Eq. 36"}
+      ZExpA4CCQE: {sigma: 1.174, source: "Meyer et al. 2016, Eq. 36"}
+
+      # ── CCQE, Coulomb correction ─────────────────────────────────────────
+      # WARNING: only under the Nieves CCQE model (G18_10*, AR23_20i, G24_20*,
+      #   N24_20i); refused under Llewellyn Smith and SuSAv2 QE.
+      CoulombCCQE: {sigma: 0.20, log: true}
+
+      # ── CC resonance ─────────────────────────────────────────────────────
+      # WARNING: MaCCRES/MvCCRES and NormCCRES exclude each other: keep either
+      #   the pair (shape and normalization) or NormCCRES alone.
+      MaCCRES: {sigma: 0.20, log: true}
+      MvCCRES: {sigma: 0.10, log: true}
+      NormCCRES: {sigma: 0.20, log: true}
+
+      # ── Non-resonant background (DIS events with W < 2 GeV) ──────────────
+      # Each dial acts on one probe and one current only: v* on neutrinos,
+      # vbar* on antineutrinos, CC* / NC* on that current. Keeping all 16 in a
+      # block shared by every flavor is fine; validation warns where they are
+      # inert.
+      NonRESBGvpCC1pi: {sigma: 0.50, log: true}
+      NonRESBGvpCC2pi: {sigma: 0.50, log: true}
+      NonRESBGvnCC1pi: {sigma: 0.50, log: true}
+      NonRESBGvnCC2pi: {sigma: 0.50, log: true}
+      NonRESBGvpNC1pi: {sigma: 0.50, log: true}
+      NonRESBGvpNC2pi: {sigma: 0.50, log: true}
+      NonRESBGvnNC1pi: {sigma: 0.50, log: true}
+      NonRESBGvnNC2pi: {sigma: 0.50, log: true}
+      NonRESBGvbarpCC1pi: {sigma: 0.50, log: true}
+      NonRESBGvbarpCC2pi: {sigma: 0.50, log: true}
+      NonRESBGvbarnCC1pi: {sigma: 0.50, log: true}
+      NonRESBGvbarnCC2pi: {sigma: 0.50, log: true}
+      NonRESBGvbarpNC1pi: {sigma: 0.50, log: true}
+      NonRESBGvbarpNC2pi: {sigma: 0.50, log: true}
+      NonRESBGvbarnNC1pi: {sigma: 0.50, log: true}
+      NonRESBGvbarnNC2pi: {sigma: 0.50, log: true}
+
+      # ── DIS, Bodek-Yang ──────────────────────────────────────────────────
+      AhtBY: {sigma: 0.25, log: true}
+      BhtBY: {sigma: 0.25, log: true}
+      CV1uBY: {sigma: 0.30, log: true}
+      CV2uBY: {sigma: 0.40, log: true}
+
+      # ── Coherent pion production ─────────────────────────────────────────
+      MaCOHpi: {sigma: 0.40, log: true}
+      R0COHpi: {sigma: 0.10, log: true}
+      NormCCCOH: {sigma: 1.00, log: true}      # linear mode would fail ~1 universe in 6
+
+      # ── MEC ──────────────────────────────────────────────────────────────
+      # Checked under Valencia MEC (G18_10a); warns under SuSAv2 MEC.
+      NormCCMEC: {sigma: 0.50, log: true}
+
+      # ── hA2018 FSI ───────────────────────────────────────────────────────
+      # WARNING: only under hA2018 FSI; refused under hN2018, INCL, Geant4 and
+      #   the old hA (e.g. G18_10b-d, G21_11b-d, G24_20j-l).
+      MFP_pi: {sigma: 0.20, log: true}
+      MFP_N: {sigma: 0.20, log: true}
+      # WARNING: at most three fates per group; the fourth is the "cushion" that
+      #   keeps the fates summing to 1. FrInel_* is commented out as the cushion
+      #   (the largest fate fraction); swap it with another fate if you prefer.
+      FrCEx_pi: {sigma: 0.50, log: true}
+      FrAbs_pi: {sigma: 0.30, log: true}
+      FrPiProd_pi: {sigma: 0.20, log: true}
+      # FrInel_pi: {sigma: 0.40, log: true}
+      FrCEx_N: {sigma: 0.50, log: true}
+      FrAbs_N: {sigma: 0.20, log: true}
+      FrPiProd_N: {sigma: 0.20, log: true}
+      # FrInel_N: {sigma: 0.40, log: true}
+
+    # Correlations between dials, acting on their standard-normal throws (for
+    # these linear dials: on their values). Each matrix is in dial space, i.e.
+    # between the scales as thrown, not between the coefficients themselves.
+    correlations:
+      # Meyer et al. 2016, Eq. 38, the correlation of a1-a4, times
+      # sign(a_i * a_j): a2 and a3 are negative, so raising their scale lowers
+      # the coefficient, which flips the sign of their cross terms with a1, a4.
+      # Positive definite, if barely (smallest eigenvalue 0.002).
+      - parameters: [ZExpA1CCQE, ZExpA2CCQE, ZExpA3CCQE, ZExpA4CCQE]
+        matrix:
+          - [ 1.000, -0.350,  0.678,  0.611]
+          - [-0.350,  1.000, -0.898, -0.367]
+          - [ 0.678, -0.898,  1.000,  0.685]
+          - [ 0.611, -0.367,  0.685,  1.000]
+        source: "Meyer et al. 2016, PRD 93, 113015, Eq. 38 x sign(a_i a_j)"
+
+  # Switches between two models, one deterministic weight column each at
+  # `value` (in (0, 1], default 1 = the alternative model). Never universes.
+  variations:
+    # WARNING: only under the Nieves CCQE model.
+    RPA_CCQE: {}                 # 1 = Nieves CCQE with RPA off
+    # WARNING: refused under Empirical-MEC tunes (G00_00*, G18_01*, G18_02*, GDM18_*).
+    XSecShape_CCMEC: {}          # 1 = Empirical MEC's (T_l, cos theta_l) shape
+    DecayAngMEC: {}              # 1 = MEC cluster decay as 3 cos^2(theta) about q (0: isotropic)
+    Theta_Delta2Npi: {}          # 1 = isotropic Delta -> N pi decay

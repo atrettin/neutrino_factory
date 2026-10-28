@@ -123,7 +123,7 @@ via `containers.apptainer_dispatch`.
 
 ## GENIE flux: a histogram we write, divided out from the one GENIE saved (2026-07)
 
-2026-07 — moved to [generators/genie.md](generators/genie.md#flux-handling).
+2026-07 — moved to [generators/genie.md](generators/genie.md#the-flux-histogram-is-written-by-hand-2026-07).
 
 ## GiBUU cross-section weight (`xsec_weight`) normalization
 
@@ -131,15 +131,15 @@ via `containers.apptainer_dispatch`.
 
 ## GiBUU non-resonant background events are `dis`, and every channel is enabled (2026-07)
 
-2026-07 — moved to [generators/gibuu.md](generators/gibuu.md#why-the-non-resonant-background-is-dis).
+2026-07 — moved to [generators/gibuu.md](generators/gibuu.md#the-non-resonant-background-is-counted-as-dis-2026-07).
 
 ## NEUT: a payload extracted from a published image, not built from source
 
-2026-07 — moved to [generators/neut.md](generators/neut.md#versions-and-provenance).
+2026-07 — moved to [generators/neut.md](generators/neut.md#a-payload-extracted-from-a-published-image).
 
 ## NEUT output flattening (`nf_flatten.C`)
 
-2026-07 — moved to [generators/neut.md](generators/neut.md#output-flattening-nf_flattenc).
+2026-07 — moved to [generators/neut.md](generators/neut.md#flattening-nf_flattenc).
 
 ## NEUT cross-section weight (`xsec_weight`) normalization
 
@@ -147,11 +147,11 @@ via `containers.apptainer_dispatch`.
 
 ## NEUT flux: log bins of per-bin integrals, divided out on NEUT's own grid (2026-07)
 
-2026-07 — moved to [generators/neut.md](generators/neut.md#flux-handling).
+2026-07 — moved to [generators/neut.md](generators/neut.md#log-spaced-per-bin-integrals-2026-07).
 
 ## NEUT paths are limited to 80 characters
 
-2026-07 — moved to [generators/neut.md](generators/neut.md#every-path-neut-sees-must-be-a-bare-filename).
+2026-07 — moved to [generators/neut.md](generators/neut.md#paths-must-be-bare-filenames).
 
 ## NEUT is not bit-reproducible from its seed
 
@@ -201,11 +201,16 @@ confirming the run itself is complete.
 
 ## The probe flavour is one table, validated at config time (2026-07)
 
-2026-07 — moved to [physics.md](physics.md#probes-and-targets).
+2026-07 — moved to [physics.md](physics.md#probes-and-targets). Kept here: the
+antineutrino sign comes from the PDG code because `translators/gibuu.py` used to
+negate `process_ID` when the flavour string ended in `bar`, and a name-based test
+silently produces a *neutrino* run for any probe spelled differently. Validating
+the name at config time means a typo fails at `validate-config` rather than as a
+`KeyError` inside a translator once Slurm tasks are already running.
 
 ## GENIE: a probe with no staged spline is an error, not a zero weight (2026-07)
 
-2026-07 — moved to [generators/genie.md](generators/genie.md#cross-section-weight).
+2026-07 — moved to [generators/genie.md](generators/genie.md#a-probe-with-no-spline-is-an-error-2026-07).
 
 ## A job label is a pure function of its own job
 
@@ -245,7 +250,7 @@ would generate identical events and inflate the sample's statistics.
 
 2026-10 — superseded: the final-state columns are hadronic observables, the
 condition this entry named for reversing it. See the FSI entry below and
-[generators/gibuu.md](generators/gibuu.md#final-state-interactions-are-switched-on).
+[generators/gibuu.md](generators/gibuu.md#fsi-transport).
 
 ## Plots are grouped by the configuration, not by the events
 
@@ -395,7 +400,7 @@ to take (`event::W()` is not stored), and the four-vector sum is ours anyway.
 Subtracting the binding energy ourselves: it depends on the local Fermi momentum
 at the vertex, which would mean reimplementing NuWro's density profile. Details
 and measurements are in
-[generators/nuwro.md](generators/nuwro.md#w_true_gev-is-nuwros-own-w-taken-from-the-outgoing-hadrons).
+[generators/nuwro.md](generators/nuwro.md#w_true_gev-is-nuwros-own-w).
 
 ## FSI is on in every generator, set by the framework or the GENIE tune (2026-10)
 
@@ -423,3 +428,215 @@ against 15.9 s); the figures in [performance.md](performance.md) predate it. The
 change — `weight` is fixed at the vertex and inherited through transport, and
 a same-seed C12 run gave bit-identical weights both ways.
 
+## Reweight universes for NuWro (2026-10)
+
+**The problem.** We want cross-section uncertainties and bin-to-bin correlations
+(including between jobs) without regenerating MC, by reweighting each event under
+many parameter throws.
+
+**The decisions.**
+
+- **Explicit, shared seed; one stream per parameter.** Seeding from the job label
+  would give each job its own universe *k* and destroy cross-job correlations.
+  Per-parameter streams keep existing throws stable when a parameter is added or
+  `count` is raised.
+- **Central from generation, not config.** Writing a configurable central into
+  `params.txt` would make the central MC drift from its `config_version` while
+  keeping the same version identity. That identity is what the merge checks, so
+  such chunks would merge silently. The block therefore gives only sigma.
+- **Optional log-space sampling per parameter**, so that a covariance can be
+  formed in log space (Peelle's Pertinent Puzzle).
+- **`nf_reweight` instead of `reweight_to`.** The latter spends ~12.5 s of fixed
+  setup per universe, ~21 min per chunk at 100 universes. The single-pass driver
+  over the same engines takes 2.3 s and gives identical weights.
+- **2D float32 `universe_weights` dataset** rather than N scalar columns: one
+  optional key for writer, reader, merger and validator. float32 is ample for
+  ratios.
+- **No weighted generation.** NuWro's `save_test_events = 2` was considered as a
+  way to cover phase space better. The parameters that can be reweighted leave
+  the region where σ is non-zero unchanged, so ratio weights on
+  rejection-sampled events are already unbiased. The weighted mode drops
+  zero-weight events anyway, and its normalization is a running estimate
+  (upstream issue 7 in [generators/nuwro.md](generators/nuwro.md)). It would buy
+  tail statistics at the cost of effective sample size.
+
+**What was ruled out.** RES parameters (`pion_axial_mass`, `pion_C5A`): broken in
+the hybrid model (all RES weights NaN), and the hybrid model's generation does
+not depend on them either. Correlated priors are deferred. Details and measurements are in
+[generators/nuwro.md](generators/nuwro.md#reweight-universes).
+
+## Reweight universes for GENIE, and switch variations (2026-10)
+
+**The problem.** NuWro's own reweighting turned out narrow: only the QE axial
+form factor works, plus channel norms applied in Python (see the entry above).
+GENIE Reweight covers more of the model, so it was added as a second backend
+with the same output contract.
+
+**The decisions.**
+
+- **One generic sampler, per-generator tables.** `universes.py` draws the
+  throws, writes the binary's input and reads its output for both generators.
+  What is generator-specific is only the allowlist and the binary. The config
+  key mirrors NuWro's (`genie.universes`, same schema), so no existing config
+  changed.
+- **GENIE dials are fractional scales with central 1, and GENIE's own 1σ table
+  is overridden to 1.** The dial then equals the fractional change exactly,
+  and the config's `sigma` is the only prior. This also gives `log: true` the
+  same meaning as for NuWro's norms. GENIE's table, with its asymmetric
+  NormCCQE entry, never enters, so the metadata fully describes the prior.
+- **Switch-type knobs are variations, not universes.** Interpolations between
+  two models on [0, 1] (RPA on/off, MEC decay angle, …) have no Gaussian prior.
+  Each gets one deterministic column in a separate `variation_weights` dataset,
+  so a covariance built from `universe_weights` can never mix them in.
+- **Own driver (`nf_genie_reweight`), not the shipped apps.** `grwght1p` scans
+  one dial; `grwghtnp` covers a subset of engines and miswires `NormCCRES`.
+  The driver adopts only the engines the dials need, because the hA2018 FSI
+  engine exits on any other tune. It fails loudly on a dial the tune's model
+  does not handle.
+- **The nominal dσ is recomputed, not read from the event.** For
+  G18_10a_02_11a's RES and COH models the stored dσ differs from the model's
+  own by event-dependent factors up to ~38×, which turned every weight into
+  noise (upstream issue 1 in [generators/genie.md](generators/genie.md)).
+- **The allowlist is what passed a per-dial check on a real sample.** Each dial
+  was checked for nominal weight exactly 1, finite weights, the right channel,
+  and a plausible sign and size; MaCCQE also passed closure against a directly
+  generated sample. The rest fail validation until checked.
+
+**What was ruled out.** `FormZone` and the AGKY dials, which are not
+σ-preserving and log FATAL errors or give single weights up to 5. NC and
+antineutrino variants and the z-expansion dials for AR23_20i were not ruled out,
+only unchecked; they were added in the second round (2026-10, below). Under a tune without
+hA2018 FSI the FSI dials cannot work at all, and validation refuses them (see
+the 2026-10 section on checking dials against the tune). Details and measurements are in
+[generators/genie.md](generators/genie.md#reweight-universes-and-variations).
+
+## GENIE dials checked against the tune at validation (2026-10)
+
+**The problem.** Which GENIE Reweight dials work depends on the tune's models.
+`nf_genie_reweight` caught a mismatch only after `gevgen` had finished, and some
+mismatches, such as `RPA_CCQE` under a model without RPA, gave weights of 1
+without any error.
+
+**The decision.** `validate-config` checks each dial against the models of the
+job's comprehensive model configuration (CMC). The models come from a
+checked-in snapshot of every CMC's `ModelConfiguration.xml`
+(`GENIE_TUNE_MODELS`), not from the payload at validation time. The CLI also
+runs where no GENIE payload is present (the Docker dev setup, where generators
+live in images), and a check that silently disappears there would let the same
+config pass in one place and fail in another. A test compares the snapshot with
+the payload wherever the payload is present. A dial that cannot work under the
+tune is an error. A dial whose engine model only differs from the one it was
+checked under (G18_10a) is a warning, logged once per dial and CMC. A large
+matrix such as `keystone_prod_v2.yml` would otherwise repeat it for every job.
+Rules and lists are in
+[generators/genie.md](generators/genie.md#which-dials-a-tune-allows).
+
+## GENIE dials for z-expansion tunes and every probe (2026-10)
+
+**The problem.** Under AR23_20i (and every other z-expansion tune) no CCQE dial
+was accepted, so a universe set varied no CCQE parameter at all. The four
+accepted non-resonant background dials act only on neutrino CC events
+(`GReWeightNonResonanceBkg` picks the dial per event via `GSyst::RBkg`), so
+antineutrino jobs and NC events had no non-resonant background variation, and
+nothing said so.
+
+**The decision.** Accept `ZNormCCQE`, `ZExpA1CCQE`–`ZExpA4CCQE`, `CoulombCCQE`
+and the remaining 12 `NonRESBG*` dials, each read off the R-1_04_02 engine
+sources: the CCQE engine picks its z-expansion mode by itself under a
+z-expansion form factor, and `CoulombCCQE` acts only through the Nieves model's
+`CoulombScale`, so both get a tune rule. The z-expansion dials cannot act under
+G18_10a, so the CMC a dial was checked under is now per dial
+(`GENIE_DIAL_VALIDATED_CMC`, AR23_20i for them). A dial that cannot act on a
+job's probe or current is a warning, not an error: refusing it would force one
+parameter list per flavor, while a shared block keeps universe *k* the same
+throws in every job, which is what makes cross-flavor correlations estimable.
+All 18 passed the per-dial checks of `scripts/check_genie_dials.py` on four
+20k-event samples (2026-10-26); a dial that fails a later check moves to the
+rejected list. `configs/schema/genie_dials.yaml` lists every accepted dial at
+GENIE's default 1σ, so a config can be assembled by copying rather than from
+the documentation's tables; a test keeps it equal to the allowlist and, where
+`GSystUncertaintyTable.xml` is present, to GENIE's values.
+
+## Correlated universe parameters, and Meyer et al. for the z-expansion (2026-10)
+
+**The problem.** The 1000-universe pilot of
+`configs/high_stats_genie_universes.yml` threw `ZExpA1CCQE`–`ZExpA4CCQE`
+independently in log mode with GENIE's table sigmas. Under the 1/Q⁴ sum rules,
+F_A at high Q² is a near-cancellation between the z-expansion coefficients, so
+independent throws inflated it by orders of magnitude: single CCQE weights
+reached ~2500 and single universes 10× nominal in a 0.5–5 GeV bin. The
+coefficients come from one fit (Meyer et al. 2016) with strongly correlated
+errors, and the universes had no way to express that.
+
+**The decision.** A `universes` block takes optional `correlations`: groups of
+its parameters, each with a correlation matrix, applied as `z ← L z` with `L`
+the Cholesky factor. It is generic, not GENIE-specific, and acts on the
+standard-normal throws, so each parameter's `sigma` and `log` keep their
+meaning. The matrix is between the parameters *as thrown*: for GENIE, between
+the scale dials. The alternative, the paper's matrix as printed with the code
+flipping signs by the tune's coefficients, would put per-tune knowledge of
+GENIE's central values into the generic sampling code. The sign conversion
+lives in `configs/schema/genie_dials.yaml` instead, and a test recomputes it
+from the paper's Eq. 36 and 38. The four coefficients take Meyer et al.'s
+sigmas, not GENIE's table: the table does not match the fit, and only the fit's
+sigmas belong with its correlations. They are thrown linearly, because a
+coefficient may legitimately change sign. A z-expansion block without the group
+only warns, so that a single-dial study stays possible. Details and numbers are
+in [generators/genie.md](generators/genie.md#z-expansion-dials).
+
+## Label columns: `interaction` as an HDF5 enum, the rest as metadata (2026-10)
+
+**The problem.** The four label columns (`interaction`, `probe`, `target`,
+`generator`) were variable-length UTF-8 strings. Loading a 1M-event merged
+file into pandas took 2.5 s, against 45 ms for all 17 numeric columns. Each
+string column cost ~400 ms just to read, because h5py builds one Python object
+per element. How it was decoded afterwards mattered much less. The strings were
+also half the file: 282 MB, versus 126 MB with integer codes.
+
+**The decision.** `interaction` is an HDF5 enum with base type `int8` and fixed
+codes (`common_output.INTERACTION_CODES`). The label of each code is stored in
+the dataset's type, so the file needs no outside convention to be read.
+`probe`, `target` and `generator` are constant within a file, since one file is
+one job, so they are written once as `metadata` attributes. `read_events` and
+the merger still hand them out per event. Loading the same file now takes
+~40 ms. The writer rejects interaction labels outside the enum and files that
+mix initial states, so merging unlike jobs now fails instead of producing a
+mixed file. Stub mode labels its events `other` instead of the physics mode.
+Files in the old layout are still readable, and merging them again converts
+them.
+
+**Ruled out.** Converting to categories at load time, with the format
+unchanged: only 1.25× faster, because the read itself is the cost.
+Fixed-length byte strings: 4.5× faster, still ~13× slower than the enum. Bare
+integer codes with a category list in an attribute: as fast as the enum, but
+the mapping becomes a convention the HDF5 type does not record.
+
+## Failure diagnosis from files, and retries chosen by failure mode (2026-10)
+
+**The problem.** The `keystone_prod_v3_pilot` run had 90 failed tasks of five
+kinds: node failures, seed-dependent NEUT and NuWro crashes, NuWro hangs, and
+GiBUU on H1 never finishing. `check-status` reported them only as missing
+chunks, hidden under 215 lines about merged files that had not been made yet.
+Telling the kinds apart took hand-written scripts over sidecars, logs and file
+times, plus `sacct`. `retry` relaunched every missing chunk, which would have
+duplicated the still-running hung tasks and rerun the crashes with the seeds
+that crashed.
+
+**The decision.** `diagnosis.py` classifies each task from evidence readable
+inside the container, where Slurm's own tools are not: the sidecar, Slurm's
+messages in the task's stderr, and modification times. Every mode needs
+positive evidence. A task with no sidecar and no log is `no_output` rather than
+a guessed node failure, because a queued task looks the same; `check-status`
+prints the `sacct` command that settles it. Hung tasks are detected by
+silence, with a 4 h default set from the ~80 min gaps measured in healthy GiBUU
+chunks. `retry --modes` picks modes, and never `running` or `hung`; a hung task is
+cancelled first, using the `scancel` line `check-status` prints, and then
+retried as `cancelled`. `--new-seed` adds an attempt counter to the seed hash.
+Attempt 0 hashes exactly as before, so no existing seed changes. The new seeds
+are written into the manifest, so it remains the record of what ran.
+
+**Ruled out.** Guessing node failures from array order (a no-log task below
+indices that already ran): Slurm holds back tasks for reasons other than node
+failure, such as the per-user job limit. Reading `sacct` output from a file the
+user dumps on the host: one more manual step, and the printed `sacct` command
+covers the only case where it matters.

@@ -23,8 +23,9 @@ from .slurm import (
     build_task_manifest,
     default_manifest_path,
     format_slurm_array_spec,
-    identify_missing_chunks,
     render_retry_sbatch_script,
+    reseed_tasks,
+    save_manifest,
     write_manifest,
     write_sbatch_script,
 )
@@ -36,6 +37,19 @@ from .validate_output import (
     validate_file,
 )
 from .status import format_status_table, job_status_stats
+from .diagnosis import (
+    DEFAULT_HUNG_AFTER_HOURS,
+    NO_OUTPUT_NOTE,
+    RETRYABLE_MODES,
+    array_job_ids,
+    diagnose_run,
+    find_task_logs,
+    format_diagnosis_report,
+    format_task_detail,
+    load_manifest_tasks,
+    mode_counts,
+    node_summary,
+)
 
 
 def _print_json(payload: dict) -> None:
@@ -199,11 +213,31 @@ def cmd_submit(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_retry(args: argparse.Namespace) -> int:
-    """Retry tasks whose chunk output files are missing.
+def _parse_retry_modes(text: str | None) -> list[str]:
+    if not text:
+        return list(RETRYABLE_MODES)
+    modes = [mode.strip() for mode in text.split(",") if mode.strip()]
+    for mode in modes:
+        if mode in ("running", "hung"):
+            raise RuntimeError(
+                f"'{mode}' tasks cannot be retried: they still hold their Slurm slot and "
+                "write to the chunk's paths. Cancel hung tasks with the scancel command "
+                "printed by check-status, then retry with --modes cancelled."
+            )
+        if mode not in RETRYABLE_MODES:
+            raise RuntimeError(
+                f"Unknown failure mode '{mode}'. Known: {', '.join(RETRYABLE_MODES)}"
+            )
+    return modes
 
-    Loads the existing manifest, checks which chunk files don't exist, and
-    resubmits only those tasks with the new time parameter.
+
+def cmd_retry(args: argparse.Namespace) -> int:
+    """Retry tasks that failed in the selected ways.
+
+    Diagnoses every task of the existing manifest (see ``diagnosis``), selects
+    those whose failure mode is in ``--modes``, optionally gives them new seeds,
+    and resubmits only those tasks with the new time parameter. Running and hung
+    tasks are never selected.
     """
     config = load_config(args.config)
     manifest_path = default_manifest_path(config)
@@ -214,26 +248,39 @@ def cmd_retry(args: argparse.Namespace) -> int:
             "Run 'neutrino-factory submit' or 'neutrino-factory plan' first."
         )
 
+    modes = _parse_retry_modes(args.modes)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    diagnoses = diagnose_run(config, manifest["tasks"])
+    selected = [d for d in diagnoses if d["mode"] in modes]
+    selected_indices = sorted(int(d["task_index"]) for d in selected)
+    by_mode = {mode: sorted(int(d["task_index"]) for d in selected if d["mode"] == mode)
+               for mode in modes}
+    by_mode = {mode: indices for mode, indices in by_mode.items() if indices}
+    busy = mode_counts(d for d in diagnoses if d["mode"] in ("running", "hung"))
 
-    # Identify tasks with missing chunk output files
-    missing_indices = identify_missing_chunks(config, manifest)
+    base_payload: dict[str, Any] = {
+        "config": args.config,
+        "manifest_path": str(manifest_path),
+        "total_tasks": len(manifest["tasks"]),
+        "modes": modes,
+        "selected_by_mode": by_mode,
+        "not_retried": busy,
+    }
 
-    if not missing_indices:
-        print("All chunk output files exist. No tasks need to be retried.")
-        _print_json(
-            {
-                "config": args.config,
-                "manifest_path": str(manifest_path),
-                "total_tasks": len(manifest["tasks"]),
-                "missing_tasks": 0,
-                "status": "complete",
-            }
-        )
+    if busy:
+        print("Not retried (still holding a Slurm slot): "
+              + ", ".join(f"{mode} {n}" for mode, n in busy.items()))
+    if not selected_indices:
+        print(f"No tasks failed with mode(s) {', '.join(modes)}. Nothing to retry.")
+        _print_json({**base_payload, "missing_tasks": 0, "status": "nothing-to-retry"})
         return 0
 
-    print(f"Found {len(missing_indices)} missing chunk(s) out of {len(manifest['tasks'])} total tasks")
-    print(f"Task indices to retry: {format_slurm_array_spec(missing_indices)}")
+    print(f"Retrying {len(selected_indices)} of {len(manifest['tasks'])} tasks:")
+    for mode, indices in by_mode.items():
+        print(f"  {mode:<13} {len(indices):>5}  {format_slurm_array_spec(indices)}")
+    if "no_output" in by_mode:
+        print(f"Warning: {NO_OUTPUT_NOTE} Any still in the queue will run twice; "
+              "check squeue first.")
 
     executor = args.executor or config["run"].get("executor", "slurm")
 
@@ -243,9 +290,19 @@ def cmd_retry(args: argparse.Namespace) -> int:
             "Use 'neutrino-factory run-task' to manually re-run specific tasks."
         )
 
+    reseeded: dict[int, tuple[int, int]] = {}
+    if args.new_seed:
+        reseeded = reseed_tasks(config, manifest, selected_indices)
+        if args.dry_run:
+            print(f"Would give {len(reseeded)} task(s) new seeds (dry run: manifest unchanged).")
+        else:
+            save_manifest(manifest, manifest_path)
+            print(f"Gave {len(reseeded)} task(s) new seeds, recorded in {manifest_path}.")
+    base_payload["reseeded"] = {str(i): {"old": old, "new": new} for i, (old, new) in reseeded.items()}
+
     # Generate retry sbatch script
     retry_script = render_retry_sbatch_script(
-        config, manifest_path, missing_indices, args.time
+        config, manifest_path, selected_indices, args.time
     )
 
     work_root = Path(config["storage"]["work_root"])
@@ -254,22 +311,18 @@ def cmd_retry(args: argparse.Namespace) -> int:
     retry_script_path = slurm_dir / f"{config['run']['name']}_retry.sbatch"
     retry_script_path.write_text(retry_script, encoding="utf-8")
 
+    payload = {
+        **base_payload,
+        "sbatch_path": str(retry_script_path),
+        "missing_tasks": len(selected_indices),
+        "missing_task_indices": selected_indices,
+        "array_spec": format_slurm_array_spec(selected_indices),
+        "time_override": args.time,
+    }
+
     if args.dry_run:
         print(retry_script)
-        _print_json(
-            {
-                "config": args.config,
-                "manifest_path": str(manifest_path),
-                "sbatch_path": str(retry_script_path),
-                "total_tasks": len(manifest["tasks"]),
-                "missing_tasks": len(missing_indices),
-                "missing_task_indices": missing_indices,
-                "array_spec": format_slurm_array_spec(missing_indices),
-                "time_override": args.time,
-                "submitted": False,
-                "mode": "dry-run",
-            }
-        )
+        _print_json({**payload, "submitted": False, "mode": "dry-run"})
         return 0
 
     if shutil.which("sbatch") is None:
@@ -279,20 +332,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
             "on the Slurm head node with:\n\n"
             f"  sbatch {retry_script_path}\n"
         )
-        _print_json(
-            {
-                "config": args.config,
-                "manifest_path": str(manifest_path),
-                "sbatch_path": str(retry_script_path),
-                "total_tasks": len(manifest["tasks"]),
-                "missing_tasks": len(missing_indices),
-                "missing_task_indices": missing_indices,
-                "array_spec": format_slurm_array_spec(missing_indices),
-                "time_override": args.time,
-                "submitted": False,
-                "mode": "rendered-only",
-            }
-        )
+        _print_json({**payload, "submitted": False, "mode": "rendered-only"})
         return 0
 
     completed = subprocess.run(
@@ -303,18 +343,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
 
     print(f"Submitted retry job: {completed.stdout.strip()}")
     _print_json(
-        {
-            "config": args.config,
-            "manifest_path": str(manifest_path),
-            "sbatch_path": str(retry_script_path),
-            "total_tasks": len(manifest["tasks"]),
-            "missing_tasks": len(missing_indices),
-            "missing_task_indices": missing_indices,
-            "array_spec": format_slurm_array_spec(missing_indices),
-            "time_override": args.time,
-            "submitted": True,
-            "scheduler_output": completed.stdout.strip(),
-        }
+        {**payload, "submitted": True, "scheduler_output": completed.stdout.strip()}
     )
     return 0
 
@@ -528,12 +557,33 @@ def cmd_list_generators(args: argparse.Namespace) -> int:
 
 def cmd_check_status(args: argparse.Namespace) -> int:
     config = load_config(args.config)
-    outputs = expected_outputs(config)
+    tasks = load_manifest_tasks(config)
+    diagnoses = diagnose_run(config, tasks, hung_after_hours=args.hung_after)
 
-    merged_results = [
-        validate_file(entry["path"], expected_events=None, tolerance=args.tolerance)
-        for entry in outputs["merged"]
-    ]
+    if args.task:
+        by_index = {int(task["task_index"]): (task, d) for task, d in zip(tasks, diagnoses)}
+        unknown = [index for index in args.task if index not in by_index]
+        if unknown:
+            raise RuntimeError(
+                f"Task index(es) {unknown} not in the manifest (0..{len(tasks) - 1})"
+            )
+        if args.json:
+            _print_json({"diagnoses": [by_index[index][1] for index in args.task]})
+        else:
+            print("\n\n".join(format_task_detail(config, *by_index[index]) for index in args.task))
+        return 0
+
+    outputs = expected_outputs(config)
+    # Merged files exist only once `merge` has been run, so on a cluster run
+    # they would otherwise be reported as missing until the very end.
+    merged_results = (
+        [
+            validate_file(entry["path"], expected_events=None, tolerance=args.tolerance)
+            for entry in outputs["merged"]
+        ]
+        if args.check_merged
+        else []
+    )
     chunk_results = [
         validate_file(entry["path"], expected_events=None, tolerance=args.tolerance)
         for entry in outputs["chunks"]
@@ -551,30 +601,42 @@ def cmd_check_status(args: argparse.Namespace) -> int:
         stats = job_status_stats(chunks_by_job.get(job_index, []))
         stats["job_label"] = merged["job_label"]
         job_stats.append(stats)
+    shown_jobs = (
+        [row for row in job_stats if row["valid"] < row["total"]] if args.failed_only else job_stats
+    )
+    array_ids = array_job_ids(find_task_logs(config))
 
     if args.json:
-        _print_json(
-            {
-                "merged": merged_results,
-                "chunks_summary": chunks_summary,
-                "chunks": chunk_results,
-                "jobs": job_stats,
-            }
-        )
+        payload: dict[str, Any] = {
+            "chunks_summary": chunks_summary,
+            "chunks": chunk_results,
+            "jobs": shown_jobs,
+            "mode_counts": mode_counts(diagnoses),
+            "diagnoses": [d for d in diagnoses if d["mode"] != "ok"],
+            "nodes": node_summary(diagnoses),
+            "array_job_ids": array_ids,
+        }
+        if args.check_merged:
+            payload["merged"] = merged_results
+        _print_json(payload)
     else:
-        print(f"Merged files ({len(merged_results)}):")
-        for result in merged_results:
-            print(format_report(result))
-        print()
+        if args.check_merged:
+            print(f"Merged files ({len(merged_results)}):")
+            for result in merged_results:
+                print(format_report(result))
+            print()
         print(f"Chunk files ({chunks_summary['total']}):")
         print(format_summary(chunks_summary))
         print()
-        print(f"Per-job status ({len(job_stats)} jobs):")
-        print(format_status_table(job_stats))
+        heading = "jobs with incomplete chunks" if args.failed_only else "jobs"
+        print(f"Per-job status ({len(shown_jobs)} {heading}):")
+        print(format_status_table(shown_jobs))
+        print()
+        print(format_diagnosis_report(diagnoses, array_ids))
 
+    all_tasks_ok = all(d["mode"] == "ok" for d in diagnoses)
     all_merged_valid = all(r["valid"] for r in merged_results)
-    all_chunks_valid = chunks_summary["fraction_valid"] == 1.0
-    return 0 if all_merged_valid and all_chunks_valid else 1
+    return 0 if all_tasks_ok and all_merged_valid else 1
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
@@ -751,22 +813,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     retry_parser = subparsers.add_parser(
         "retry",
-        help="Retry tasks whose chunk output files are missing",
+        help="Retry tasks that failed, selected by failure mode",
         description=(
-            "Relaunch tasks from a previous run where the chunk output files don't exist. "
-            "Loads the existing manifest, identifies missing chunks, and submits a new Slurm "
-            "array job with only those task indices. The time parameter must be provided "
-            "since a common cause for failures is insufficient time allocation. The original "
-            "manifest is reused, so task indices, seeds, and job configurations remain "
-            "identical to the original run."
+            "Relaunch failed tasks of a previous run. Every task is diagnosed as in "
+            "check-status; those whose failure mode is in --modes are resubmitted as a new "
+            "Slurm array job. Running and hung tasks are never retried, since they still "
+            "hold their Slurm slot: cancel hung tasks with the scancel command check-status "
+            "prints, and retry them as 'cancelled'. The time parameter must be provided "
+            "since a common cause for failures is insufficient time allocation. The "
+            "original manifest is reused, so task indices and job configurations stay the "
+            "same; seeds too, unless --new-seed is given, which draws fresh seeds for the "
+            "retried tasks and records them in the manifest."
         ),
         epilog=(
             "Examples:\n"
-            "  # Check which tasks need retry without submitting\n"
+            "  # Check which tasks would be retried without submitting\n"
             "  neutrino-factory retry --config configs/smoke/genie_c12.yaml --time 00:30:00 --dry-run\n"
             "\n"
-            "  # Submit retry job with increased time\n"
-            "  neutrino-factory retry --config configs/smoke/genie_c12.yaml --time 01:00:00"
+            "  # Tasks lost to a node failure (check squeue first: queued ones would run twice)\n"
+            "  neutrino-factory retry --config <cfg> --time 23:59:00 --modes no_output\n"
+            "\n"
+            "  # Generator crashes, with new seeds\n"
+            "  neutrino-factory retry --config <cfg> --time 23:59:00 --modes crash --new-seed"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -784,7 +852,23 @@ def build_parser() -> argparse.ArgumentParser:
     retry_parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print the retry sbatch script without submitting",
+        help="Print the retry sbatch script without submitting (and without reseeding)",
+    )
+    retry_parser.add_argument(
+        "--modes",
+        metavar="MODE[,MODE...]",
+        help=(
+            "Failure modes to retry, comma-separated, from: "
+            f"{', '.join(RETRYABLE_MODES)} (default: all of them)"
+        ),
+    )
+    retry_parser.add_argument(
+        "--new-seed",
+        action="store_true",
+        help=(
+            "Give the retried tasks new seeds, for failures that would otherwise "
+            "recur with the same seed (generator crashes, hangs)"
+        ),
     )
     retry_parser.set_defaults(func=cmd_retry)
 
@@ -881,12 +965,22 @@ def build_parser() -> argparse.ArgumentParser:
             "finish, and average/maximum chunk run time — read from the per-chunk "
             "sidecars, so a job's progress is visible before any output exists), "
             "full validation status for the merged files, and roll-up summary "
-            "statistics for the many per-chunk files. Exits non-zero if any "
-            "merged file is invalid or any chunk is invalid."
+            "statistics for the many per-chunk files. Then classifies every task "
+            "that is not finished and valid by failure mode -- crash, oom, timeout, "
+            "cancelled, node_failure, hung, invalid, no_output -- from its sidecar, "
+            "its Slurm logs and its output activity, and lists them with node and "
+            "reason, plus the nodes with failures. Prints a ready-to-paste scancel "
+            "command for hung tasks and an sacct command for tasks that left no "
+            "output. Merged files are validated only with --check-merged. Exits "
+            "non-zero if any task is not finished and valid (or, with "
+            "--check-merged, any merged file is invalid)."
         ),
         epilog=(
-            "Example:\n"
-            "  neutrino-factory check-status --config configs/examples/power_law_numu_Ar.yaml"
+            "Examples:\n"
+            "  neutrino-factory check-status --config configs/examples/power_law_numu_Ar.yaml\n"
+            "  neutrino-factory check-status --config <cfg> --failed-only\n"
+            "  neutrino-factory check-status --config <cfg> --task 217 --task 2528\n"
+            "  neutrino-factory check-status --config <cfg> --check-merged   # after merge"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -901,6 +995,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check_status_parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON"
+    )
+    check_status_parser.add_argument(
+        "--check-merged",
+        action="store_true",
+        help="Also validate the merged files (skipped by default: they only exist after `merge`)",
+    )
+    check_status_parser.add_argument(
+        "--hung-after",
+        type=float,
+        default=DEFAULT_HUNG_AFTER_HOURS,
+        metavar="HOURS",
+        help=(
+            "Call a running task hung after this many hours without log or output "
+            f"activity (default: {DEFAULT_HUNG_AFTER_HOURS:g})"
+        ),
+    )
+    check_status_parser.add_argument(
+        "--failed-only",
+        action="store_true",
+        help="List only jobs with chunks that are not finished and valid in the per-job table",
+    )
+    check_status_parser.add_argument(
+        "--task",
+        type=int,
+        action="append",
+        metavar="INDEX",
+        help=(
+            "Show everything known about one task instead of the run summary: its "
+            "diagnosis, sidecar, log tails and newest raw files. Repeatable."
+        ),
     )
     check_status_parser.set_defaults(func=cmd_check_status)
 

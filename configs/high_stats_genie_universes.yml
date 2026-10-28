@@ -1,0 +1,176 @@
+# high_stats_genie_universes - GENIE AR23_20i with 1000 reweight universes.
+#
+# Grid: 2 flavors (numu, numubar) x 4 nuclei (H1, C12, Ar40, Fe56) = 8 jobs,
+# 1e6 events each, chunked per nucleus (see Runtime): 300 tasks in total.
+#
+# Universes: every GENIE Reweight scale dial that validation accepts under
+# AR23_20i, thrown in log mode with sigma = GENIE's default 1-sigma (from
+# config/GSystUncertaintyTable.xml, R-3_06_00; the same values as
+# configs/schema/genie_dials.yaml). ZNormCCQE's asymmetric +20/-15% uses the
+# larger side, since a throw is symmetric. Log mode keeps every scale
+# positive: in linear mode NormCCCOH (100%) would throw a non-positive scale
+# in ~1 universe in 6 and fail the run. For small sigma the
+# log-space spread approximates GENIE's fractional error; for the large ones it
+# is skewed (sigma 1.0 spans x0.37 to x2.7 at 1 sigma, not 0 to 2). Not thrown:
+#   * MaCCQE, NormCCQE - refused under AR23_20i's z-expansion axial form
+#     factor; CCQE is varied through ZNormCCQE, ZExpA1-4CCQE and CoulombCCQE.
+#   * NormCCRES - mutually exclusive with MaCCRES/MvCCRES (different CCRES
+#     engine modes); the Ma/Mv pair moves both shape and normalization.
+#   * FrInel_pi, FrInel_N - one fate per hA2018 group must stay fixed as the
+#     unitarity cushion. Inelastic is the largest fate fraction, so it is the
+#     least likely to be driven below zero by the other fates' throws.
+#   * Switch dials (RPA_CCQE etc.) - two-point model choices, not
+#     fluctuations; they belong under genie.variations, not universes.
+# NormCCMEC is accepted with a validation warning: AR23_20i uses SuSAv2 MEC,
+# not the Valencia model the dial was checked under. All 16 non-resonant
+# background dials share one block across flavors; validation warns that the
+# nu ones are inert on numubar and vice versa, which is expected.
+#
+# The 18 dials added on 2026-10-23 (z-expansion, Coulomb, nubar/NC non-resonant
+# background) passed scripts/check_genie_dials.py on 2026-10-26. ZExpA1CCQE
+# responds strongly (+20% -> mean CC qel weight 0.80, single weights down to
+# 0.04), which is why the sigmas are GENIE's own rather than inflated.
+#
+# Exception: ZExpA1-4CCQE. The 2026-10-26 pilot threw them independently in log
+# mode with GENIE's sigmas, and a handful of CCQE events at Q^2 > 1.5 GeV^2 got
+# universe weights up to ~2500 (Fe56 numu: per-bin universe/nominal ratio up to
+# 10.75 in 0.5-5 GeV). The coefficients are now thrown linearly with the sigmas
+# and correlations of the fit they come from, Meyer et al. 2016 (Eq. 36-38; as
+# in configs/schema/genie_dials.yaml). See docs/generators/genie.md,
+# "z-expansion dials".
+#
+# Runtime (measured 2026-10-26 on odslserv01, this exact job block at 2000
+# events per job, all 40 dials): the reweight stage costs, per event per
+# universe, H1 0.15 ms, C12 1.77 ms, Ar40 3.3 ms, Fe56 3.9 ms (numu and numubar
+# within 3%), i.e. 0.15 / 1.8 / 3.3 / 3.9 s per event with 1000 universes.
+# Generation plus normalization is <= 0.03 s per event, negligible. Chunks are
+# sized for ~18 h per task (of the 23:59 limit; ~30% headroom for slower
+# batch nodes):
+#   H1 10 chunks (1e5 events, ~5 h; kept small for memory: the weight matrix
+#     of a chunk is events x 1000 doubles, 0.8 GB here), C12 30 (33k, ~17 h),
+#     Ar40 50 (20k, ~18 h), Fe56 60 (16.7k, ~18 h).
+# Total ~5100 core-hours. Merged universe weights: 4 GB per job (float32).
+#
+# Memory: GENIE Reweight grows ~9.4 MiB per universe, and the 2026-10-26 pilot
+# (1000 universes in one process) stalled at the 8G limit near universe 843.
+# The adapter now runs the reweighter in batches of 100 universes
+# (docs/generators/genie.md, "Upstream issues" 6).
+
+run:
+  name: high_stats_genie_universes
+  seed: 20261015
+  executor: slurm
+  stub_mode: false
+  log_level: essential
+
+macros:
+  ar23_universes:
+    params:
+      particle: null
+      nucleus: null
+      chunks: null
+    job:
+      generator: genie
+      code_version: "R-3_06_00"
+      config_version: "AR23_20i_00_000"
+      events: 1000000
+      chunks: "{{chunks}}"
+      flux:
+        type: power_law
+        particle: "{{particle}}"
+        emin_gev: 0.1
+        emax_gev: 500.0
+        gamma: -2.0
+      target:
+        nucleus: "{{nucleus}}"
+      physics:
+        mode: inclusive
+        current: inclusive
+      genie:
+        universes:
+          seed: 20261015
+          count: 1000
+          parameters:
+            # CCQE, z-expansion axial form factor (GENIE default +20/-15%, 14%, 67%,
+            # 100%, 75%)
+            ZNormCCQE: {sigma: 0.20, log: true}
+            # Meyer et al. 2016, Eq. 36: sigma = delta_a / |a|; linear, since a
+            # coefficient may change sign. Correlated: see correlations below.
+            ZExpA1CCQE: {sigma: 0.0565, source: "Meyer et al. 2016, Eq. 36"}
+            ZExpA2CCQE: {sigma: 1.667, source: "Meyer et al. 2016, Eq. 36"}
+            ZExpA3CCQE: {sigma: 0.658, source: "Meyer et al. 2016, Eq. 36"}
+            ZExpA4CCQE: {sigma: 1.174, source: "Meyer et al. 2016, Eq. 36"}
+            # CCQE Coulomb correction, Nieves (20%)
+            CoulombCCQE: {sigma: 0.20, log: true}
+            # CC resonance (GENIE default 20%, 10%)
+            MaCCRES: {sigma: 0.20, log: true}
+            MvCCRES: {sigma: 0.10, log: true}
+            # Non-resonant background, W < 2 GeV (50% each)
+            NonRESBGvpCC1pi: {sigma: 0.50, log: true}
+            NonRESBGvpCC2pi: {sigma: 0.50, log: true}
+            NonRESBGvnCC1pi: {sigma: 0.50, log: true}
+            NonRESBGvnCC2pi: {sigma: 0.50, log: true}
+            NonRESBGvpNC1pi: {sigma: 0.50, log: true}
+            NonRESBGvpNC2pi: {sigma: 0.50, log: true}
+            NonRESBGvnNC1pi: {sigma: 0.50, log: true}
+            NonRESBGvnNC2pi: {sigma: 0.50, log: true}
+            NonRESBGvbarpCC1pi: {sigma: 0.50, log: true}
+            NonRESBGvbarpCC2pi: {sigma: 0.50, log: true}
+            NonRESBGvbarnCC1pi: {sigma: 0.50, log: true}
+            NonRESBGvbarnCC2pi: {sigma: 0.50, log: true}
+            NonRESBGvbarpNC1pi: {sigma: 0.50, log: true}
+            NonRESBGvbarpNC2pi: {sigma: 0.50, log: true}
+            NonRESBGvbarnNC1pi: {sigma: 0.50, log: true}
+            NonRESBGvbarnNC2pi: {sigma: 0.50, log: true}
+            # DIS, Bodek-Yang (25%, 25%, 30%, 40%)
+            AhtBY: {sigma: 0.25, log: true}
+            BhtBY: {sigma: 0.25, log: true}
+            CV1uBY: {sigma: 0.30, log: true}
+            CV2uBY: {sigma: 0.40, log: true}
+            # Coherent pion production (40%, 10%, 100%)
+            MaCOHpi: {sigma: 0.40, log: true}
+            R0COHpi: {sigma: 0.10, log: true}
+            NormCCCOH: {sigma: 1.00, log: true}
+            # MEC (50%)
+            NormCCMEC: {sigma: 0.50, log: true}
+            # hA2018 FSI mean free paths (20% each)
+            MFP_pi: {sigma: 0.20, log: true}
+            MFP_N: {sigma: 0.20, log: true}
+            # hA2018 pion fates (CEx 50%, Abs 30%, PiProd 20%; Inel = cushion)
+            FrCEx_pi: {sigma: 0.50, log: true}
+            FrAbs_pi: {sigma: 0.30, log: true}
+            FrPiProd_pi: {sigma: 0.20, log: true}
+            # hA2018 nucleon fates (CEx 50%, Abs 20%, PiProd 20%; Inel = cushion)
+            FrCEx_N: {sigma: 0.50, log: true}
+            FrAbs_N: {sigma: 0.20, log: true}
+            FrPiProd_N: {sigma: 0.20, log: true}
+          correlations:
+            # Meyer et al. 2016, Eq. 38 x sign(a_i a_j), in dial space.
+            - parameters: [ZExpA1CCQE, ZExpA2CCQE, ZExpA3CCQE, ZExpA4CCQE]
+              matrix:
+                - [ 1.000, -0.350,  0.678,  0.611]
+                - [-0.350,  1.000, -0.898, -0.367]
+                - [ 0.678, -0.898,  1.000,  0.685]
+                - [ 0.611, -0.367,  0.685,  1.000]
+              source: "Meyer et al. 2016, PRD 93, 113015, Eq. 38 x sign(a_i a_j)"
+
+jobs:
+  - use: ar23_universes
+    matrix:
+      particle: [numu, numubar]
+      include:
+        - {nucleus: H1, chunks: 10}
+        - {nucleus: C12, chunks: 30}
+        - {nucleus: Ar40, chunks: 50}
+        - {nucleus: Fe56, chunks: 60}
+
+storage:
+  software_root: "${NF_SOFTWARE_ROOT:-./software}"
+  output_root: "/ptmp/mpp/atrettin/neutrino_factory/output/high_stats_genie_universes"
+  work_root: "/ptmp/mpp/atrettin/neutrino_factory/work/high_stats_genie_universes"
+
+slurm:
+  partition: alma
+  time: "23:59:00"
+  cpus_per_task: 1
+  mem: "8G"

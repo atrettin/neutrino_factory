@@ -13,17 +13,17 @@ For the project pitch, installation and a quickstart, see the
 | Document | What it covers |
 |---|---|
 | [architecture.md](architecture.md) | The module map and data flow of the Python package, and the run-configuration model (a run is a list of jobs). Read before changing how a config becomes tasks or where outputs land. |
-| [configuration.md](configuration.md) | The run YAML schema in full: sections, jobs, macros and matrix expansion, job labels and the output layout, seeds, `physics.current`, `.env` precedence, and the Slurm task-manifest schema. |
+| [configuration.md](configuration.md) | The run YAML schema in full: sections, jobs, macros and matrix expansion, job labels and the output layout, seeds, `physics.current`, reweight universes and variations (`nuwro.universes`, `genie.universes` with optional `correlations`, `genie.variations`), `.env` precedence, and the Slurm task-manifest schema. |
 
 ## Domain knowledge
 
 | Document | What it covers |
 |---|---|
-| [physics.md](physics.md) | The physics contract every backend is normalized onto: units and frames, the `xsec_weight` definition and its per-nucleon convention, chunk merging as an average, flux density vs. per-bin integrals, probes and targets, weak current, the interaction taxonomy, derived kinematics, and weighted statistics. |
-| [generators/genie.md](generators/genie.md) | GENIE: runtime-discovered tunes, the two-stage `gevgen` → `gntpc` run, why the flux histogram is written by hand, and how σ is reconstructed by summing cross-section splines. |
-| [generators/nuwro.md](generators/nuwro.md) | NuWro: the inline `beam_energy` spectrum in MeV, the `dyn_*` channel switches, and why its per-event weight is a single run-wide constant that is already per nucleon. |
-| [generators/neut.md](generators/neut.md) | NEUT: the payload extracted from a published image, the 80-character Fortran path limit, the `NEUT-CRS` slot tables that substitute for a CC/NC switch, the `nf_flatten.C` second stage, and the mode → interaction table. |
-| [generators/gibuu.md](generators/gibuu.md) | GiBUU: cross-section weighting rather than rejection sampling, and everything that follows — `num_runs` as the merge denominator, `inclusive` as two concatenated passes, negative weights, and the `evType` table. |
+| [physics.md](physics.md) | The physics contract every backend is normalized onto, one summary table per topic linking into the generator docs, with design notes and validation at the end: units and frames, the `xsec_weight` definition and its per-nucleon convention, chunk merging as an average, flux density vs. per-bin integrals, probes and targets, weak current, the interaction taxonomy, derived kinematics, weighted statistics, and reweight universes (definition, linear/log sampling, correlated parameter groups, per-generator central values, switch variations kept apart, what their spread means). |
+| [generators/genie.md](generators/genie.md) | GENIE: staging splines and runtime-discovered tunes, what the output labels mean (charm `qel`, the per-tune `Wcut` RES/DIS boundary), the reweight dials each tune allows, why the z-expansion dials need Meyer et al.'s correlations, and the switch variations; then the `gevgen` → `gntpc` pipeline, the hand-written flux histogram, σ from the spline sum, `nf_genie_reweight`, validation and upstream issues. |
+| [generators/nuwro.md](generators/nuwro.md) | NuWro: what `res`, `resonant_primary` and `w_true_gev` mean given its RES/DIS blend and vertex binding energy, the reweightable parameters, the path-length abort; then `params.txt`, the inline MeV spectrum, the run-wide per-nucleon weight, `dyn_*` switches, `nf_reweight`, validation and upstream issues. |
+| [generators/neut.md](generators/neut.md) | NEUT: the payload extracted from a published image, the mode → interaction table, the 5.7.0 DIS lepton-angle cut that distorts kinematics above ~10 GeV, seed non-reproducibility; then the 80-character path limit, the `NEUT-CRS` slot tables that substitute for a CC/NC switch, the `nf_flatten.C` second stage, validation and upstream issues. |
+| [generators/gibuu.md](generators/gibuu.md) | GiBUU: cross-section weighting and what it means for users (split by weight, negative and heavy-tailed weights, approximate event counts), the `evType` table, the post-transport snapshot; then the jobcard, `num_runs` as the merge denominator, `inclusive` as two passes, validation. |
 | [generator_versioning.md](generator_versioning.md) | The two-axis `code_version` + `config_version` model, adapters as the source of truth for versions, runtime tune discovery, and validation strictness. |
 
 ## Operations
@@ -32,14 +32,14 @@ For the project pitch, installation and a quickstart, see the
 |---|---|
 | [containers.md](containers.md) | The two container pathways (Docker locally, Apptainer on the cluster), how `NF_CONTAINER_RUNTIME` selects between them, image naming from the version catalog, and the Dockerfile ↔ def pairing. |
 | [apptainer_image.md](apptainer_image.md) | How the unified `nf-base.sif` is composed from per-generator payload SIFs, and how adapters dispatch into it via `nf-run`. |
-| [mpp_cluster_usage.md](mpp_cluster_usage.md) | The MPCDF/ODSL runbook: execution model, filesystems, the mandatory `--partition=alma`, first-time setup, submitting a run, working up from a first scheduler-only submission, and troubleshooting. |
+| [mpp_cluster_usage.md](mpp_cluster_usage.md) | The MPCDF/ODSL runbook: execution model, filesystems, the mandatory `--partition=alma`, first-time setup, submitting a run, diagnosing and retrying failed tasks (failure modes, `--task` detail, `retry --modes`/`--new-seed`), working up from a first scheduler-only submission, and troubleshooting. |
 | [performance.md](performance.md) | Measured generator runtimes on one machine: the machine facts, per-generator and per-GENIE-tune wall clocks and per-event rates at numu/Fe56/CC, the fixed overheads (GENIE's ~23 s spline load, NEUT's ~142 s), the 27× tune-rate spread and its model-construction cause, and Slurm-sizing formulae. |
 
 ## Extending
 
 | Document | What it covers |
 |---|---|
-| [adding_generators.md](adding_generators.md) | The four places to touch when adding a backend, the Apptainer payload contract, and the variants (a generator you cannot build from source; a second processing stage). |
+| [adding_generators.md](adding_generators.md) | The four places to touch when adding a backend, the shared generator-doc template, the Apptainer payload contract, and the variants (a generator you cannot build from source; a second processing stage). |
 
 ## History
 

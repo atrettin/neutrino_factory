@@ -22,6 +22,11 @@ Stage: builder
     ROOT_VERSION=6.30.10
     JOBS=4
 
+# neutrino-factory's single-pass universe reweighter, compiled into the NuWro
+# tree below (a project artifact, not part of NuWro).
+%files
+    setup/nuwro/nf_reweight.cc /opt/nf-src/nf_reweight.cc
+
 %post
     export DEBIAN_FRONTEND=noninteractive
     apt-get update && apt-get install -y --no-install-recommends \
@@ -129,6 +134,14 @@ Stage: builder
     make -j"{{ JOBS }}" \
         LDFLAGS="$(/opt/root/bin/root-config --libs) -L/opt/ROOTEGPythia6/lib -Wl,-rpath,/opt/ROOTEGPythia6/lib -lEGPythia6 -lPythia6 -lGeom -lMinuit -lgfortran"
 
+    # nf_reweight is linked exactly like reweight_to, so its Makefile rule is
+    # reweight_to's with the name swapped (same step as setup/Dockerfile.nuwro).
+    cp /opt/nf-src/nf_reweight.cc src/rew/nf_reweight.cc
+    sed -n '/^\$(BIN)\/reweight_to:/,/LINK.cc/p' Makefile | sed 's#reweight_to#nf_reweight#g' >> Makefile
+    make bin/nf_reweight \
+        LDFLAGS="$(/opt/root/bin/root-config --libs) -L/opt/ROOTEGPythia6/lib -Wl,-rpath,/opt/ROOTEGPythia6/lib -lEGPythia6 -lPythia6 -lGeom -lMinuit -lgfortran"
+    test -x bin/nf_reweight
+
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 Bootstrap: docker
 From: ubuntu:22.04
@@ -204,8 +217,22 @@ exec "$prefix/nuwro/bin/nuwro" "${args[@]}"
 EOF
     chmod +x "$PREFIX/bin/nuwro"
 
+    # The universe reweighter needs the same runtime env but no cd: its three
+    # arguments are task-local paths, and the QE engine reads no data/ files.
+    cat > "$PREFIX/bin/nf_reweight" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+prefix="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+export ROOTSYS="$prefix/root"
+export ROOTEGPythia6_ROOT="$prefix/ROOTEGPythia6"
+export PATH="$prefix/nuwro/bin:$prefix/root/bin:${PATH}"
+export LD_LIBRARY_PATH="$prefix/nuwro/lib:$prefix/root/lib:$prefix/ROOTEGPythia6/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$prefix/nuwro/bin/nf_reweight" "$@"
+EOF
+    chmod +x "$PREFIX/bin/nf_reweight"
+
     cat > "$PREFIX/nf-payload.json" <<EOF
-{"schema_version":1,"generator":"nuwro","code_version":"$CV","binaries":["nuwro"],"default_binary":"nuwro","smoke_paths":["nuwro/data/sf/pke_12C_new.dat"]}
+{"schema_version":1,"generator":"nuwro","code_version":"$CV","binaries":["nuwro","nf_reweight"],"default_binary":"nuwro","smoke_paths":["nuwro/data/sf/pke_12C_new.dat","nuwro/bin/nf_reweight"]}
 EOF
 
 %environment
@@ -217,6 +244,8 @@ EOF
 %test
     test -x /opt/nf/generators/nuwro/{{ NUWRO_TAG }}/bin/nuwro
     test -x /opt/nf/generators/nuwro/{{ NUWRO_TAG }}/nuwro/bin/nuwro
+    test -x /opt/nf/generators/nuwro/{{ NUWRO_TAG }}/bin/nf_reweight
+    test -x /opt/nf/generators/nuwro/{{ NUWRO_TAG }}/nuwro/bin/nf_reweight
 
 %labels
     org.neutrino-factory.image nuwro

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import copy
 import json
+import socket
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -84,6 +86,14 @@ def run_task(config: dict[str, Any], task: dict[str, Any], execution_mode: str =
     normalized_path.parent.mkdir(parents=True, exist_ok=True)
 
     sidecar_path = status.write_sidecar_start(config, task)
+    # Into the Slurm log too, so the node is on record even where the sidecar
+    # is not consulted.
+    print(
+        f"neutrino-factory: task {task['task_index']} ({task['job_label']} chunk "
+        f"{task['chunk_id']}) on node {socket.gethostname()}, seed {task['seed']}",
+        file=sys.stderr,
+        flush=True,
+    )
 
     translated_config = adapter.translate_config(task)
     stub_mode = bool(config["run"].get("stub_mode", True))
@@ -143,7 +153,7 @@ def run_local(config: dict[str, Any], manifest_path: str | Path | None = None) -
                 # The initial state, so a merged file says what physics it holds
                 # without anyone having to re-read the configuration.
                 "probe": job["flux"]["particle"],
-                "target_nucleus": job["target"]["nucleus"],
+                "target": job["target"]["nucleus"],
                 "task_count": len(outputs),
                 "config_path": config.get("config_path", ""),
             },

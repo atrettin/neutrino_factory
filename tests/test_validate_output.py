@@ -117,7 +117,7 @@ class ValidateOutputTests(unittest.TestCase):
             missing = validate_file(d / "missing.h5")
             bad = _write_valid(d / "b.h5", 2)
             with h5py.File(bad, "a") as handle:
-                del handle["events"]["probe"]
+                del handle["events"]["interaction"]
             broken = validate_file(bad)
 
             summary = summarize([good, missing, broken])

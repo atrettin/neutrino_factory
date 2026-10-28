@@ -1,0 +1,66 @@
+# GENIE Reweight per-dial check samples, for scripts/check_genie_dials.py.
+#
+# Four 20k-event C12 samples, one chunk each, without universes: the check
+# script runs nf_genie_reweight on their kept events.ghep.root with each dial
+# alone at scale 1.2. Each sample covers dials that act on it:
+#   AR23_20i numu CC               - ZNormCCQE, ZExpA1CCQE-ZExpA4CCQE, CoulombCCQE
+#   G18_10a_02_11a numu CC         - CoulombCCQE on the validated CMC
+#   G18_10a_02_11a numubar incl.   - NonRESBGvbar{p,n}{CC,NC}{1,2}pi, CoulombCCQE
+#   G18_10a_02_11a numu NC         - NonRESBGv{p,n}NC{1,2}pi
+# Requires the tunes' splines staged and an image with the current
+# nf_genie_reweight. Runtime: G18_10a ~25 min per sample, AR23_20i ~3 min.
+#
+#   neutrino-factory submit --config configs/smoke/genie_dialcheck.yaml --executor local
+#   python scripts/check_genie_dials.py --config configs/smoke/genie_dialcheck.yaml
+
+run:
+  name: genie_dialcheck
+  seed: 20261023
+  executor: local
+  stub_mode: false
+  log_level: essential
+
+macros:
+  c12:
+    params:
+      config_version: null
+      particle: null
+      current: null
+    job:
+      generator: genie
+      code_version: "R-3_06_00"
+      config_version: "{{config_version}}"
+      events: 20000
+      chunks: 1
+      flux:
+        type: power_law
+        particle: "{{particle}}"
+        emin_gev: 0.5
+        emax_gev: 5.0
+        gamma: -2.0
+      target:
+        nucleus: C12
+      physics:
+        mode: inclusive
+        current: "{{current}}"
+
+jobs:
+  - use: c12
+    with: {config_version: "AR23_20i_00_000", particle: numu, current: cc}
+  - use: c12
+    with: {config_version: "G18_10a_02_11a", particle: numu, current: cc}
+  - use: c12
+    with: {config_version: "G18_10a_02_11a", particle: numubar, current: inclusive}
+  - use: c12
+    with: {config_version: "G18_10a_02_11a", particle: numu, current: nc}
+
+storage:
+  software_root: ${NF_SOFTWARE_ROOT:-./software}
+  output_root: ${NF_OUTPUT_ROOT:-./output}
+  work_root: ${NF_WORK_ROOT:-./work}
+
+slurm:
+  partition: alma
+  time: "02:00:00"
+  cpus_per_task: 1
+  mem: "4G"

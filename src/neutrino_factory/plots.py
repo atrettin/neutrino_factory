@@ -40,12 +40,13 @@ import h5py
 import numpy as np
 
 from . import layout
+from .common_output import INTERACTION_LABELS, read_file_level_field, read_interaction_column
 from .jobs import safe_token
 from .validate_output import expected_outputs
 
 # Canonical interaction-type ordering; any other observed label (e.g. stub
 # mode's ``inclusive``) is appended so nothing is dropped.
-INTERACTION_ORDER = ("qel", "res", "dis", "coh", "mec", "other")
+INTERACTION_ORDER = INTERACTION_LABELS
 
 # Panels of the channel-comparison figure: interaction label -> display name.
 # Any observed label without a panel of its own is shown in "Other", so an
@@ -104,26 +105,6 @@ class PlotData:
     actual_count: int
 
 
-def _decode_column(values: np.ndarray) -> np.ndarray:
-    """Decode an HDF5 string column into a numpy array of ``str``."""
-    return np.asarray(
-        [v.decode() if isinstance(v, bytes) else str(v) for v in values], dtype=object
-    )
-
-
-def _unique_label(values: np.ndarray, fallback: str = "unknown") -> str:
-    """The single distinct value of a string column.
-
-    A common-output file describes one (probe, target) run, so this is normally
-    a single value. Should a file ever mix them (a merge of unlike runs), all
-    observed values are joined rather than one being silently picked.
-    """
-    labels = sorted(set(values.tolist()))
-    if not labels:
-        return fallback
-    return ", ".join(labels)
-
-
 def read_plot_data(path: str | Path) -> PlotData:
     """Read only what the plots need from a common-output file.
 
@@ -140,9 +121,9 @@ def read_plot_data(path: str | Path) -> PlotData:
         weights = np.asarray(events["weight"][()], dtype=np.float64)
         xsec_weights = np.asarray(events["xsec_weight"][()], dtype=np.float64)
         is_cc = np.asarray(events["is_cc"][()], dtype=bool)
-        interactions = _decode_column(events["interaction"][()])
-        probe = _unique_label(_decode_column(events["probe"][()]))
-        target = _unique_label(_decode_column(events["target"][()]))
+        interactions = read_interaction_column(events["interaction"])
+        probe = read_file_level_field(handle, "probe")
+        target = read_file_level_field(handle, "target")
 
         actual_count = len(energies)
         if "run" in handle and "event_count" in handle["run"].attrs:

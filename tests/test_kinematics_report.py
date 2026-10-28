@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import h5py
 import numpy as np
 
 from neutrino_factory.common_output import write_common_hdf5
@@ -194,7 +195,13 @@ class AnalyzeFileTests(unittest.TestCase):
     def test_unexpected_interaction_label_is_kept(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "out.h5"
-            _write(path, [_event(0, "inclusive")])  # stub mode's label
+            _write(path, [_event(0, "qel")])
+            # Old stub output stored the run's physics mode as a string label.
+            with h5py.File(path, "a") as handle:
+                del handle["events"]["interaction"]
+                handle["events"].create_dataset(
+                    "interaction", data=["inclusive"], dtype=h5py.string_dtype()
+                )
 
             labels = [row["interaction"] for row in analyze_file(path)["interactions"]]
 

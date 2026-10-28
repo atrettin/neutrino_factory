@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Mapping, Sequence
@@ -37,6 +38,10 @@ START_KEYS = (
     "execution_mode",
     "start_utc",
     "status",
+    "node",
+    "slurm_job_id",
+    "slurm_array_job_id",
+    "slurm_array_task_id",
 )
 
 
@@ -75,6 +80,12 @@ def write_sidecar_start(config: Mapping[str, Any], task: Mapping[str, Any]) -> P
         "execution_mode": str(config.get("run", {}).get("executor", "local")),
         "start_utc": utc_now_iso(),
         "status": "running",
+        # Where the task ran, so failures can be traced to a node. Apptainer
+        # shares the host's hostname; the Slurm IDs are absent outside Slurm.
+        "node": socket.gethostname(),
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+        "slurm_array_job_id": os.environ.get("SLURM_ARRAY_JOB_ID"),
+        "slurm_array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"),
     }
     _atomic_write(path, payload)
     return path

@@ -48,8 +48,8 @@ was:
 
 Speculation and recollection do not go in, and upstream documentation that has
 not been checked against this codebase counts as speculation. A fact that
-matters but is not yet substantiated belongs in `.opencode/TODOS.md` as something
-to verify.
+matters but is not yet substantiated belongs in a GitHub issue on the
+repository as something to verify, not in the docs.
 
 ### Citing the literature
 

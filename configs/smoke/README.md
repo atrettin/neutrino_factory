@@ -8,7 +8,10 @@ confirm the composed `nf-base.sif` actually works after (re)building images.
 | Config | Generator | Events | Notes |
 |---|---|---|---|
 | `genie_c12.yaml` | GENIE `R-3_06_00` / `G18_10a_02_11a` | 50 | needs the tune's xsec spline staged |
+| `genie_c12_universes.yaml` | GENIE `R-3_06_00` / `G18_10a_02_11a` | 500 | three-stage: `gevgen`, `gntpc`, then `nf_genie_reweight`; 10 reweight universes in `events/universe_weights` and 2 switch variations in `events/variation_weights` |
+| `genie_dialcheck.yaml` | GENIE `R-3_06_00` / `AR23_20i_00_000`, `G18_10a_02_11a` | 4 × 20k | not a smoke test: the samples for `scripts/check_genie_dials.py`, the per-dial GENIE Reweight checks (see below); needs both tunes' splines staged |
 | `nuwro_c12.yaml` | NuWro `nuwro_25.11` | 50 | |
+| `nuwro_c12_universes.yaml` | NuWro `nuwro_25.11` | 1000 | two-stage: `nuwro` then `nf_reweight`; 10 reweight universes in `events/universe_weights` |
 | `gibuu_c12.yaml` | GiBUU `release2025` | 1000 | more events on purpose: GiBUU weights uniformly-sampled events by cross section (no rejection sampling), so a representative dataset needs many events — and it's fast |
 | `neut_c12.yaml` | NEUT `5.7.0-nuint2024` | 50 | two-stage: `neutroot2` then `nf-neut-flatten` |
 
@@ -47,3 +50,27 @@ generator images are built), no Apptainer needed:
 ```bash
 neutrino-factory submit --config configs/smoke/genie_c12.yaml --executor local
 ```
+
+## GENIE per-dial checks
+
+After rebuilding the GENIE payload (a changed `setup/genie/nf_genie_reweight.cc`),
+generate the check samples and run the checks in the same image:
+
+```bash
+bash setup/download_genie_xsec.sh --tune AR23_20i_00_000
+bash setup/download_genie_xsec.sh --tune G18_10a_02_11a
+
+apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" \
+  env PYTHONPATH="$PWD/src" python3 -m neutrino_factory.cli \
+  submit --config configs/smoke/genie_dialcheck.yaml --executor local
+
+apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" \
+  env PYTHONPATH="$PWD/src" python3 scripts/check_genie_dials.py \
+  --config configs/smoke/genie_dialcheck.yaml
+```
+
+It prints, per sample and dial, whether all weights are finite, how many events
+moved, how many moved outside the dial's channel (must be 0), and the mean
+weight over the channel at scale 1.2, and ends with `ALL PASSED` or
+`SOME CHECKS FAILED` (exit code 1). `--dials` checks other dials than the
+default (the 18 added on 2026-10-23).

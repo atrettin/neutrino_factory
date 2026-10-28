@@ -17,8 +17,6 @@ LOGGER = logging.getLogger(__name__)
 _MAX_LISTED_PATHS = 3
 
 
-STRING_DTYPE = h5py.string_dtype(encoding="utf-8")
-
 # Values of the ``resonant_primary`` column: was the primary hadronic system
 # produced by the generator's *resonant* term, or by its non-resonant one?
 #
@@ -69,8 +67,25 @@ NUMERIC_FIELD_SPECS: dict[str, tuple[type, Any]] = {
 }
 
 EVENT_NUMERIC_FIELDS = tuple(NUMERIC_FIELD_SPECS)
-EVENT_STRING_FIELDS = ("interaction", "probe", "target", "generator")
+
+# The common interaction labels and their fixed on-disk codes. ``interaction`` is
+# stored as an HDF5 enum: one byte per event, with the label of each code carried
+# in the dataset's own type, so the file stays self-describing. Variable-length
+# strings made reading this one column take ~10x longer than all numeric columns
+# together. The codes are part of the format -- append new labels, never renumber.
+INTERACTION_LABELS = ("qel", "res", "dis", "coh", "mec", "other")
+INTERACTION_CODES = {label: code for code, label in enumerate(INTERACTION_LABELS)}
+INTERACTION_DTYPE = h5py.enum_dtype(INTERACTION_CODES, basetype="i1")
+
+# Fields that are constant within a file -- one file holds one job, i.e. one
+# generator on one initial state -- and are stored once as ``metadata`` attrs
+# instead of as per-event columns. Readers still hand them out per event.
+FILE_LEVEL_FIELDS = ("probe", "target", "generator")
+
+EVENT_STRING_FIELDS = ("interaction", *FILE_LEVEL_FIELDS)
 EVENT_FIELDS = (*EVENT_NUMERIC_FIELDS, *EVENT_STRING_FIELDS)
+# The datasets an ``events`` group carries (besides the optional weight matrices).
+EVENT_DATASETS = (*EVENT_NUMERIC_FIELDS, "interaction")
 
 # Metadata keys that uniquely identify a generator version. Files that differ on
 # any of these describe different physics and must never be merged together.
@@ -81,6 +96,22 @@ VERSION_IDENTITY_KEYS = ("generator", "code_version", "config_version")
 # by (see ``ConfigTranslator.xsec_norm_count``). Present on real generator
 # output; absent on stub output, whose weights are placeholders.
 XSEC_NORM_COUNT_KEY = "xsec_norm_count"
+
+
+# Optional 2D event datasets of reweight weights, shape (n_events, n_columns):
+# sigma_variant / sigma_central per event (see universes.py). Ratios, so merging
+# concatenates them and never rescales them. ``universe_weights`` holds the
+# Gaussian-sampled universes; ``variation_weights`` one column per switch-type
+# knob at its alternate setting, which follows no Gaussian prior and so is kept
+# apart. The metadata key paired with each dataset describes its columns.
+UNIVERSE_WEIGHTS_KEY = "universe_weights"
+UNIVERSES_METADATA_KEY = "universes"
+VARIATION_WEIGHTS_KEY = "variation_weights"
+VARIATIONS_METADATA_KEY = "variations"
+WEIGHT_MATRICES = {
+    UNIVERSE_WEIGHTS_KEY: UNIVERSES_METADATA_KEY,
+    VARIATION_WEIGHTS_KEY: VARIATIONS_METADATA_KEY,
+}
 
 
 class MergeError(ValueError):
@@ -133,6 +164,34 @@ def _decode_text_array(values: np.ndarray) -> np.ndarray:
     return np.asarray(values, dtype=object).astype(str)
 
 
+def read_interaction_column(dataset: h5py.Dataset) -> np.ndarray:
+    """Read an ``interaction`` dataset as an array of ``str`` labels.
+
+    Decodes the enum codes through the file's own mapping rather than
+    ``INTERACTION_CODES``, and still reads the variable-length strings of files
+    written before the column became an enum.
+    """
+    mapping = h5py.check_enum_dtype(dataset.dtype)
+    if mapping is None:
+        return _decode_text_array(np.asarray(dataset[()]))
+    labels = np.empty(max(mapping.values()) + 1, dtype=object)
+    for label, code in mapping.items():
+        labels[code] = label
+    return labels[np.asarray(dataset[()])]
+
+
+def read_file_level_field(handle: h5py.File, key: str) -> str:
+    """Read one of ``FILE_LEVEL_FIELDS`` from a file, whichever layout it uses."""
+    events = handle["events"]
+    if key in events:
+        values = set(_decode_text_array(np.asarray(events[key][()])).tolist())
+        if len(values) != 1:
+            raise ValueError(f"Expected one '{key}' value per file, found {sorted(values)}")
+        return values.pop()
+    value = handle["metadata"].attrs[key]
+    return value.decode() if isinstance(value, bytes) else str(value)
+
+
 def _read_event_columns(handle: h5py.File) -> dict[str, np.ndarray]:
     """Read the ``events`` group into per-column arrays.
 
@@ -152,8 +211,18 @@ def _read_event_columns(handle: h5py.File) -> dict[str, np.ndarray]:
         else:
             columns[key] = np.full(count, default, dtype=dtype)
 
-    for key in EVENT_STRING_FIELDS:
-        columns[key] = _decode_text_array(np.asarray(event_group[key][()]))
+    columns["interaction"] = read_interaction_column(event_group["interaction"])
+    for key in FILE_LEVEL_FIELDS:
+        # Files written before these moved to metadata carry them per event.
+        if key in event_group:
+            columns[key] = _decode_text_array(np.asarray(event_group[key][()]))
+        elif count == 0:
+            columns[key] = np.array([], dtype=object)
+        else:
+            columns[key] = np.full(count, read_file_level_field(handle, key), dtype=object)
+    for key in WEIGHT_MATRICES:
+        if key in event_group:
+            columns[key] = np.asarray(event_group[key][()])
     return columns
 
 
@@ -186,7 +255,65 @@ def _concat_event_columns(chunks: list[dict[str, np.ndarray]]) -> dict[str, np.n
     return merged
 
 
-def write_common_hdf5(output_path: str | Path, metadata: dict[str, Any], events: list[dict[str, Any]]) -> str:
+def _encode_interactions(events: list[dict[str, Any]]) -> np.ndarray:
+    """Map each event's ``interaction`` label to its enum code.
+
+    Required, and restricted to ``INTERACTION_LABELS``: the enum has no slot for
+    anything else, and a defaulted label would be indistinguishable from a real one.
+    """
+    codes = np.empty(len(events), dtype=np.int8)
+    for index, event in enumerate(events):
+        if "interaction" not in event:
+            raise KeyError(f"Event {index} is missing the required column 'interaction'")
+        label = str(event["interaction"])
+        if label not in INTERACTION_CODES:
+            raise ValueError(
+                f"Event {index} has interaction '{label}'; expected one of "
+                f"{', '.join(INTERACTION_LABELS)}"
+            )
+        codes[index] = INTERACTION_CODES[label]
+    return codes
+
+
+def _file_level_values(metadata: dict[str, Any], events: list[dict[str, Any]]) -> dict[str, str]:
+    """Collapse the per-event ``FILE_LEVEL_FIELDS`` into one value each.
+
+    Every event must carry them and agree, and so must ``metadata`` where it
+    already names one: a file mixing initial states (e.g. a merge of unlike jobs)
+    has no single value to record. Without events, whatever ``metadata`` says is kept.
+    """
+    values: dict[str, str] = {}
+    for key in FILE_LEVEL_FIELDS:
+        missing = next((index for index, e in enumerate(events) if key not in e), None)
+        if missing is not None:
+            raise KeyError(f"Event {missing} is missing the required column '{key}'")
+        seen = {str(event[key]) for event in events}
+        if key in metadata:
+            seen.add(str(metadata[key]))
+        if len(seen) > 1:
+            raise ValueError(
+                f"Events and metadata disagree on '{key}': {sorted(seen)}. A common-output "
+                "file holds one generator on one initial state."
+            )
+        if seen:
+            values[key] = seen.pop()
+    return values
+
+
+def write_common_hdf5(
+    output_path: str | Path,
+    metadata: dict[str, Any],
+    events: list[dict[str, Any]],
+    universe_weights: np.ndarray | None = None,
+    variation_weights: np.ndarray | None = None,
+) -> str:
+    matrices = {UNIVERSE_WEIGHTS_KEY: universe_weights, VARIATION_WEIGHTS_KEY: variation_weights}
+    for key, matrix in matrices.items():
+        if matrix is not None and (matrix.ndim != 2 or len(matrix) != len(events)):
+            raise ValueError(
+                f"{key} has shape {matrix.shape}; expected ({len(events)}, n_columns), "
+                "one row per event"
+            )
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -205,18 +332,8 @@ def write_common_hdf5(output_path: str | Path, metadata: dict[str, Any], events:
             values = [dtype(event.get(key, default)) for event in events]
         numeric_columns[key] = np.array(values, dtype=dtype) if events else np.array([], dtype=dtype)
 
-    string_defaults = {
-        "interaction": "unknown",
-        "probe": "unknown",
-        "target": "unknown",
-        "generator": metadata.get("generator", "unknown"),
-    }
-    string_columns = {
-        key: np.array(
-            [str(event.get(key, string_defaults[key])) for event in events], dtype=STRING_DTYPE
-        )
-        for key in EVENT_STRING_FIELDS
-    }
+    interaction_codes = _encode_interactions(events)
+    metadata = {**metadata, **_file_level_values(metadata, events)}
 
     with h5py.File(output, "w") as handle:
         meta_group = handle.create_group("metadata")
@@ -229,8 +346,10 @@ def write_common_hdf5(output_path: str | Path, metadata: dict[str, Any], events:
         event_group = handle.create_group("events")
         for key, values in numeric_columns.items():
             event_group.create_dataset(key, data=values)
-        for key, values in string_columns.items():
-            event_group.create_dataset(key, data=values, dtype=STRING_DTYPE)
+        event_group.create_dataset("interaction", data=interaction_codes, dtype=INTERACTION_DTYPE)
+        for key, matrix in matrices.items():
+            if matrix is not None:
+                event_group.create_dataset(key, data=np.asarray(matrix, dtype=np.float32))
 
     return str(output)
 
@@ -264,6 +383,70 @@ def _xsec_norm_count(metadata: dict[str, Any]) -> float | None:
     except (TypeError, ValueError):
         return None
     return value if value > 0.0 else None
+
+
+# Relative tolerance on the parameter ``values`` of a weight matrix's metadata.
+# ``exp`` of a log-mode throw may differ in the last bit between CPUs (NumPy
+# picks a SIMD kernel per machine), so chunks of one draw run on different
+# nodes can disagree by ~1 ulp there. Everything else, ``z`` included, must
+# still match exactly: that is what defines the draw.
+DRAW_VALUES_RTOL = 1e-12
+
+
+def _same_draw(a: Any, b: Any) -> bool:
+    """Whether two weight-matrix metadata blocks (JSON attrs) describe the same draw."""
+    if a == b:
+        return True
+    try:
+        a, b = json.loads(a), json.loads(b)
+    except (TypeError, ValueError):
+        return False
+    if not (isinstance(a, dict) and isinstance(b, dict)):
+        return a == b
+    if a.keys() != b.keys() or any(a[k] != b[k] for k in a if k != "values"):
+        return False
+    values_a, values_b = a.get("values"), b.get("values")
+    if not (isinstance(values_a, dict) and isinstance(values_b, dict)):
+        return values_a == values_b
+    if values_a.keys() != values_b.keys():
+        return False
+    for name in values_a:
+        x, y = np.asarray(values_a[name], dtype=float), np.asarray(values_b[name], dtype=float)
+        if x.shape != y.shape or not np.allclose(x, y, rtol=DRAW_VALUES_RTOL, atol=0.0):
+            return False
+    return True
+
+
+def _merge_weight_matrix(
+    read_files: list[tuple[str, dict[str, Any], dict[str, np.ndarray], float | None]],
+    key: str,
+) -> np.ndarray | None:
+    """Concatenate the inputs' ``key`` weight matrix, or None if none carry it.
+
+    Column ``k`` must mean the same parameter values in every input, so the
+    inputs must agree on the paired metadata exactly; and either all of them
+    carry the matrix or none does, since a merged column with holes could not be
+    told apart from a real one.
+    """
+    meta_key = WEIGHT_MATRICES[key]
+    carrying = [path for path, _, columns, _ in read_files if key in columns]
+    if not carrying:
+        return None
+    if len(carrying) != len(read_files):
+        missing = [path for path, _, columns, _ in read_files if key not in columns]
+        raise MergeError(
+            f"Only {len(carrying)} of {len(read_files)} inputs carry {key}; "
+            f"missing from {_summarize_paths(missing)}"
+        )
+    reference_path, reference_metadata = read_files[0][0], read_files[0][1]
+    reference = reference_metadata.get(meta_key)
+    for path, metadata, _, _ in read_files[1:]:
+        if not _same_draw(metadata.get(meta_key), reference):
+            raise MergeError(
+                f"Refusing to merge {key} drawn differently: the '{meta_key}' "
+                f"metadata of {path} differs from {reference_path}"
+            )
+    return np.concatenate([columns[key] for _, _, columns, _ in read_files])
 
 
 def merge_hdf5_files(
@@ -384,6 +567,7 @@ def merge_hdf5_files(
             assert count is not None
             columns["xsec_weight"] = columns["xsec_weight"] * (count / norm_count_total)
 
+    matrices = {key: _merge_weight_matrix(read_files, key) for key in WEIGHT_MATRICES}
     merged_columns = _concat_event_columns(merged_chunks)
     merged_events = _rows_from_event_columns(merged_columns)
 
@@ -411,5 +595,14 @@ def merge_hdf5_files(
     # Carry the combined denominator so a merged file can itself be merged.
     if norm_count_total:
         metadata[XSEC_NORM_COUNT_KEY] = norm_count_total
+    for key, matrix in matrices.items():
+        if matrix is not None:
+            metadata[WEIGHT_MATRICES[key]] = first_file_metadata[WEIGHT_MATRICES[key]]
 
-    return write_common_hdf5(output_path, metadata, merged_events)
+    return write_common_hdf5(
+        output_path,
+        metadata,
+        merged_events,
+        universe_weights=matrices[UNIVERSE_WEIGHTS_KEY],
+        variation_weights=matrices[VARIATION_WEIGHTS_KEY],
+    )

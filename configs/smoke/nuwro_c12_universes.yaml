@@ -1,0 +1,46 @@
+# End-to-end smoke test — NuWro with reweight universes.
+# Like nuwro_c12.yaml, plus the second stage: nf_reweight computes 10 universe
+# weights per event, which land in events/universe_weights with the throws in
+# the `universes` metadata.
+
+run:
+  name: smoke_nuwro_c12_universes
+  seed: 12345
+  executor: local
+  stub_mode: false
+
+jobs:
+  - generator: nuwro
+    code_version: "nuwro_25.11"
+    config_version: "default"
+    events: 1000
+    chunks: 1
+    flux:
+      type: power_law
+      particle: numu
+      emin_gev: 0.5
+      emax_gev: 5.0
+      gamma: -2.0
+    target:
+      nucleus: C12
+    physics:
+      mode: inclusive
+      current: cc
+    nuwro:
+      universes:
+        seed: 1
+        count: 10
+        parameters:
+          qel_minerva_ff_scale: {sigma: 1.0}
+          mecNorm: {sigma: 0.25, log: true}
+
+storage:
+  software_root: ${NF_SOFTWARE_ROOT:-./software}
+  output_root: ${NF_OUTPUT_ROOT:-./output}
+  work_root: ${NF_WORK_ROOT:-./work}
+
+slurm:
+  partition: alma
+  time: "00:10:00"
+  cpus_per_task: 1
+  mem: "2G"

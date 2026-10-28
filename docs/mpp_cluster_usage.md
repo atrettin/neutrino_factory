@@ -131,7 +131,66 @@ sidecars (`$NF_OUTPUT_ROOT/chunks/<job>/<chunk>.sidecar.json`): how many of a
 job's chunks have started/finished/validated, the first chunk start, the last
 chunk finish, and the average and maximum chunk run time. A chunk's sidecar is
 written when the task starts and updated when it finishes, so progress is
-visible while a run is in flight, before any HDF5 exists.
+visible while a run is in flight, before any HDF5 exists. Merged files are
+validated only with `--check-merged`, since they exist only after `merge`.
+
+## Diagnosing and retrying failed tasks
+
+`check-status` classifies every task that is not finished and valid, and lists
+the failures by mode with the node, the elapsed time against the job's median
+chunk duration, and a one-line reason:
+
+| mode | meaning | evidence |
+|---|---|---|
+| `crash` | the generator or normalization raised | sidecar `failed`; reason = last Python exception in stderr plus the last error-like line of generator stdout |
+| `oom` | killed for exceeding `slurm.mem` | Slurm's `oom_kill event` line in stderr |
+| `timeout` | killed at the Slurm time limit | Slurm's `CANCELLED ... DUE TO TIME LIMIT` line, or still `running` past the limit |
+| `cancelled` | `scancel`led | Slurm's `CANCELLED AT ...` line with no `DUE TO` |
+| `node_failure` | its node died while it ran | Slurm's `DUE TO NODE FAILURE` line |
+| `hung` | still running, but silent | no log or raw-output activity for `--hung-after` hours (default 4) |
+| `invalid` | finished, but the output failed validation | sidecar |
+| `no_output` | no sidecar and no log | still queued, **or** never started because its node failed |
+
+Inside the container, `check-status` cannot ask Slurm, so a `no_output` task is
+exactly that: one that left nothing behind. It prints the `sacct` command that
+tells the two cases apart; run it from the submission node. For hung tasks it
+prints a ready-to-paste `scancel` command. A "Nodes with failures" table counts
+failures per node, from the node each task records in its sidecar and log.
+
+```bash
+neutrino-factory check-status --config <cfg> --failed-only      # per-job table: problem jobs only
+neutrino-factory check-status --config <cfg> --task 217 --task 2528   # everything about two tasks
+```
+
+`--task` shows the diagnosis, the sidecar, the last 20 lines of the task's
+stdout and stderr (progress counters collapsed), and the newest files in its raw
+work directory with their times — enough to see where a generator stopped.
+
+`retry` relaunches failed tasks selected by mode (default: all retryable
+modes). Running and hung tasks are never retried: they still hold their Slurm
+slot and write to the chunk's paths.
+
+```bash
+# Node failures, once sacct has confirmed nothing is still queued
+neutrino-factory retry --config <cfg> --time 23:59:00 --modes no_output
+# Generator crashes, which would recur with the same seed
+neutrino-factory retry --config <cfg> --time 23:59:00 --modes crash --new-seed
+# Hung tasks: paste the scancel line check-status printed, then
+neutrino-factory retry --config <cfg> --time 23:59:00 --modes cancelled --new-seed
+```
+
+`--new-seed` draws a fresh seed for each retried task and records it in the
+manifest, together with `original_seed` and a `seed_attempt` counter; the
+sidecar records the seed actually used. If a generator's crashes correlated with
+the kinematics of the event it was generating, replacing those chunks would bias
+the sample slightly; at the per-mille crash rates seen so far this is
+negligible, and the manifest keeps it auditable.
+
+The `hung` cutoff is a heuristic. Healthy GiBUU chunks were measured to write
+nothing for up to ~80 minutes, hence the 4 h default; raise `--hung-after` for
+generators that stay silent longer. A cancelled task whose Slurm message never
+reached its log stays `hung` until its time limit passes, then shows as
+`timeout`.
 
 ## First submission on a new cluster
 
