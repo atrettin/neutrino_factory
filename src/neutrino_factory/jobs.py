@@ -345,7 +345,7 @@ def job_label(job: Mapping[str, Any]) -> str:
     )
 
 
-def job_seed(run_seed: int, label: str, chunk_id: int) -> int:
+def job_seed(run_seed: int, label: str, chunk_id: int, attempt: int = 0) -> int:
     """The random seed for one chunk of one job.
 
     Hashed rather than laid out arithmetically so that a seed depends only on
@@ -353,10 +353,15 @@ def job_seed(run_seed: int, label: str, chunk_id: int) -> int:
     changes another job's random stream, which an offset scheme (``run.seed +
     generator_index * 1000 + chunk``) could not promise. The result is always
     positive and inside the signed 32-bit range Fortran generators need.
+
+    ``attempt`` > 0 gives a fresh seed for re-running a chunk whose original
+    seed made the generator crash or hang (``retry --new-seed``). Attempt 0
+    hashes exactly as before, so existing seeds are unchanged.
     """
-    digest = hashlib.blake2b(
-        f"{int(run_seed)}|{label}|{int(chunk_id)}".encode("utf-8"), digest_size=8
-    ).digest()
+    key = f"{int(run_seed)}|{label}|{int(chunk_id)}"
+    if attempt:
+        key += f"|attempt{int(attempt)}"
+    digest = hashlib.blake2b(key.encode("utf-8"), digest_size=8).digest()
     return int.from_bytes(digest, "big") % SEED_MODULUS + 1
 
 

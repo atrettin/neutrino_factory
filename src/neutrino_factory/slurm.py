@@ -119,6 +119,42 @@ def write_manifest(config: dict[str, Any], manifest_path: str | Path | None = No
     return str(destination)
 
 
+def reseed_tasks(
+    config: dict[str, Any], manifest: dict[str, Any], task_indices: list[int]
+) -> dict[int, tuple[int, int]]:
+    """Give the selected tasks of ``manifest`` fresh seeds, in place.
+
+    For re-running chunks whose seed made the generator crash or hang. Each
+    reseed increments the task's ``seed_attempt`` and hashes it into the seed
+    (``job_seed(..., attempt=n)``), so repeated retries keep drawing new seeds,
+    and the first seed is kept as ``original_seed``. Returns
+    ``{task_index: (old_seed, new_seed)}``. Raises if the new seeds collide.
+    """
+    selected = set(task_indices)
+    run_seed = int(config["run"]["seed"])
+    changes: dict[int, tuple[int, int]] = {}
+    for task in manifest["tasks"]:
+        index = int(task["task_index"])
+        if index not in selected:
+            continue
+        attempt = int(task.get("seed_attempt", 0)) + 1
+        old = int(task["seed"])
+        task.setdefault("original_seed", old)
+        task["seed_attempt"] = attempt
+        task["seed"] = job_seed(run_seed, str(task["job_label"]), int(task["chunk_id"]), attempt)
+        changes[index] = (old, int(task["seed"]))
+    _ensure_unique_seeds(manifest["tasks"])
+    return changes
+
+
+def save_manifest(manifest: dict[str, Any], path: str | Path) -> None:
+    """Write ``manifest`` atomically, so a task starting meanwhile never reads half a file."""
+    destination = Path(path)
+    tmp = destination.with_name(destination.name + ".tmp")
+    tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    tmp.replace(destination)
+
+
 def render_sbatch_script(config: dict[str, Any], manifest_path: str | Path) -> str:
     manifest = build_task_manifest(config)
     array_max = max(0, len(manifest["tasks"]) - 1)

@@ -610,3 +610,33 @@ unchanged: only 1.25× faster, because the read itself is the cost.
 Fixed-length byte strings: 4.5× faster, still ~13× slower than the enum. Bare
 integer codes with a category list in an attribute: as fast as the enum, but
 the mapping becomes a convention the HDF5 type does not record.
+
+## Failure diagnosis from files, and retries chosen by failure mode (2026-10)
+
+**The problem.** The `keystone_prod_v3_pilot` run had 90 failed tasks of five
+kinds: node failures, seed-dependent NEUT and NuWro crashes, NuWro hangs, and
+GiBUU on H1 never finishing. `check-status` reported them only as missing
+chunks, hidden under 215 lines about merged files that had not been made yet.
+Telling the kinds apart took hand-written scripts over sidecars, logs and file
+times, plus `sacct`. `retry` relaunched every missing chunk, which would have
+duplicated the still-running hung tasks and rerun the crashes with the seeds
+that crashed.
+
+**The decision.** `diagnosis.py` classifies each task from evidence readable
+inside the container, where Slurm's own tools are not: the sidecar, Slurm's
+messages in the task's stderr, and modification times. Every mode needs
+positive evidence. A task with no sidecar and no log is `no_output` rather than
+a guessed node failure, because a queued task looks the same; `check-status`
+prints the `sacct` command that settles it. Hung tasks are detected by
+silence, with a 4 h default set from the ~80 min gaps measured in healthy GiBUU
+chunks. `retry --modes` picks modes, and never `running` or `hung`; a hung task is
+cancelled first, using the `scancel` line `check-status` prints, and then
+retried as `cancelled`. `--new-seed` adds an attempt counter to the seed hash.
+Attempt 0 hashes exactly as before, so no existing seed changes. The new seeds
+are written into the manifest, so it remains the record of what ran.
+
+**Ruled out.** Guessing node failures from array order (a no-log task below
+indices that already ran): Slurm holds back tasks for reasons other than node
+failure, such as the per-user job limit. Reading `sacct` output from a file the
+user dumps on the host: one more manual step, and the printed `sacct` command
+covers the only case where it matters.

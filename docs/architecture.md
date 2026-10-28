@@ -31,7 +31,10 @@ choices lives in [design_decisions.md](design_decisions.md).
 - `src/neutrino_factory/setup_wizard.py` — interactive `neutrino-factory setup`
   (pathway choice, storage directories, writes `.env`, offers builds)
 - `src/neutrino_factory/slurm.py` — task manifest building, sbatch script
-  rendering
+  rendering, retry scripts and reseeding (`reseed_tasks`)
+- `src/neutrino_factory/diagnosis.py` — classifies each task (`crash`, `oom`,
+  `timeout`, `cancelled`, `node_failure`, `hung`, `invalid`, `no_output`) from its
+  sidecar, Slurm logs and output activity, for `check-status` and `retry`
 - `src/neutrino_factory/local.py` — local pipeline (`run_task`, `run_local`,
   `run_task_from_manifest`) and `job_view_config`
 - `src/neutrino_factory/common_output.py` — HDF5 read/write/merge (the common
@@ -122,7 +125,8 @@ Consequences worth knowing when changing this layer:
   and updates it with the stop time, duration and output validity when it
   finishes. `check-status` reads these to report a job's progress and wall-clock
   cost even before any HDF5 exists — output existence alone cannot tell whether a
-  chunk has started, only that it has finished.
+  chunk has started, only that it has finished. The sidecar also records the
+  node and Slurm job IDs, which `diagnosis.py` uses to attribute failures.
 - Anything that groups outputs — merging, plotting — must group by **job**, not
   by `(generator, version)`. Two jobs can share a generator version and differ
   in neutrino flavour or target nucleus.
