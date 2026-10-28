@@ -89,7 +89,9 @@ of `Σ D` events would have produced.
 - Stub output declares no count and is left untouched (its weights are
   placeholders). A set mixing declared with undeclared inputs is refused.
 - Universe and variation weights are ratios; merging concatenates them and never
-  rescales them.
+  rescales them. Their inputs must come from the same draw: the metadata must
+  match exactly, except the parameter `values`, which may differ by a relative
+  1e-12 (`exp` of a log throw can differ in the last bit between CPUs).
 
 Validated on NEUT, GiBUU and NuWro: see [Validation](#chunk-merging).
 

@@ -385,6 +385,38 @@ def _xsec_norm_count(metadata: dict[str, Any]) -> float | None:
     return value if value > 0.0 else None
 
 
+# Relative tolerance on the parameter ``values`` of a weight matrix's metadata.
+# ``exp`` of a log-mode throw may differ in the last bit between CPUs (NumPy
+# picks a SIMD kernel per machine), so chunks of one draw run on different
+# nodes can disagree by ~1 ulp there. Everything else, ``z`` included, must
+# still match exactly: that is what defines the draw.
+DRAW_VALUES_RTOL = 1e-12
+
+
+def _same_draw(a: Any, b: Any) -> bool:
+    """Whether two weight-matrix metadata blocks (JSON attrs) describe the same draw."""
+    if a == b:
+        return True
+    try:
+        a, b = json.loads(a), json.loads(b)
+    except (TypeError, ValueError):
+        return False
+    if not (isinstance(a, dict) and isinstance(b, dict)):
+        return a == b
+    if a.keys() != b.keys() or any(a[k] != b[k] for k in a if k != "values"):
+        return False
+    values_a, values_b = a.get("values"), b.get("values")
+    if not (isinstance(values_a, dict) and isinstance(values_b, dict)):
+        return values_a == values_b
+    if values_a.keys() != values_b.keys():
+        return False
+    for name in values_a:
+        x, y = np.asarray(values_a[name], dtype=float), np.asarray(values_b[name], dtype=float)
+        if x.shape != y.shape or not np.allclose(x, y, rtol=DRAW_VALUES_RTOL, atol=0.0):
+            return False
+    return True
+
+
 def _merge_weight_matrix(
     read_files: list[tuple[str, dict[str, Any], dict[str, np.ndarray], float | None]],
     key: str,
@@ -409,7 +441,7 @@ def _merge_weight_matrix(
     reference_path, reference_metadata = read_files[0][0], read_files[0][1]
     reference = reference_metadata.get(meta_key)
     for path, metadata, _, _ in read_files[1:]:
-        if metadata.get(meta_key) != reference:
+        if not _same_draw(metadata.get(meta_key), reference):
             raise MergeError(
                 f"Refusing to merge {key} drawn differently: the '{meta_key}' "
                 f"metadata of {path} differs from {reference_path}"

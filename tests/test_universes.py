@@ -260,6 +260,18 @@ class MergeTests(unittest.TestCase):
             with self.assertRaisesRegex(MergeError, "drawn differently"):
                 merge_hdf5_files([a, b], Path(tmp) / "m.h5")
 
+    def test_last_bit_differences_in_values_are_merged(self) -> None:
+        # exp of a log throw can differ by 1 ulp between CPUs; z is what must match.
+        meta = {"seed": 7, "count": 2, "z": {"p": [0.1, -0.2]}, "values": {"p": [1.1, 0.9]}}
+        nudged = {**meta, "values": {"p": [np.nextafter(1.1, 2.0), 0.9]}}
+        with tempfile.TemporaryDirectory() as tmp:
+            a = _chunk(Path(tmp) / "a.h5", 1, np.ones((1, 2)), meta)
+            b = _chunk(Path(tmp) / "b.h5", 1, np.ones((1, 2)), nudged)
+            merge_hdf5_files([a, b], Path(tmp) / "m.h5")
+            c = _chunk(Path(tmp) / "c.h5", 1, np.ones((1, 2)), {**meta, "values": {"p": [1.2, 0.9]}})
+            with self.assertRaisesRegex(MergeError, "drawn differently"):
+                merge_hdf5_files([a, c], Path(tmp) / "m2.h5")
+
     def test_partial_universe_weights_are_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             a = _chunk(Path(tmp) / "a.h5", 1, np.ones((1, 2)), self.META)
