@@ -1,7 +1,9 @@
 # NEUT
 
-NEUT's source is not public, so the framework runs a NEUT build extracted from a
-published image rather than one built from source. It runs in two stages: NEUT's
+NEUT's source is access-restricted (`github.com/neut-devel/neut`, granted on
+request), and the framework runs a NEUT build extracted from a published image
+rather than one built from source. That build is NEUT 5.7.0, whose DIS mode
+distorts high-energy kinematics ([Known limitations](#known-limitations)). It runs in two stages: NEUT's
 `neutroot2`, then a project-owned flattener, because NEUT's native output cannot
 be read from Python. It has no CC/NC switch; a single current is selected through
 its per-channel cross-section scale arrays. The conventions its output is
@@ -101,6 +103,16 @@ NEUT has no reweight support in this framework.
 
 ## Known limitations
 
+- **DIS kinematics are wrong above ~10 GeV.** NEUT 5.7.0 rejects every mode-26/46
+  (W > 2 GeV) event whose lepton is within θ < 2.6° of the neutrino in the
+  struck nucleon's rest frame (cos θ > 0.999), and generates a replacement. This
+  removes Q² ≲ 0.002·E²(1−y), about 30(1−y) GeV² at 125 GeV, so the low-x, low-y
+  corner is empty. The DIS cross section is roughly preserved, but its events pile
+  up at high y and high x; the light-cone w (≈ y for DIS) of an inclusive sample
+  shows the W < 2 GeV channels as an isolated spike at w ≈ 0, then a gap, then a
+  distribution rising towards 1. Negligible below ~5 GeV, clearly biased by
+  10–20 GeV; QE, 2p2h, RES and multi-π are unaffected. Fixed in NEUT 5.9.0
+  ([upstream issue 4](#upstream-issues), [Validation](#dis-lepton-angle-cut)).
 - **Not bit-reproducible from its seed.** Different seeds give different,
   independent event sets, so chunking is safe; but two runs with the *same* seed
   diverge after a few events. Configs are reproducible in distribution, not in
@@ -491,9 +503,36 @@ the cut is not a fixed energy. A single bin over 30–80 GeV fills uniformly to
 10–50 GeV (top bin 4 GeV wide) reach 49.99 GeV, so it is not simply "the last
 bin". The effect tracks the top bin's width.
 
+### DIS lepton-angle cut
+
+Found in `keystone_prod_v2.1` (NEUT 5.7.0, ν_μ on Fe56, E^-2 over 0.1–500 GeV),
+where NEUT's y, Bjorken x and light-cone w disagreed with every other generator
+at 100–150 GeV. Measured on the raw `events.flat.root` files, i.e. NEUT's own
+four-vectors, bypassing the normalizer:
+
+- **The minimum W of mode 26 grows with energy**: its 1st percentile is
+  1.75 GeV at 5–10 GeV, 1.99 at 20–40, 4.18 at 100–150 and 9.4 at 300–500, where
+  DIS should start at W ≈ 2 GeV throughout. Median y rises to 0.70 and 0.83 in the
+  two highest bands.
+- **The missing region is low Q².** The 2% Q² quantile of DIS events
+  (W > 2.5 GeV), NEUT over GENIE `G18_01a_00_000` on the same config, is 1.0 at
+  3–5 GeV, 1.35 at 10–20, 2.4 at 20–40 and 4.7 at 40–80.
+- **The edge is a hard cut.** Boosting each mode-26 event into its struck
+  nucleon's rest frame (single-nucleon events, 150k), the largest lepton
+  cos θ is 0.999000 in every energy band from 5 to 500 GeV, and no event lies
+  above it.
+
+The cut is in NEUT 5.7.0's `src/neutcore/nejet.F`, which generates modes 26 and
+46 by running PYTHIA 5.7 (CERNLIB `jetset74`) on the neutrino–nucleon pair. It
+rejects events with `RFCOSTH < -0.999 .or. RFCOSTH > 0.999` and calls `PYEVNT`
+again. The comment says "center of mass", but the boost is by the struck
+nucleon's velocity, so the angle is in the nucleon rest frame (≈ the lab), where
+high-energy DIS leptons are mostly forward. With Q² = 2EE′(1−cos θ), the
+forward cut removes Q² < 0.002·E²(1−y).
+
 ## Upstream issues
 
-Not reported; the source is not public, so causes are unconfirmed.
+Issues 1–3 are not reported, and their causes are unconfirmed.
 
 1. **Same-seed runs diverge** after ~4 events. Likely uninitialized state inside
    NEUT ([Validation](#seed-reproducibility)).
@@ -501,3 +540,10 @@ Not reported; the source is not public, so causes are unconfirmed.
    bin's width ([Validation](#top-bin-truncation)).
 3. **Flavour tokens in histogram names are undocumented** (`numub`, `nueb`, and
    the `fluxhisto`/`ratehisto` fallback).
+4. **DIS rejects forward leptons** (cos θ > 0.999 in the nucleon rest frame),
+   distorting kinematics above ~10 GeV ([Validation](#dis-lepton-angle-cut)).
+   Fixed upstream by commit `f7cf2d04` (2024-10-09, PR #80
+   `feature/dis_clep_cut`), which keeps only the backward cut
+   `RFCOSTH < -0.999`; it is the only change to `nejet.F` after 5.7.0. First
+   released in 5.9.0, not in 5.8.0. The framework needs a newer NEUT, built from
+   source, to pick it up.
