@@ -128,6 +128,17 @@ class ValidateOutputTests(unittest.TestCase):
             self.assertAlmostEqual(summary["fraction_valid"], 1 / 3)
             self.assertAlmostEqual(summary["fraction_existing"], 2 / 3)
 
+    def test_summarize_excludes_unfinished_from_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            good = validate_file(_write_valid(d / "a.h5", 2))
+            pending = validate_file(d / "pending.h5")
+            failed = validate_file(d / "failed.h5")
+
+            summary = summarize([good, pending, failed], unfinished=[1])
+            self.assertEqual(summary["with_errors"], 1)
+            self.assertEqual(summary["unfinished"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

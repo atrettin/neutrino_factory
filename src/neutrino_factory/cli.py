@@ -588,7 +588,14 @@ def cmd_check_status(args: argparse.Namespace) -> int:
         validate_file(entry["path"], expected_events=None, tolerance=args.tolerance)
         for entry in outputs["chunks"]
     ]
-    chunks_summary = summarize(chunk_results)
+    # Tasks still running or queued have no (complete) output yet; that is not an error.
+    mode_by_chunk = {(d["job_label"], d["chunk_id"]): d["mode"] for d in diagnoses}
+    unfinished = [
+        i
+        for i, entry in enumerate(outputs["chunks"])
+        if mode_by_chunk.get((entry["job_label"], entry["chunk_id"])) in ("running", "no_output")
+    ]
+    chunks_summary = summarize(chunk_results, unfinished)
 
     # Per-job runtime status from the chunk sidecars: how many chunks have
     # started/finished/validated, plus timing, even before any HDF5 exists.

@@ -12,6 +12,7 @@ output for ad-hoc use:
 from __future__ import annotations
 
 import argparse
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
@@ -209,12 +210,20 @@ def validate_file(
     return result
 
 
-def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
-    """Roll up a list of ``validate_file`` results into summary statistics."""
+def summarize(
+    results: list[dict[str, Any]], unfinished: Collection[int] = ()
+) -> dict[str, Any]:
+    """Roll up a list of ``validate_file`` results into summary statistics.
+
+    ``unfinished`` holds the positions in ``results`` of files whose task has not
+    finished yet (still running or queued). Their missing or partial output is
+    expected, so they are counted separately instead of under ``with_errors``.
+    """
     total = len(results)
     existing = sum(1 for r in results if r["exists"])
     valid = sum(1 for r in results if r["valid"])
-    with_errors = sum(1 for r in results if r["errors"])
+    unfinished = set(unfinished)
+    with_errors = sum(1 for i, r in enumerate(results) if r["errors"] and i not in unfinished)
 
     def fraction(count: int) -> float:
         return count / total if total else 0.0
@@ -224,6 +233,7 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
         "existing": existing,
         "valid": valid,
         "with_errors": with_errors,
+        "unfinished": len(unfinished),
         "fraction_existing": fraction(existing),
         "fraction_valid": fraction(valid),
         "fraction_with_errors": fraction(with_errors),
@@ -272,6 +282,11 @@ def format_summary(summary: dict[str, Any]) -> str:
         f"({summary['fraction_valid']:.0%})\n"
         f"  with errors: {summary['with_errors']}/{summary['total']} "
         f"({summary['fraction_with_errors']:.0%})"
+        + (
+            f"\n  not finished: {summary['unfinished']}/{summary['total']}"
+            if summary.get("unfinished")
+            else ""
+        )
     )
 
 
