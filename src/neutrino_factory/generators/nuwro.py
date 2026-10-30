@@ -45,6 +45,7 @@ def generation_parameters(root_path: Path, names: list[str]) -> dict[str, float]
 class NuWroAdapter(GeneratorAdapter):
     name = "nuwro"
     executable = "nuwro"
+    translator_cls = NuWroTranslator
     build_arg_name = "NUWRO_TAG"
 
     CODE_VERSIONS = {

@@ -179,10 +179,29 @@ the chunk's own identity, so inserting or removing a job never shifts another
 job's random stream, and there is no chunk count at which the layout collides.
 `build_task_manifest` still asserts that all seeds in a manifest are distinct.
 
+## Generator sections
+
+A job may carry one optional section named after its generator. It is a
+validation error on any other generator's job, and so is a key the section does
+not support:
+
+| Section | Keys | Purpose |
+|---|---|---|
+| `nuwro:` | `universes` | reweight universes ([below](#reweight-universes-and-variations)) |
+| `genie:` | `universes`, `variations` | reweight universes and switch variations ([below](#reweight-universes-and-variations)) |
+| `gibuu:` | `qes_oversampling` | extra quasi-elastic passes ([below](#gibuu-qe-oversampling-gibuuqes_oversampling)) |
+
+- **Statistics and run strategy only.** A setting that changes the physics
+  belongs in a `config_version`: that is part of the version identity merging
+  checks, so different physics can never be merged. A section setting is not.
+- **Not part of the job label.** Two jobs that differ only in a section need
+  distinct `name:`s, otherwise they collide.
+- **Macros can template them** like any other field (`qes_oversampling:
+  "{{k}}"`).
+
 ## Reweight universes and variations
 
-Optional per-job sections, `nuwro:` on a NuWro job and `genie:` on a GENIE job;
-either on any other job is a validation error. With them, the chunk gets an
+The `nuwro:` and `genie:` sections ([Generator sections](#generator-sections)). With them, the chunk gets an
 `events/universe_weights` dataset and a `universes` metadata entry, and on GENIE
 optionally `events/variation_weights` with a `variations` entry (see
 [physics.md](physics.md#reweight-universes)). Without them, nothing changes.
@@ -259,6 +278,20 @@ genie:
   [generators/genie.md](generators/genie.md#which-dials-a-tune-allows).
 - **Not part of the job label.** Two jobs that differ only in their universes
   need distinct `name:`s, otherwise they collide.
+
+## GiBUU QE oversampling: `gibuu.qes_oversampling`
+
+```yaml
+gibuu:
+  qes_oversampling: 10    # integer, 0 (default) to 50
+```
+
+Runs that many extra quasi-elastic-only GiBUU passes per weak current, inside
+each task, and averages their QE events with the full pass's, so `xsec_weight`
+still sums to the same cross section. QE dominates the statistical error of
+GiBUU's cross section below a few GeV; K = 10 cuts it there ~3×. Each chunk file
+grows by ~7% of its events per unit of K. Details, cost and the evidence:
+[generators/gibuu.md](generators/gibuu.md#qe-oversampling).
 
 ## Weak current: `physics.current`
 

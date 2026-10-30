@@ -6,13 +6,14 @@ from pathlib import Path
 
 from .base import GeneratorAdapter
 from .. import catalog, containers
-from ..normalizers.gibuu import GiBUUNormalizer, pass_output_dirs
+from ..normalizers.gibuu import GiBUUNormalizer, pass_name, pass_output_dirs
 from ..translators.gibuu import GiBUUTranslator
 
 
 class GiBUUAdapter(GeneratorAdapter):
     name = "gibuu"
     executable = "GiBUU.x"
+    translator_cls = GiBUUTranslator
     build_arg_name = "GIBUU_RELEASE"
 
     CODE_VERSIONS = {
@@ -74,13 +75,14 @@ class GiBUUAdapter(GeneratorAdapter):
         work_dir.mkdir(parents=True, exist_ok=True)
         flux_table = translated_config.get("gibuu_flux_table")
 
-        # One subdirectory per weak current: exactly one for a cc/nc run, two for
-        # an inclusive one (GiBUU's process_ID selects a single current, see
-        # translators.gibuu.CURRENT_PASSES). Uniform for both cases so there is a
-        # single layout for the normalizer to read.
+        # One subdirectory per pass, named after it: one per weak current (one
+        # for a cc/nc run, two for an inclusive one, since GiBUU's process_ID
+        # selects a single current; see translators.gibuu.CURRENT_PASSES), plus
+        # any QE-only passes (cc_qe01, ...). Uniform for every case so there is
+        # a single layout for the normalizer to read.
         pass_dirs = []
         for gibuu_pass in translated_config["gibuu_passes"]:
-            pass_dir = work_dir / str(gibuu_pass["current"])
+            pass_dir = work_dir / pass_name(gibuu_pass)
             jobcard = gibuu_pass["jobcard"].replace(
                 self._BUUINPUT_PLACEHOLDER, self._buuinput_dir(code_version)
             )
@@ -130,8 +132,8 @@ class GiBUUAdapter(GeneratorAdapter):
     ) -> str:
         # GiBUU writes its RootTuple output into each pass's CWD, not to
         # raw_output_path, and produces one file per run (num_runs_SameEnergy).
-        # Hand the normalizer the work directory: it discovers the per-current
-        # pass directories underneath it (see normalizers.gibuu). With no pass
+        # Hand the normalizer the work directory: it discovers the pass
+        # directories underneath it (see normalizers.gibuu). With no pass
         # output at all the run was a stub, whose JSON lives at raw_output_path.
         work_dir = Path(raw_output_path).parent
         source = work_dir if pass_output_dirs(work_dir) else Path(raw_output_path)

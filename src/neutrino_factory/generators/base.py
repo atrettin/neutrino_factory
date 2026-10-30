@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import physics_current
+from ..translators.base import ConfigTranslator
 
 
 class GeneratorAdapter(ABC):
@@ -28,6 +29,12 @@ class GeneratorAdapter(ABC):
     # ``build_apptainer_images.sh`` no longer hard-codes a per-generator mapping.
     # ``None`` for generators that are not buildable.
     build_arg_name: str | None = None
+
+    # The translator class that interprets this generator's configuration,
+    # including its optional per-job section (``config.GENERATOR_SECTIONS``).
+    # Exposed on the class so configuration validation can reach the translator
+    # without instantiating an adapter.
+    translator_cls: type[ConfigTranslator]
 
     def __init__(self, config: dict[str, Any]):
         self.config = config

@@ -95,7 +95,20 @@ def _part(work_dir: Path, index: int = 1, current: str = "cc") -> Path:
     return pass_dir / f"EventOutput.Pert.{index:08d}.root"
 
 
-def _write_sidecar(work_dir: Path, num_runs: int = 1, currents=("cc",)) -> None:
+def _write_sidecar(
+    work_dir: Path, num_runs: int = 1, currents=("cc",), qes_oversampling: int = 0
+) -> None:
+    """Write the translated config; passes without a ``name`` (as before QE
+    oversampling) unless ``qes_oversampling`` asks for QE-only passes."""
+    passes = [{"current": current, "jobcard": "! jobcard"} for current in currents]
+    if qes_oversampling:
+        passes = [{**p, "name": p["current"], "channels": "all"} for p in passes]
+        passes += [
+            {"name": f"{current}_qe{k:02d}", "current": current, "channels": "qe",
+             "jobcard": "! jobcard"}
+            for current in currents
+            for k in range(1, qes_oversampling + 1)
+        ]
     sidecar = {
         "beam_particle": "numu",
         "nucleus": "C12",
@@ -103,9 +116,8 @@ def _write_sidecar(work_dir: Path, num_runs: int = 1, currents=("cc",)) -> None:
         "seed": 42,
         "num_runs": num_runs,
         "current": "inclusive" if len(currents) > 1 else currents[0],
-        "gibuu_passes": [
-            {"current": current, "jobcard": "! jobcard"} for current in currents
-        ],
+        "qes_oversampling": qes_oversampling,
+        "gibuu_passes": passes,
         "flux_config": {
             "type": "power_law",
             "particle": "numu",
@@ -531,6 +543,97 @@ class GiBUUInclusivePassTests(unittest.TestCase):
                     work_dir, work_dir / "out.h5", _base_task(), "local"
                 )
             self.assertIn("nc", str(ctx.exception))
+
+
+class GiBUUQesOversamplingTests(unittest.TestCase):
+    """QE-only passes are averaged with the QE events of the full pass."""
+
+    def _normalize(self, work_dir: Path) -> list[dict]:
+        out = work_dir / "out.h5"
+        GiBUUNormalizer().normalize(work_dir, out, _base_task(), "local")
+        return read_events(out)[1]
+
+    def test_qe_events_are_averaged_over_every_pass_that_sampled_them(self) -> None:
+        # Flat flux on [0.5, 5]: xsec_weight = raw * 4.5 for a lone pass.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, qes_oversampling=2)
+            _write_roottuple(_part(work_dir, current="cc"), [1.0, 2.0], [0.3, 0.6], [1, 34])
+            _write_roottuple(_part(work_dir, current="cc_qe01"), [1.5], [0.9], [1])
+            _write_roottuple(_part(work_dir, current="cc_qe02"), [2.5, 3.0], [0.3, 0.6], [1, 1])
+
+            events = self._normalize(work_dir)
+
+            self.assertEqual(len(events), 5)
+            width = 5.0 - 0.5
+            np.testing.assert_allclose(
+                [e["xsec_weight"] for e in events],
+                [0.3 * width / 3, 0.6 * width, 0.9 * width / 3,
+                 0.3 * width / 3, 0.6 * width / 3],
+            )
+            # The native weight is left as GiBUU wrote it.
+            self.assertEqual([e["weight"] for e in events], [0.3, 0.6, 0.9, 0.3, 0.6])
+            self.assertTrue(all(e["is_cc"] for e in events))
+
+    def test_oversampling_leaves_the_expected_cross_section_unchanged(self) -> None:
+        # Each pass estimates sigma_QE on its own; averaging K+1 identical
+        # estimates must give the same total as one of them.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plain, oversampled = Path(tmpdir) / "plain", Path(tmpdir) / "over"
+            for work_dir, k in ((plain, 0), (oversampled, 3)):
+                work_dir.mkdir()
+                _write_sidecar(work_dir, currents=("cc", "nc"), qes_oversampling=k)
+                for name in ["cc", "nc"] + [f"{c}_qe{i:02d}" for c in ("cc", "nc")
+                                            for i in range(1, k + 1)]:
+                    if "_qe" in name:
+                        # The QE content of the full pass, and nothing else.
+                        _write_roottuple(_part(work_dir, current=name), [1.0], [0.25], [1])
+                    else:
+                        _write_roottuple(_part(work_dir, current=name), [1.0, 2.0],
+                                         [0.25, 0.5], [1, 2])
+            totals = []
+            for work_dir in (plain, oversampled):
+                events = self._normalize(work_dir)
+                totals.append(
+                    {(cc, qel): sum(e["xsec_weight"] for e in events
+                                    if e["is_cc"] == cc and (e["interaction"] == "qel") == qel)
+                     for cc in (True, False) for qel in (True, False)}
+                )
+            for key in totals[0]:
+                with self.subTest(key=key):
+                    self.assertAlmostEqual(totals[1][key], totals[0][key])
+
+    def test_qe_pass_with_other_channels_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, qes_oversampling=1)
+            _write_roottuple(_part(work_dir, current="cc"), [1.0], [0.1], [1])
+            _write_roottuple(_part(work_dir, current="cc_qe01"), [1.0, 2.0], [0.1, 0.1], [1, 34])
+
+            with self.assertRaisesRegex(RuntimeError, "cc_qe01.*evType \\[34\\]"):
+                self._normalize(work_dir)
+
+    def test_missing_qe_pass_raises(self) -> None:
+        # The remaining QE passes would otherwise carry 1/(K+1) of a sigma
+        # that only K passes estimated.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, qes_oversampling=2)
+            _write_roottuple(_part(work_dir, current="cc"), [1.0], [0.1], [1])
+            _write_roottuple(_part(work_dir, current="cc_qe01"), [1.0], [0.1], [1])
+
+            with self.assertRaisesRegex(RuntimeError, "cc_qe02"):
+                self._normalize(work_dir)
+
+    def test_stray_pass_directory_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir)
+            _write_roottuple(_part(work_dir, current="cc"), [1.0], [0.1], [1])
+            _write_roottuple(_part(work_dir, current="cc_qe01"), [1.0], [0.1], [1])
+
+            with self.assertRaisesRegex(RuntimeError, "cc_qe01"):
+                self._normalize(work_dir)
 
 
 class GiBUUMultiRunOutputTests(unittest.TestCase):

@@ -14,7 +14,7 @@ from ..final_state import (
 )
 from ..flux import build_flux
 from ..kinematics import KINEMATIC_FIELDS, derive_kinematics
-from ..translators.gibuu import GiBUUTranslator
+from ..translators.gibuu import PASS_CHANNELS, GiBUUTranslator
 from .base import OutputNormalizer, resonant_primary_from_interaction
 
 
@@ -25,24 +25,66 @@ from .base import OutputNormalizer, resonant_primary_from_interaction
 # runs' events, so every part must be read.
 PERT_OUTPUT_GLOB = "EventOutput.Pert.*.root"
 
-# Subdirectory of the task work directory each weak current's pass runs in, in
-# the order their events are concatenated. The adapter creates one per pass (see
-# GiBUUAdapter.build_run_command); an inclusive run has both, a cc/nc run one.
-PASS_DIR_NAMES = ("cc", "nc")
-
-
 def pert_output_parts(directory: Path) -> list[Path]:
     """Every GiBUU perturbative-event file in ``directory``, in run order."""
     return sorted(Path(directory).glob(PERT_OUTPUT_GLOB))
 
 
+def pass_name(gibuu_pass: dict) -> str:
+    """The subdirectory of the task work directory a pass runs in.
+
+    Passes translated before QE oversampling existed carry no ``name``; there
+    was one pass per current, named after it.
+    """
+    return str(gibuu_pass.get("name", gibuu_pass["current"]))
+
+
+def pass_channels(gibuu_pass: dict) -> str:
+    """The channel set a pass sampled (a key of ``PASS_CHANNELS``)."""
+    return str(gibuu_pass.get("channels", "all"))
+
+
 def pass_output_dirs(work_dir: Path) -> list[tuple[str, Path]]:
-    """The ``(current, directory)`` pairs a run actually produced output in."""
+    """The ``(name, directory)`` pairs a run actually produced output in.
+
+    Found by scanning, not from the translated passes, so that a stray or
+    missing pass is visible as a mismatch rather than silently skipped.
+    """
+    work_dir = Path(work_dir)
+    if not work_dir.is_dir():
+        return []
     return [
-        (name, work_dir / name)
-        for name in PASS_DIR_NAMES
-        if (work_dir / name).is_dir() and pert_output_parts(work_dir / name)
+        (path.name, path)
+        for path in sorted(work_dir.iterdir())
+        if path.is_dir() and pert_output_parts(path)
     ]
+
+
+def pass_combination_scale(
+    pass_current: str, ev_types: np.ndarray, passes: list[dict]
+) -> np.ndarray:
+    """Per-event factor that averages each channel over the passes sampling it.
+
+    Every pass is a full estimate of the cross section of the channels it
+    samples: its weights sum to that part of sigma. An event's channel was
+    therefore sampled by every pass of the same current whose channel set
+    contains it, and averaging those estimates divides its weight by their
+    number. With ``qes_oversampling = K``, a QE event gets 1/(K+1); everything
+    else is sampled only by the full pass and keeps factor 1.
+    """
+    samplers = np.zeros(len(ev_types), dtype=np.float64)
+    for gibuu_pass in passes:
+        if str(gibuu_pass["current"]) != pass_current:
+            continue
+        ev_type_set = PASS_CHANNELS[pass_channels(gibuu_pass)]
+        samplers += 1.0 if ev_type_set is None else np.isin(ev_types, ev_type_set)
+    if np.any(samplers == 0):
+        raise RuntimeError(
+            f"GiBUU {pass_current} events of evType "
+            f"{sorted(set(ev_types[samplers == 0].tolist()))} came from no pass that "
+            "samples them; the translated passes do not describe this output."
+        )
+    return 1.0 / samplers
 
 
 # Highest GiBUU final-state code (``max_finalstate_ID`` in
@@ -271,28 +313,30 @@ class GiBUUNormalizer(OutputNormalizer):
         target = translated["nucleus"]
         start_event = int(task["start_event"])
 
-        # One pass per weak current, each in its own subdirectory. Their events
-        # are concatenated: GiBUU's weights are absolute cross sections, so the
-        # union of a CC and an NC pass is the inclusive sample (see
-        # translators.gibuu.CURRENT_PASSES).
-        expected_currents = [
-            str(gibuu_pass["current"]) for gibuu_pass in translated.get("gibuu_passes", [])
-        ]
-        pass_dirs = pass_output_dirs(work_dir)
-        found_currents = [name for name, _ in pass_dirs]
-        if found_currents != expected_currents:
+        # One pass per weak current plus any QE-only passes, each in its own
+        # subdirectory. Their events are concatenated: GiBUU's weights are
+        # absolute cross sections, so the union of a CC and an NC pass is the
+        # inclusive sample (see translators.gibuu.CURRENT_PASSES), and
+        # pass_combination_scale averages the channels several passes sampled.
+        passes = list(translated.get("gibuu_passes", []))
+        expected_names = [pass_name(gibuu_pass) for gibuu_pass in passes]
+        found = dict(pass_output_dirs(work_dir))
+        if sorted(found) != sorted(expected_names):
             raise RuntimeError(
-                f"Expected GiBUU output for current(s) {expected_currents or 'none'} "
-                f"under {work_dir}, found {found_currents or 'none'}. A missing "
-                "pass would drop that current's events while the run still claims "
-                "to cover it."
+                f"Expected GiBUU output for pass(es) {expected_names or 'none'} "
+                f"under {work_dir}, found {sorted(found) or 'none'}. A missing "
+                "pass would drop its events while the run still claims to cover "
+                "them, or overweight the QE events of the passes that remain."
             )
+        pass_dirs = [
+            (gibuu_pass, found[pass_name(gibuu_pass)]) for gibuu_pass in passes
+        ]
 
         # A missing run's events would be dropped while compute_xsec_weight still
         # divided by the full num_runs, understating sigma by exactly that ratio.
         expected_parts = max(1, int(translated.get("num_runs", 1)))
-        parts_by_current: list[tuple[str, list[Path]]] = []
-        for pass_current, pass_dir in pass_dirs:
+        parts_by_pass: list[tuple[dict, list[Path]]] = []
+        for gibuu_pass, pass_dir in pass_dirs:
             parts = pert_output_parts(pass_dir)
             if len(parts) != expected_parts:
                 raise RuntimeError(
@@ -302,15 +346,36 @@ class GiBUUNormalizer(OutputNormalizer):
                     "The cross section is normalized per run, so a missing run "
                     "would silently understate it."
                 )
-            parts_by_current.append((pass_current, parts))
+            parts_by_pass.append((gibuu_pass, parts))
 
         # Read pass by pass, so each event's current is known from the pass it
         # came from — GiBUU's RootTuple has no per-event current branch, and does
         # not need one: a pass generates a single process_ID by construction.
         per_pass = [
-            (pass_current, self._read_parts(parts))
-            for pass_current, parts in parts_by_current
+            (str(gibuu_pass["current"]), self._read_parts(parts))
+            for gibuu_pass, parts in parts_by_pass
         ]
+        for (gibuu_pass, _), (_, columns) in zip(parts_by_pass, per_pass):
+            ev_type_set = PASS_CHANNELS[pass_channels(gibuu_pass)]
+            if ev_type_set is None:
+                continue
+            stray = sorted(set(columns["ev_types"].tolist()) - set(ev_type_set))
+            if stray:
+                # evType is written once at the vertex and never changed by
+                # transport, so this is a jobcard that enabled other channels.
+                raise RuntimeError(
+                    f"GiBUU pass '{pass_name(gibuu_pass)}' samples evType "
+                    f"{list(ev_type_set)} only but produced evType {stray}. "
+                    "Averaging it as a QE-only pass would misweight those events."
+                )
+        scale = np.concatenate(
+            [
+                pass_combination_scale(
+                    pass_current, np.asarray(columns["ev_types"]), passes
+                )
+                for pass_current, columns in per_pass
+            ]
+        )
         merged = {
             name: np.concatenate([columns[name] for _, columns in per_pass])
             for name in self.PART_COLUMNS
@@ -331,8 +396,10 @@ class GiBUUNormalizer(OutputNormalizer):
         energies_gev = np.asarray(energies_gev, dtype=np.float64)
         weights_arr = np.asarray(weights, dtype=np.float64)
         flux = build_flux(translated["flux_config"])
+        # The pass combination scales xsec_weight only: the `weight` column
+        # stays GiBUU's native per-pass weight.
         xsec_weights = GiBUUTranslator().compute_xsec_weight(
-            energies_gev, weights_arr, translated, flux
+            energies_gev, weights_arr * scale, translated, flux
         )
 
         interactions = [_interaction_from_evtype(int(ev_type)) for ev_type in ev_types]

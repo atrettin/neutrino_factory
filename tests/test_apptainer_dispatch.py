@@ -177,6 +177,31 @@ class ApptainerDispatchAdapterTests(unittest.TestCase):
             ],
         )
 
+    def test_gibuu_runs_every_pass_in_a_directory_named_after_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = GiBUUAdapter({})
+            translated = {
+                "code_version": "release2025",
+                "gibuu_passes": [
+                    {"name": "cc", "current": "cc", "channels": "all", "jobcard": "! a"},
+                    {"name": "cc_qe01", "current": "cc", "channels": "qe", "jobcard": "! b"},
+                ],
+            }
+            with patch.dict(os.environ, {"NF_CONTAINER_RUNTIME": "apptainer"}, clear=False):
+                with patch(
+                    "neutrino_factory.generators.gibuu.shutil.which",
+                    return_value="/usr/local/bin/GiBUU.x",
+                ):
+                    command = adapter.build_run_command(translated, Path(tmpdir))
+            jobcard = (Path(tmpdir) / "cc_qe01" / "job.job").read_text(encoding="utf-8")
+
+        self.assertEqual(jobcard, "! b")
+        self.assertEqual(
+            command[2],
+            "set -e; (cd ./cc && nf-run gibuu release2025 GiBUU.x < job.job) && "
+            "(cd ./cc_qe01 && nf-run gibuu release2025 GiBUU.x < job.job)",
+        )
+
     def test_gibuu_jobcard_buuinput_path_is_runtime_and_version_aware(self) -> None:
         jobcard = "&input\n    path_to_input   = '@NF_GIBUU_INPUT@'\n/\n"
         translated = {

@@ -171,6 +171,23 @@ jobs:
       variations:
         RPA_CCQE: {}        # value defaults to 1, the alternate model
 
+  # GiBUU: `qes_oversampling` runs that many extra quasi-elastic-only passes per
+  # weak current and averages their QE events with the full pass's. QE weights
+  # are heavy-tailed and dominate the variance of the low-energy cross section,
+  # so this buys statistics where GiBUU needs them. The output holds more events
+  # than `events` asks for. See docs/generators/gibuu.md.
+  - name: gibuu_qes_oversampling_c12
+    generator: gibuu
+    code_version: "release2025"
+    config_version: "default"
+    events: 20000
+    chunks: 2
+    flux: {type: power_law, particle: numu, emin_gev: 0.1, emax_gev: 500.0, gamma: -1.0}
+    target: {nucleus: C12}
+    physics: {mode: inclusive, current: inclusive}
+    gibuu:
+      qes_oversampling: 10
+
 storage:
   software_root: ${NF_SOFTWARE_ROOT:-./software}
   output_root: ${NF_OUTPUT_ROOT:-./output}

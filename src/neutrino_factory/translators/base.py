@@ -13,6 +13,18 @@ from ..flux import Flux
 class ConfigTranslator(ABC):
     name = "base"
 
+    @classmethod
+    def validate_section(cls, block: dict[str, Any], where: str) -> list[str]:
+        """Check the values of this generator's optional per-job section.
+
+        ``config.GENERATOR_SECTIONS`` has already checked that the section sits
+        on a job of this generator and uses only supported keys; this checks
+        what the keys hold. Returns one message per problem. The default accepts
+        anything, for generators whose section keys are checked elsewhere (or
+        that have none).
+        """
+        return []
+
     @abstractmethod
     def translate(self, config: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
