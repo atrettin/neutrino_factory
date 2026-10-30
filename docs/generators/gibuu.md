@@ -17,6 +17,7 @@ HEPForge release tarballs and run from a generated jobcard, with full transport
 | Sampling | phase-space sampled, cross-section weighted; weights can be **negative** |
 | Raw σ → per nucleon | already 1e-38 cm² per nucleon, no conversion |
 | `physics.current` | `process_ID`; `inclusive` is two concatenated passes ([Weak current](#weak-current)) |
+| Job section | `gibuu.qes_oversampling` ([QE oversampling](#qe-oversampling); [QE passes](#qe-passes)) |
 | FSI | transport for 150 × 0.2 fm = 30 fm |
 | `run.log_level` | ignored |
 | Reweight universes | none |
@@ -40,7 +41,46 @@ step. The GitHub mirror is stale and not used.
   2p2h QE. 2p2h Δ is unavailable in this release.
 - **Monoenergetic beams work** (a degenerate energy range switches GiBUU to its
   fixed-energy mode).
+- **Oversample QE for low-energy precision** with `gibuu.qes_oversampling`
+  ([below](#qe-oversampling)).
 - **Transport costs about 4× the wall clock** of a run without it.
+
+### QE oversampling
+
+Quasi-elastic weights are heavy-tailed, and QE carries most of the variance of
+the cross section below a few GeV, in CC and NC alike
+([Validation](#qe-oversampling-1)). `qes_oversampling: K` runs K extra
+QE-only passes per weak current and averages their QE events with the full
+pass's:
+
+```yaml
+- generator: gibuu
+  ...
+  gibuu:
+    qes_oversampling: 10    # integer, 0 (default) to 50
+```
+
+- **What it buys.** The QE effective sample size grows (K+1)-fold. Per CPU hour,
+  K = 10 gives the inclusive σ 2–3× more statistical power below 1 GeV, ~2× at
+  1–2 GeV and ~1.4× at 2–5 GeV. Above 5 GeV it costs power, because those bins
+  are not QE-limited.
+- **What it costs.** A QE pass takes ~1/3 of its current's full pass (C12 0.34,
+  Ar40 0.27), so K = 10 multiplies the task's wall clock by ~4.5 (C12) or ~3.7
+  (Ar40). Size `events` per chunk for that: 2.5e5 requested events at K = 10
+  ran 4.9 h on C12 and 5.7 h on Ar40.
+- **Choosing K.** The best K is 5–10. The optimum is ~10 where QE carries ≥ 98%
+  of the variance (below 1 GeV), and 3–6 at 1–5 GeV.
+- **Files grow ~3.3×.** A QE-only pass writes ~2.5–3× as many QE events as the
+  full pass, but they carry the same effective sample size: the extra events
+  have small weights. At K = 10 a chunk holds ~3.4× the events of a K = 0 chunk.
+- **The cross section is unchanged.** Every pass estimates the σ of the channels
+  it samples, so `xsec_weight` of a QE event is divided by K+1 and every other
+  event's is untouched. The `weight` column stays GiBUU's native per-pass weight:
+  sum `xsec_weight`, not `weight`, in an oversampled run.
+- **Only QE.** Δ, the higher resonances, the 1π/2π background and 2p2h already
+  reach ≤ 1% relative error where they contribute, and DIS 0.2–0.5%.
+- **Not part of the job label.** Two jobs that differ only in it need distinct
+  `name:`s.
 
 ## Reading the output
 
@@ -167,9 +207,9 @@ Files: `generators/gibuu.py`, `translators/gibuu.py`, `normalizers/gibuu.py`,
 **GiBUU reads its jobcard from stdin** (`GiBUU.x < job.job`) and writes its ROOT
 output into the **current working directory** under a fixed name,
 `EventOutput.Pert.<run>.root`. The task therefore has **one subdirectory per
-pass**, created uniformly whether the run has one pass or two, each with its own
-copy of the flux table (the jobcard's `FileNameFlux` is CWD-relative). The passes
-are chained with `set -e`.
+pass**, named after it (`cc`, `nc`, `cc_qe01`, …) and created uniformly however
+many passes the run has, each with its own copy of the flux table (the
+jobcard's `FileNameFlux` is CWD-relative). The passes are chained with `set -e`.
 
 `path_to_input` is written as the placeholder `@NF_GIBUU_INPUT@` and resolved by
 the adapter: `/opt/GiBUU/buuinput` under Docker,
@@ -196,7 +236,7 @@ Fortran namelist, rendered by `_render_jobcard`:
 | `process_ID` | ±2 (CC) / ±3 (NC) | negative for antineutrinos, from the PDG sign |
 | `flavor_ID` | 1/2/3 | e/μ/τ, independent of ν vs ν̄ |
 | `numEnsembles` | from the event count | see below |
-| `includeQE`, `includeDELTA`, `includeRES`, `includeDIS`, `include1pi`, `include2pi`, `include2p2hQE` | all `.true.` | all but `includeQE` default to `.false.` |
+| `includeQE`, `includeDELTA`, `includeRES`, `includeDIS`, `include1pi`, `include2pi`, `include2p2hQE` | all `.true.` | all but `includeQE` default to `.false.`; a QE pass keeps only `includeQE` |
 
 **Ensemble sizing.** `numEnsembles = ceil(events / (A/2 · n_passes))`, from the
 empirical yield of ~A/2 events per ensemble (~6 on carbon). GiBUU aborts for
@@ -274,11 +314,37 @@ normalization cannot drift. The normalizer reads *every*
 ### Weak current
 
 A jobcard selects exactly one `process_ID`, so `inclusive` runs **two passes**, in
-`cc/` and `nc/`, with different seeds (`PASS_SEED_OFFSET = 1_000_000` on the NC
-pass), whose events are concatenated. The ensembles are split evenly over the
+`cc/` and `nc/`, whose events are concatenated. The ensembles are split evenly over the
 passes. This is exact because GiBUU is cross-section weighted: each pass's
 weights already sum to that current's cross section, so the union sums to
 σ_CC + σ_NC with no reweighting.
+
+### QE passes
+
+`qes_oversampling = K` appends K QE-only passes per current, `cc_qe01` …
+`cc_qeK`, then `nc_qe01` …, each with `includeQE` alone and the same
+`numEnsembles` as its current's full pass. Every pass is described in the
+translated config by `name`, `current` and `channels` (`all` or `qe`). The
+normalizer:
+
+- refuses a run whose pass directories differ from the translated passes, in
+  either direction: a missing QE pass would leave the others carrying 1/(K+1) of
+  a σ only K passes estimated;
+- refuses a QE pass containing any `evType` other than 1 (`evType` is written once
+  at the vertex and never changed by transport);
+- multiplies each event's raw weight by 1/n before `compute_xsec_weight`, where n
+  is the number of passes of its current whose channel set contains its `evType`
+  (`pass_combination_scale`): 1/(K+1) for QE, 1 otherwise. GiBUU normalizes
+  `perweight` by the nucleon test-particle count, not by the channels switched on,
+  so a QE pass's weights sum to σ_QE and the average is unbiased.
+
+`xsec_norm_count` stays `num_runs`: the combination happens inside the chunk, so
+each chunk file is one σ estimate and merging is unchanged.
+
+Pass *i* (in the order above) draws seed `task seed + i · PASS_SEED_OFFSET`
+(`1_000_000`). The full passes come first, so their seeds and jobcards do not
+depend on K. The cap of K = 50 keeps the last seed inside int32: task seeds reach
+2·10⁹, which leaves room for 148 passes.
 
 ### RootTuple branches
 
@@ -344,9 +410,26 @@ by the last pass's exit status.
 ### Seed offsets cannot collide
 
 Task seeds are hashed into `[1, SEED_MODULUS]` rather than laid out
-arithmetically, so the NC pass offset can only collide by the same negligible
-hash coincidence `build_task_manifest` already checks for, and the sum stays
-inside the int32 range Fortran seeds need.
+arithmetically, so the pass offsets can only collide by the same negligible
+hash coincidence `build_task_manifest` already checks for, and the translator
+asserts that the largest pass seed stays inside the int32 range Fortran seeds
+need.
+
+### QE oversampling as passes inside the task (2026-10)
+
+The QE passes run in the same task as the full passes, as the CC/NC split does,
+rather than as separate chunks. The chunk file is then a complete σ estimate,
+so `xsec_norm_count`, merging and partial merges need no notion of channels.
+Separate tasks would parallelize better but would make merging channel-aware,
+and a partial merge missing QE chunks would silently misweight the rest. The
+cost is longer tasks, which the chunk size absorbs.
+
+Oversampling QE, rather than fixing GiBUU's QE sampling, was chosen because it
+needs no change to GiBUU. The heavy QE weights are not in a corner of phase space:
+the top 1% (56% of σ at 0.5–1 GeV, numu C12 CC) sit at typical Q² and angles,
+so the sampling mismatches dσ across the whole peak, and the source-level fix
+would be a patch to GiBUU's QE kinematics sampling. More samples help
+linearly: 10 chunks gave 9.6–9.96× the per-bin QE `n_eff` of one.
 
 ### Path handling
 
@@ -428,7 +511,69 @@ NuWro give 2.18–2.25 GeV with a floor at 2 `M_N`.
 ### Heavy tails
 
 In one 100k-event run the quasi-elastic sample had Kish `n_eff = 35` out of 14579
-events, with the top 1% of events carrying 86% of the weight.
+events, with the top 1% of events carrying 86% of the weight. Pooled over
+0.1–500 GeV, `n_eff` is even lower (2–30 per 1.8M events in
+`keystone_prod_v3_pilot`), but that mostly reflects the flux division spreading
+weights across energies; per energy bin the QE efficiency is ~2%.
+
+### QE oversampling
+
+`keystone_prod_v3_pilot` (numu C12, 10 chunks, 9M events, γ = −1). QE share of σ
+and of the variance of the inclusive σ, CC, per energy bin:
+
+| E (GeV) | 0.1–0.2 | 0.2–0.5 | 0.5–1 | 1–2 | 2–5 | 5–10 | 10–50 | 50–500 |
+|---|---|---|---|---|---|---|---|---|
+| QE share of σ | 0.94 | 0.73 | 0.49 | 0.29 | 0.15 | 0.07 | 0.01 | 0.00 |
+| QE share of variance | 1.00 | 0.99 | 0.98 | 0.96 | 0.91 | 0.78 | 0.17 | 0.02 |
+| inclusive rel. error | 6.1% | 2.1% | 1.1% | 0.9% | 0.6% | 0.5% | 0.2% | 0.2% |
+| QE rel. error | 6.4% | 2.8% | 2.1% | 3.0% | 3.9% | 6.3% | 7.4% | 27% |
+
+NC is the same (QE share of the variance 0.86–0.99 below 5 GeV), and so are
+numubar Ar40 and the other flavors and nuclei. Every other channel stays at
+≤ 1% relative error where it carries ≥ 5% of σ. The per-bin QE `n_eff` grew
+9.6–9.96× from one chunk to ten.
+
+The gain at K passes follows from the variance shares: with QE at a fraction f of
+the variance, the variance becomes f/(K+1) + (1−f) of today's.
+
+`gibuu_qes_oversampling_pilot` (2026-10-29; numu, 4 chunks of 2.5e5 requested
+events, K = 10) measured the cost and checked the QE-only jobcard:
+
+| Job | full passes (cc+nc) | one QE pass | task | events / chunk |
+|---|---|---|---|---|
+| C12, γ = −1 | 66 min | 11.2 (cc) / 11.6 (nc) min | 4.9 h | 769k |
+| C12, γ = −1.5 | 62 min | 12.3 / 13.1 min | 5.3 h | 1.18M |
+| Ar40, γ = −1 | 92 min | 12.5 / 12.6 min | 5.7 h | 782k |
+
+- **Yield vs. statistics.** A QE pass writes 2.3–3.3× the full pass's QE events.
+  The ratio rises with energy, from ~1.1 at 0.1–0.2 GeV to ~6 above 50 GeV. Its
+  per-bin QE `n_eff` nevertheless equals the full pass's in every bin, so the
+  extra events carry small weights.
+- **Unbiased.** Per energy bin, σ_QE from the 40 QE passes and from the
+  10-chunk v3 pilot (independent seeds, equal QE `n_eff`) agree to within
+  ±5–7% from 0.2 to 10 GeV. The pulls mostly fall within ±2, the largest is
+  3.4, and the deviations have no consistent sign across jobs. Above 10 GeV the
+  QE passes' σ_QE scatters up to 2× because one or two of the 40 passes carry most
+  of it (max/mean 17–30). Medians and trimmed means agree, and QE is < 1% of σ
+  there. Inclusive σ agrees with v3 to within ±3% in every bin from 0.2 to
+  500 GeV.
+- **Gain per CPU hour** (variance × CPU time, v3 / pilot), CC:
+
+  | E (GeV) | 0.1–0.2 | 0.2–0.5 | 0.5–1 | 1–2 | 2–5 | 5–10 | 10–50 | 50–500 |
+  |---|---|---|---|---|---|---|---|---|
+  | C12, γ = −1 | 2.4 | 2.6 | 2.3 | 2.1 | 1.6 | 0.95 | 0.28 | 0.26 |
+  | Ar40, γ = −1 | 2.9 | 2.6 | 2.4 | 2.2 | 1.5 | 0.90 | 0.39 | 0.27 |
+  | C12, γ = −1.5 | 6.5 | 6.2 | 5.7 | 3.1 | 1.4 | 0.61 | 0.08 | 0.02 |
+
+  NC is within ~20% of CC. After oversampling, QE still carries ≥ 94% of the
+  variance below 0.5 GeV and 40–65% at 1–5 GeV. The cost model
+  1 / ((f/(K+1) + 1−f)(1 + rK)), with QE variance share f and QE-pass cost ratio
+  r, reproduces the measured gains and puts the optimum K at ~10 below 1 GeV and
+  at 3–6 at 1–5 GeV.
+- **The steeper spectrum** moves statistics from above 5 GeV to below 2 GeV:
+  per CPU hour, on top of oversampling, ~2.5× below 1 GeV and ~1.5× at 1–2 GeV. GiBUU's user flux uses
+  equidistant bins (`FLUX_NBINS` over 0.1–500 GeV, ~1 GeV wide), so γ shapes
+  sampling only above ~1 GeV.
 
 ### Background mapping
 

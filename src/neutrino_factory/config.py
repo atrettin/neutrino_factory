@@ -223,8 +223,17 @@ def _validate_job(
 
 # Optional per-job generator sections, each only valid on its own generator's
 # jobs. Their keys: ``universes`` (Gaussian reweight universes) and, where the
-# generator has switch-type knobs, ``variations``.
-GENERATOR_SECTIONS = {"nuwro": ("universes",), "genie": ("universes", "variations")}
+# generator has switch-type knobs, ``variations``; GiBUU's ``qes_oversampling``
+# runs extra quasi-elastic-only passes. The values are checked by the
+# generator's translator (``ConfigTranslator.validate_section``), which is also
+# what reads them. These sections hold statistics and run-strategy settings:
+# a physics setting belongs in a ``config_version``, which is part of the
+# version identity that keeps different physics from being merged.
+GENERATOR_SECTIONS = {
+    "nuwro": ("universes",),
+    "genie": ("universes", "variations"),
+    "gibuu": ("qes_oversampling",),
+}
 
 
 def _validate_generator_section(
@@ -235,7 +244,7 @@ def _validate_generator_section(
     where: str,
     warnings: set[str],
 ) -> list[str]:
-    """An optional per-job ``nuwro:`` / ``genie:`` section."""
+    """An optional per-job generator section (``GENERATOR_SECTIONS``)."""
     if generator != section:
         return [
             f"{where}: a '{section}' section is only valid on a {section} job (got '{generator}')"
@@ -248,6 +257,7 @@ def _validate_generator_section(
         for key in block
         if key not in supported
     ]
+    errors += catalog.translator_cls(generator).validate_section(block, f"{where}: {section}")
     if "universes" in block:
         errors += universes.validate_universes(
             block["universes"], f"{where}: {section}.universes", section

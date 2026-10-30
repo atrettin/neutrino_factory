@@ -54,6 +54,11 @@ def known_generators() -> list[str]:
     return list(REGISTRY)
 
 
+def translator_cls(generator: str) -> type:
+    """The translator class that interprets ``generator``'s configuration."""
+    return _adapter(generator).translator_cls
+
+
 def code_versions(generator: str) -> list[str]:
     return _adapter(generator).known_code_versions()
 

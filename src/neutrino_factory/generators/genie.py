@@ -65,6 +65,7 @@ MESSENGER_PRESETS: dict[str, list[str]] = {
 class GenieAdapter(GeneratorAdapter):
     name = "genie"
     executable = "gevgen"
+    translator_cls = GenieTranslator
     build_arg_name = "GENIE_TAG"
 
     # GENIE tunes are not statically enumerated: availability is discovered from

@@ -44,6 +44,7 @@ SEED_FILE_COLUMNS = 5
 class NeutAdapter(GeneratorAdapter):
     name = "neut"
     executable = "neutroot2"
+    translator_cls = NeutTranslator
     build_arg_name = "NEUT_SOURCE_IMAGE"
 
     # NEUT's source code is not publicly available, so unlike every other

@@ -1,0 +1,76 @@
+# gibuu_qes_oversampling_pilot - cost and gain of GiBUU QE oversampling.
+#
+# keystone_prod_v3_pilot showed that quasi-elastic events limit GiBUU's
+# low-energy precision: QE carries >90% of the variance of the inclusive cross
+# section below ~2 GeV (CC and NC alike), at a per-energy-bin Kish efficiency
+# of ~2%. `gibuu.qes_oversampling: K` adds K QE-only passes per current whose
+# QE events are averaged with the full pass's (docs/generators/gibuu.md).
+#
+# This run measures:
+#   (a) what a QE-only pass costs next to the full pass. The task sidecars give
+#       the total; the mtimes of each pass directory's EventOutput file in the
+#       work directory give the per-pass split;
+#   (b) that the QE-only passes are unbiased: sigma_QE(E) of the full pass and
+#       of the QE passes must agree within errors;
+#   (c) the per-bin relative error of the inclusive cross section per CPU hour,
+#       against the K = 0, gamma = -1 baseline in keystone_prod_v3_pilot;
+#   (d) whether a steeper spectrum (gamma = -1.5) moves statistics usefully from
+#       the over-served high energies (<0.3% above 10 GeV) to the low ones.
+#
+# Chunks: 2.5e5 requested events, a quarter of a v3-pilot GiBUU chunk (~5 h on
+# C12 there), so even a QE pass as expensive as the full pass stays inside the
+# 1-day limit with K = 10.
+
+run:
+  name: gibuu_qes_oversampling_pilot
+  seed: 34567
+  executor: slurm
+  stub_mode: false
+  log_level: essential
+
+macros:
+  gibuu:
+    params:
+      name: null
+      nucleus: null
+      gamma: null
+      qes_oversampling: null
+    job:
+      name: "{{name}}"
+      generator: gibuu
+      code_version: "release2025"
+      config_version: "default"
+      events: 1000000
+      chunks: 4
+      flux:
+        type: power_law
+        particle: numu
+        emin_gev: 0.1
+        emax_gev: 500.0
+        gamma: "{{gamma}}"
+      target:
+        nucleus: "{{nucleus}}"
+      physics:
+        mode: inclusive
+        current: inclusive
+      gibuu:
+        qes_oversampling: "{{qes_oversampling}}"
+
+jobs:
+  - use: gibuu
+    with: {name: gibuu_numu_C12_qes10_gamma1, nucleus: C12, gamma: -1.0, qes_oversampling: 10}
+  - use: gibuu
+    with: {name: gibuu_numu_C12_qes10_gamma1p5, nucleus: C12, gamma: -1.5, qes_oversampling: 10}
+  - use: gibuu
+    with: {name: gibuu_numu_Ar40_qes10_gamma1, nucleus: Ar40, gamma: -1.0, qes_oversampling: 10}
+
+storage:
+  software_root: "${NF_SOFTWARE_ROOT:-./software}"
+  output_root: "/ptmp/mpp/atrettin/neutrino_factory/output/gibuu_qes_oversampling_pilot"
+  work_root: "/ptmp/mpp/atrettin/neutrino_factory/work/gibuu_qes_oversampling_pilot"
+
+slurm:
+  partition: alma
+  time: "23:59:00"
+  cpus_per_task: 1
+  mem: "8G"

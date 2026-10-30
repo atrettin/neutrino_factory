@@ -14,7 +14,13 @@ To add a new backend, keep changes isolated to four places:
   and `xsec_norm_count` are abstract — the latter tells `merge_hdf5_files` how to
   average your chunks instead of summing them; see `docs/design_decisions.md`)
 - create `src/neutrino_factory/normalizers/<name>.py`
-- create `src/neutrino_factory/generators/<name>.py`
+- create `src/neutrino_factory/generators/<name>.py`, setting `translator_cls` to
+  your translator class
+- for generator-specific job settings, add the section's keys to
+  `GENERATOR_SECTIONS` in `config.py` and check their values in your
+  translator's `validate_section` classmethod; the translator reads them from
+  `config["job"][<name>]`. Physics settings belong in a `config_version` instead
+  ([configuration.md](configuration.md#generator-sections))
 - register the adapter in `src/neutrino_factory/generators/registry.py`
 - add a config example or defaults if needed
 - add at least one local smoke test

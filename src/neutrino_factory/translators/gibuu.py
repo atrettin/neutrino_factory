@@ -67,9 +67,57 @@ CURRENT_PASSES = {"cc": ("cc",), "nc": ("nc",), "inclusive": ("cc", "nc")}
 # for; the sum also stays inside the int32 range Fortran seeds need.
 PASS_SEED_OFFSET = 1_000_000
 
+# Largest seed a GiBUU jobcard can take (Fortran default integer).
+INT32_MAX = 2**31 - 1
+
+# Channel sets a pass can sample. "all" is every channel the jobcard enables
+# (see _render_jobcard); "qe" is a quasi-elastic-only pass. The values are the
+# evType codes each set produces, None meaning any.
+PASS_CHANNELS: dict[str, tuple[int, ...] | None] = {"all": None, "qe": (1,)}
+
+# Upper bound on the gibuu.qes_oversampling job setting: the number of extra
+# QE-only passes per weak current. Bounded by the seeds: pass i draws seed
+# + i * PASS_SEED_OFFSET from a task seed of up to jobs.SEED_MODULUS (2e9), so
+# INT32_MAX leaves room for 148 passes; 50 per current is 102 for an inclusive
+# run, and more than the variance gain could justify (see docs/generators/gibuu.md).
+MAX_QES_OVERSAMPLING = 50
+
 
 class GiBUUTranslator(ConfigTranslator):
     name = "gibuu"
+
+    @classmethod
+    def validate_section(cls, block: dict[str, Any], where: str) -> list[str]:
+        """Check the job's ``gibuu:`` section: ``qes_oversampling`` is a count."""
+        if "qes_oversampling" not in block:
+            return []
+        value = block["qes_oversampling"]
+        # bool is an int subclass, and `true` is far more likely a mistake than
+        # a request for one extra pass.
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 0 <= value <= MAX_QES_OVERSAMPLING
+        ):
+            return [
+                f"{where}.qes_oversampling must be an integer from 0 to "
+                f"{MAX_QES_OVERSAMPLING} (got {value!r})"
+            ]
+        return []
+
+    @classmethod
+    def qes_oversampling(cls, config: dict[str, Any]) -> int:
+        """The job's number of extra QE-only passes per current (0 if unset).
+
+        Re-validated here because translators are also handed hand-built
+        configs (tests, ``run_task`` from a manifest): a bad value must fail
+        rather than run with a different pass count than the config asks for.
+        """
+        section = (config.get("job") or {}).get("gibuu") or {}
+        errors = cls.validate_section(section, "gibuu")
+        if errors:
+            raise ValueError("; ".join(errors))
+        return int(section.get("qes_oversampling", 0))
 
     def translate(self, config: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
         flux_config = config["flux"]
@@ -97,6 +145,7 @@ class GiBUUTranslator(ConfigTranslator):
             )
         flavor_id = FLAVOR_ID[particle]
         pass_currents = CURRENT_PASSES[current]
+        qes_oversampling = self.qes_oversampling(config)
 
         # Each GiBUU ensemble simulates the whole nucleus but only a fraction of
         # its A nucleons yields an accepted (cross-section-weighted) interaction,
@@ -134,9 +183,31 @@ class GiBUUTranslator(ConfigTranslator):
         # release (e.g. "release2025" -> version=2025).
         version_year = int("".join(c for c in str(task["code_version"]) if c.isdigit()))
 
-        # One rendered jobcard per pass; a single-current run has exactly one.
+        # The passes: one per current with every channel on, then
+        # qes_oversampling quasi-elastic-only passes per current. QE weights are
+        # heavy-tailed and QE dominates the variance of the low-energy cross
+        # section, so the extra passes buy statistics where they are needed; the
+        # normalizer averages each channel over the passes that sampled it.
+        # The full passes come first so their seeds (index 0 and 1) and jobcards
+        # do not depend on the oversampling. Each QE pass uses the same
+        # numEnsembles as its current's full pass, so it yields about as many QE
+        # events as the full pass, at a fraction of the CPU time.
+        pass_specs = [(pass_current, pass_current, "all") for pass_current in pass_currents]
+        pass_specs += [
+            (f"{pass_current}_qe{k:02d}", pass_current, "qe")
+            for pass_current in pass_currents
+            for k in range(1, qes_oversampling + 1)
+        ]
+        last_seed = seed + (len(pass_specs) - 1) * PASS_SEED_OFFSET
+        if last_seed > INT32_MAX:
+            raise ValueError(
+                f"GiBUU pass seed {last_seed} exceeds the int32 range: task seed "
+                f"{seed} with {len(pass_specs)} passes. Lower gibuu.qes_oversampling."
+            )
+
+        # One rendered jobcard per pass.
         gibuu_passes = []
-        for index, pass_current in enumerate(pass_currents):
+        for index, (pass_name, pass_current, channels) in enumerate(pass_specs):
             process_id = PROCESS_ID[pass_current]
             # The beam sign comes from the probe's PDG code, not from the "bar"
             # suffix of its name: the name is a framework label, the sign is the
@@ -145,7 +216,9 @@ class GiBUUTranslator(ConfigTranslator):
                 process_id = -process_id
             gibuu_passes.append(
                 {
+                    "name": pass_name,
                     "current": pass_current,
+                    "channels": channels,
                     "jobcard": self._render_jobcard(
                         version_year=version_year,
                         num_ensembles=num_ensembles,
@@ -155,6 +228,7 @@ class GiBUUTranslator(ConfigTranslator):
                         flavor_id=flavor_id,
                         enu_gev=enu_gev,
                         seed=seed + index * PASS_SEED_OFFSET,
+                        channels=channels,
                     ),
                 }
             )
@@ -175,6 +249,7 @@ class GiBUUTranslator(ConfigTranslator):
             "code_version": task["code_version"],
             "config_version": task["config_version"],
             "generator_version_id": task.get("generator_version_id"),
+            "qes_oversampling": qes_oversampling,
             "gibuu_passes": gibuu_passes,
             "gibuu_flux_table": gibuu_flux_table,
         }
@@ -293,6 +368,7 @@ class GiBUUTranslator(ConfigTranslator):
         flavor_id: int,
         enu_gev: float | None,
         seed: int,
+        channels: str = "all",
     ) -> str:
         # Fortran namelist jobcard. path_to_input is a placeholder resolved by
         # the adapter (GiBUUAdapter._buuinput_dir) because the buuinput location
@@ -332,6 +408,15 @@ class GiBUUTranslator(ConfigTranslator):
         # (EXP_dSigmaMC) reads the equidistant (energy, flux) table at
         # FileNameFlux. Monoenergetic fallback (enu_gev set): nuExp=0 +
         # nuXsectionMode=6 (dSigmaMC) at the fixed energy in &nl_SigmaMC.
+        #
+        # A "qe" pass (gibuu.qes_oversampling) keeps includeQE and switches
+        # every other channel off. Its weights still sum to sigma_QE, because
+        # GiBUU normalizes perweight by the nucleon count, not by the channels.
+        if channels not in PASS_CHANNELS:
+            raise ValueError(
+                f"Unknown GiBUU pass channel set '{channels}'. Known: {', '.join(PASS_CHANNELS)}"
+            )
+        other = ".true." if channels == "all" else ".false."
         if enu_gev is None:
             xsection_block = f"""      nuXsectionMode = 16             ! EXP_dSigmaMC (flux-integrated)
       nuExp          = 99             ! user-defined flux from file
@@ -373,12 +458,12 @@ class GiBUUTranslator(ConfigTranslator):
       flavor_ID      = {flavor_id}    ! 1=e, 2=mu, 3=tau
 {xsection_block}
       includeQE        = .true.
-      includeDELTA     = .true.
-      includeRES       = .true.
-      includeDIS       = .true.
-      include1pi       = .true.    ! non-resonant 1pi background
-      include2pi       = .true.    ! non-resonant 2pi background
-      include2p2hQE    = .true.
+      includeDELTA     = {other}
+      includeRES       = {other}
+      includeDIS       = {other}
+      include1pi       = {other}    ! non-resonant 1pi background
+      include2pi       = {other}    ! non-resonant 2pi background
+      include2p2hQE    = {other}
       include2p2hDelta = .false.   ! not released yet (see comment above)
 /
 {sigma_mc_block}&neutrinoAnalysis

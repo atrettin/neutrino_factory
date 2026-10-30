@@ -640,3 +640,35 @@ indices that already ran): Slurm holds back tasks for reasons other than node
 failure, such as the per-user job limit. Reading `sacct` output from a file the
 user dumps on the host: one more manual step, and the printed `sacct` command
 covers the only case where it matters.
+
+## GiBUU QE oversampling, as passes in a `gibuu:` job section (2026-10)
+
+**The problem.** In `keystone_prod_v3_pilot`, quasi-elastic events carried
+>90% of the variance of GiBUU's inclusive cross section below 2 GeV, in CC and
+NC, for every flavor and nucleus. The per-energy-bin QE Kish efficiency is ~2%,
+and the heavy weights are spread over the whole QE peak rather than in a corner
+of phase space. No other channel came close.
+
+**The decision.** `gibuu.qes_oversampling: K` adds K QE-only passes per current
+inside each task, the way `inclusive` already runs a CC and an NC pass. The
+normalizer divides a QE event's weight by K+1, the number of passes that
+sampled QE, before computing `xsec_weight`, and leaves the other channels alone.
+Each chunk file therefore remains one σ estimate, and `xsec_norm_count` and
+merging are unchanged. With K = 0 the jobcards and seeds are bit-identical to
+before. The knob is a per-job generator section, like `genie:`/`nuwro:`, whose
+values the translator checks (`ConfigTranslator.validate_section`).
+
+**Ruled out.**
+- *QE passes as separate Slurm tasks.* Better parallelism, but merging would
+  need per-channel normalization, and a partial merge missing QE chunks would
+  misweight the rest silently.
+- *A generic `arguments:` dictionary interpreted by each translator.* It would
+  duplicate the existing per-generator sections, lose the check that a section
+  matches its job's generator, and invite physics settings that bypass the
+  version identity merging relies on. Physics settings belong in a
+  `config_version`; sections hold statistics and run-strategy settings.
+- *Fixing GiBUU's QE sampling.* That would mean patching GiBUU's QE kinematics
+  sampling: a maintained physics-code patch, which is more than more samples
+  need. The pilot showed QE `n_eff` growing linearly with the sample (9.6–9.96×
+  for 10×).
+
