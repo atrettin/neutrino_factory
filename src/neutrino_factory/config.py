@@ -93,6 +93,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "time": "00:10:00",
         "cpus_per_task": 1,
         "mem": "2G",
+        # Most array tasks Slurm may run at once (the "%N" of --array); null
+        # for no limit. Each running task holds its raw generator output until
+        # it finishes, so this caps the disk a large run occupies in flight.
+        "array_limit": None,
     },
 }
 
@@ -340,6 +344,12 @@ def validate_config(config: Dict[str, Any]) -> None:
         errors.append(
             f"storage.keep_raw must be one of {', '.join(KEEP_RAW_POLICIES)} (got '{keep_raw}')"
         )
+
+    array_limit = config.get("slurm", {}).get("array_limit")
+    if array_limit is not None and (
+        isinstance(array_limit, bool) or not isinstance(array_limit, int) or array_limit < 1
+    ):
+        errors.append(f"slurm.array_limit must be a positive integer or null (got {array_limit!r})")
 
     config_path = config.get("config_path")
     flux_base_dir = str(Path(config_path).parent) if config_path else None

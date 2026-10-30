@@ -458,6 +458,15 @@ apply to the whole array, but jobs are now heterogeneous — a 200k-event GENIE 
 and a 2M-event GiBUU job share one wall clock. Size them for the longest and
 largest job, not the average.
 
+**Throttling the array.** `slurm.array_limit: N` renders `--array=0-M%N`, so
+Slurm runs at most N tasks of the array at once; `submit --array-limit N` and
+`retry --array-limit N` override it for one submission. The default, `null`,
+sets no limit. Use it to cap what running tasks hold on disk: each keeps its raw
+generator output until it finishes (see `storage.keep_raw`), so N tasks in
+flight hold up to N times one chunk's raw output. A limit that is already set
+on a running array can be changed with
+`scontrol update JobId=<jobid> ArrayTaskThrottle=<N>`.
+
 ## Example
 
 Use `configs/examples/power_law_numu_Ar.yaml` as the initial reference and

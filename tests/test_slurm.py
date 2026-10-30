@@ -8,15 +8,18 @@ from pathlib import Path
 from unittest.mock import patch
 
 from neutrino_factory.cli import build_parser
-from neutrino_factory.config import load_config
+from neutrino_factory.config import ConfigError, load_config, validate_config
 from neutrino_factory.local import run_task_from_manifest
 from neutrino_factory.slurm import (
     build_task_manifest,
     chunk_ranges,
     format_slurm_array_spec,
     identify_missing_chunks,
+    render_retry_sbatch_script,
     render_sbatch_script,
 )
+
+from .helpers import job, run_config
 
 
 class SlurmPlanningTests(unittest.TestCase):
@@ -159,6 +162,57 @@ class SlurmPlanningTests(unittest.TestCase):
         self.assertNotIn("TASK_SIFS", script)
         self.assertNotIn("apptainer", script)
         self.assertIn("export PYTHON=", script)
+
+
+class ArrayLimitTests(unittest.TestCase):
+    """slurm.array_limit / --array-limit throttle the array with Slurm's %N."""
+
+    def _config(self, tmpdir: str, **slurm: object) -> dict:
+        env = {"NF_OUTPUT_ROOT": f"{tmpdir}/output", "NF_WORK_ROOT": f"{tmpdir}/work"}
+        with patch.dict(os.environ, env, clear=False):
+            return run_config([job(events=10, chunks=5)], slurm=slurm)
+
+    def test_no_limit_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            script = render_sbatch_script(self._config(tmpdir), f"{tmpdir}/m.json")
+        self.assertIn("#SBATCH --array=0-4\n", script)
+
+    def test_limit_appends_percent_suffix_to_submit_and_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._config(tmpdir, array_limit=3)
+            script = render_sbatch_script(config, f"{tmpdir}/m.json")
+            retry = render_retry_sbatch_script(config, f"{tmpdir}/m.json", [0, 1, 4], "01:00:00")
+        self.assertIn("#SBATCH --array=0-4%3\n", script)
+        self.assertIn("#SBATCH --array=0-1,4%3\n", retry)
+
+    def test_invalid_limits_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for bad in (0, -2, 2.5, True, "10"):
+                with self.subTest(bad=bad):
+                    with self.assertRaises(ConfigError) as ctx:
+                        validate_config(self._config(tmpdir, array_limit=bad))
+                    self.assertIn("slurm.array_limit", str(ctx.exception))
+
+    def test_cli_flag_overrides_the_config(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        config_path = repo_root / "configs" / "examples" / "gibuu_numu_C_slurm.yaml"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = {"NF_OUTPUT_ROOT": f"{tmpdir}/output", "NF_WORK_ROOT": f"{tmpdir}/work"}
+            args = build_parser().parse_args(
+                ["submit", "--config", str(config_path), "--dry-run", "--array-limit", "7"]
+            )
+            with patch.dict(os.environ, env, clear=False):
+                with patch("neutrino_factory.cli.write_manifest", return_value=f"{tmpdir}/m.json"):
+                    with patch("neutrino_factory.cli.write_sbatch_script",
+                               return_value=f"{tmpdir}/job.sbatch") as write_sbatch_script:
+                        with patch("pathlib.Path.read_text", return_value=""):
+                            self.assertEqual(args.func(args), 0)
+        self.assertEqual(write_sbatch_script.call_args.args[0]["slurm"]["array_limit"], 7)
+
+    def test_cli_flag_rejects_non_positive_values(self) -> None:
+        with self.assertRaises(SystemExit):
+            with patch("sys.stderr"):
+                build_parser().parse_args(["submit", "--config", "x.yml", "--array-limit", "0"])
 
 
 class SubmitCliTests(unittest.TestCase):
