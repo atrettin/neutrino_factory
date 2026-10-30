@@ -10,8 +10,7 @@ from neutrino_factory.final_state import (
     ENERGY_FIELDS,
     FINAL_STATE_FIELDS,
     MISSING_COUNT,
-    MISSING_ENERGY,
-    MISSING_SIGNED,
+    MISSING,
     is_meson,
     missing_final_state,
     summarize_final_state,
@@ -158,13 +157,13 @@ class LeadingPionTests(unittest.TestCase):
 
     def test_a_pi0_does_not_fill_the_charged_columns_or_vice_versa(self) -> None:
         columns = _summarize([[(111, 1.0, 0.0, 0.0, 0.6)], [(211, 1.0, 0.0, 0.0, 0.6)]])
-        self.assertEqual(
+        np.testing.assert_array_equal(
             [round(float(t), 9) for t in columns["leading_pi_zero_kinetic_energy_gev"]],
-            [0.2, MISSING_ENERGY],
+            [0.2, MISSING],
         )
-        self.assertEqual(
+        np.testing.assert_array_equal(
             [round(float(t), 9) for t in columns["leading_pi_charged_kinetic_energy_gev"]],
-            [MISSING_ENERGY, 0.2],
+            [MISSING, 0.2],
         )
 
     def test_angle_is_measured_against_each_events_beam(self) -> None:
@@ -179,7 +178,7 @@ class LeadingPionTests(unittest.TestCase):
     def test_pion_at_rest_has_no_angle(self) -> None:
         columns = _summarize([[(111, 0.135, 0.0, 0.0, 0.0)]])
         self.assertAlmostEqual(columns["leading_pi_zero_kinetic_energy_gev"][0], 0.0)
-        self.assertEqual(columns["leading_pi_zero_costheta"][0], MISSING_SIGNED)
+        self.assertTrue(np.isnan(columns["leading_pi_zero_costheta"][0]))
 
     def test_leading_pion_is_attributed_to_the_right_events(self) -> None:
         columns = _summarize([
@@ -187,13 +186,13 @@ class LeadingPionTests(unittest.TestCase):
             [(2212, 1.0, 0.0, 0.0, 0.0)],
             [(-211, 1.0, 0.0, 0.0, -0.6), (211, 5.0, 0.0, 0.0, 4.0)],
         ])
-        self.assertEqual(
+        np.testing.assert_array_equal(
             [round(float(t), 9) for t in columns["leading_pi_charged_kinetic_energy_gev"]],
-            [0.1, MISSING_ENERGY, 2.0],
+            [0.1, MISSING, 2.0],
         )
-        self.assertEqual(
+        np.testing.assert_array_equal(
             [round(float(c), 9) for c in columns["leading_pi_charged_costheta"]],
-            [1.0, MISSING_SIGNED, 1.0],
+            [1.0, MISSING, 1.0],
         )
 
     def test_beam_count_must_match_events(self) -> None:
@@ -234,7 +233,7 @@ class LeadingProtonTests(unittest.TestCase):
         columns = summarize_final_state(pdg, energy, momentum, np.array([1, 1]), beam, lepton)
         self.assertAlmostEqual(columns["leading_proton_lepton_costheta"][0], -1.0)
         # No lepton momentum (e.g. a NEUT event without a lepton): no angle.
-        self.assertEqual(columns["leading_proton_lepton_costheta"][1], MISSING_SIGNED)
+        self.assertTrue(np.isnan(columns["leading_proton_lepton_costheta"][1]))
         self.assertAlmostEqual(columns["leading_proton_costheta"][1], 1.0)
 
 
@@ -249,9 +248,9 @@ class EmptyAndDegenerateInputTests(unittest.TestCase):
             self.assertEqual(columns[field][0], 0.0, msg=field)
         # ...except that there is no leading pion or proton to describe.
         for prefix in ("leading_pi_charged", "leading_pi_zero", "leading_proton"):
-            self.assertEqual(columns[f"{prefix}_kinetic_energy_gev"][0], MISSING_ENERGY)
-            self.assertEqual(columns[f"{prefix}_costheta"][0], MISSING_SIGNED)
-        self.assertEqual(columns["leading_proton_lepton_costheta"][0], MISSING_SIGNED)
+            self.assertTrue(np.isnan(columns[f"{prefix}_kinetic_energy_gev"][0]))
+            self.assertTrue(np.isnan(columns[f"{prefix}_costheta"][0]))
+        self.assertTrue(np.isnan(columns["leading_proton_lepton_costheta"][0]))
 
     def test_no_events(self) -> None:
         columns = summarize_final_state(
@@ -281,7 +280,7 @@ class EmptyAndDegenerateInputTests(unittest.TestCase):
         for field in COUNT_FIELDS:
             self.assertTrue(np.all(columns[field] == MISSING_COUNT), msg=field)
         for field in ENERGY_FIELDS:
-            self.assertTrue(np.all(columns[field] == MISSING_ENERGY), msg=field)
+            self.assertTrue(np.all(np.isnan(columns[field])), msg=field)
 
 
 class ReferenceFinalStateTests(unittest.TestCase):

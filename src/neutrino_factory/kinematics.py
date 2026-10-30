@@ -34,11 +34,12 @@ Conventions:
   cluster for MEC events, so summing the pair is the only choice under which the
   column means the same thing across generators.
 
-Missing/undefined values use one of two placeholders, because ``-1`` is a
-physical value for the two signed quantities:
-
-* ``MISSING`` (-1.0) for the non-negative-definite columns.
-* ``MISSING_SIGNED`` (-999.0) for ``lepton_p_parallel_gev`` and ``lepton_costheta``.
+Missing/undefined values are NaN (``MISSING``). A numeric sentinel can be
+binned, folded into an edge bin or averaged as if it were a measurement; NaN
+drops out of every histogram and poisons every sum it enters. Files written
+before the switch used -1.0 for the non-negative columns and -999.0 for the two
+signed ones (``LEGACY_FIELD_DEFAULTS``); ``common_output`` maps those to NaN on
+read.
 """
 
 from __future__ import annotations
@@ -52,25 +53,29 @@ import numpy as np
 # 0.93827208816 and 0.93956542052 GeV.
 NUCLEON_MASS_GEV = 0.9389187543
 
-# Placeholder for quantities that cannot take a negative physical value.
-MISSING = -1.0
-# Placeholder for quantities whose physical range includes -1.
-MISSING_SIGNED = -999.0
+# Placeholder for a missing or undefined value.
+MISSING = float("nan")
+
+# The placeholders of files written before ``MISSING`` became NaN: -1.0 for the
+# non-negative-definite columns, -999.0 for the two whose physical range
+# includes -1. Neither value is physical for its column, so mapping it to NaN on
+# read cannot hit a real measurement.
+LEGACY_FIELD_DEFAULTS: dict[str, float] = {
+    "q2_gev2": -1.0,
+    "bjorken_x": -1.0,
+    "w_gev": -1.0,
+    "w_true_gev": -1.0,
+    "inelasticity_y": -1.0,
+    "lepton_energy_gev": -1.0,
+    "lepton_momentum_gev": -1.0,
+    "lepton_p_parallel_gev": -999.0,
+    "lepton_p_transverse_gev": -1.0,
+    "lepton_costheta": -999.0,
+}
 
 # The kinematic columns of the common output format, with the placeholder each
 # one falls back to. ``common_output`` builds its column table from this.
-FIELD_DEFAULTS: dict[str, float] = {
-    "q2_gev2": MISSING,
-    "bjorken_x": MISSING,
-    "w_gev": MISSING,
-    "w_true_gev": MISSING,
-    "inelasticity_y": MISSING,
-    "lepton_energy_gev": MISSING,
-    "lepton_momentum_gev": MISSING,
-    "lepton_p_parallel_gev": MISSING_SIGNED,
-    "lepton_p_transverse_gev": MISSING,
-    "lepton_costheta": MISSING_SIGNED,
-}
+FIELD_DEFAULTS: dict[str, float] = {name: MISSING for name in LEGACY_FIELD_DEFAULTS}
 
 KINEMATIC_FIELDS = tuple(FIELD_DEFAULTS)
 

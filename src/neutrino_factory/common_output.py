@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, NamedTuple
 
 import h5py
 import numpy as np
@@ -67,6 +68,43 @@ NUMERIC_FIELD_SPECS: dict[str, tuple[type, Any]] = {
 }
 
 EVENT_NUMERIC_FIELDS = tuple(NUMERIC_FIELD_SPECS)
+
+# On-disk dtypes of the columns stored narrower than their NUMERIC_FIELD_SPECS
+# dtype. Readers cast back to the spec dtype, so this only changes file size
+# (a quarter of a production run's chunks, with compression). float32 keeps 7
+# significant digits, far below any binning resolution. Kept at full width:
+# ``energy_gev``, because float32(0.1) != 0.1 and an event at a flux edge must
+# not fall outside the simulated range; ``weight`` and ``xsec_weight``, which
+# are summed over up to ~1e8 events; ``event_id`` and ``seed``, which compress
+# to almost nothing. ``native_interaction_code`` needs int32 for its -2**31
+# placeholder. Writing a value the narrow dtype cannot hold raises.
+STORAGE_DTYPES: dict[str, type] = {
+    **{name: np.float32 for name in kinematics.FIELD_DEFAULTS},
+    **{
+        name: np.int16 if name in final_state.COUNT_FIELDS else np.float32
+        for name in final_state.FIELD_DEFAULTS
+    },
+    final_state.NATIVE_CODE_FIELD: np.int32,
+}
+
+# Compression of every ``events`` dataset. gzip rather than lzf: every HDF5
+# tool can read it, and on real chunks it is ~10% smaller at a negligible cost
+# (~3 s per 1e6 events to write, 0.4 s to read). Shuffle groups the bytes of
+# each value, which is what lets the float columns compress at all.
+DATASET_COMPRESSION: dict[str, Any] = {"compression": "gzip", "compression_opts": 4, "shuffle": True}
+# Rows per HDF5 chunk: large enough for gzip to work well, small enough that
+# reading a slice does not decompress much more than it needs.
+CHUNK_ROWS = 1 << 18
+
+# Metadata stamp of files whose missing float values are NaN. Files without it
+# predate the switch and carry LEGACY_PLACEHOLDERS instead, which
+# ``_read_event_columns`` maps to NaN.
+MISSING_FLOAT_KEY = "missing_float"
+MISSING_FLOAT_NAN = "nan"
+LEGACY_PLACEHOLDERS: dict[str, float] = {
+    **kinematics.LEGACY_FIELD_DEFAULTS,
+    **final_state.LEGACY_FIELD_DEFAULTS,
+}
 
 # The common interaction labels and their fixed on-disk codes. ``interaction`` is
 # stored as an HDF5 enum: one byte per event, with the label of each code carried
@@ -197,15 +235,24 @@ def _read_event_columns(handle: h5py.File) -> dict[str, np.ndarray]:
 
     Columns a file does not carry are synthesized from their default. That keeps
     files written before a column was introduced readable and mergeable; the
-    kinematic columns come back as placeholders rather than raising.
+    kinematic columns come back as placeholders rather than raising. Every
+    column comes back in its ``NUMERIC_FIELD_SPECS`` dtype whatever its on-disk
+    dtype, and the -1/-999 placeholders of files from before the NaN switch come
+    back as NaN.
     """
     event_group = handle["events"]
     count = int(len(event_group["event_id"]))
+    stamp = handle["metadata"].attrs.get(MISSING_FLOAT_KEY) if "metadata" in handle else None
+    if isinstance(stamp, bytes):
+        stamp = stamp.decode()
+    legacy = stamp != MISSING_FLOAT_NAN
 
     columns: dict[str, np.ndarray] = {}
     for key, (dtype, default) in NUMERIC_FIELD_SPECS.items():
         if key in event_group:
             columns[key] = np.asarray(event_group[key][()], dtype=dtype)
+            if legacy and key in LEGACY_PLACEHOLDERS:
+                columns[key][columns[key] == LEGACY_PLACEHOLDERS[key]] = np.nan
         elif default is None:
             raise KeyError(f"Required event column '{key}' is missing from the file")
         else:
@@ -240,19 +287,106 @@ def _rows_from_event_columns(columns: dict[str, np.ndarray]) -> list[dict[str, A
     ]
 
 
-def _concat_event_columns(chunks: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
-    if not chunks:
-        empty: dict[str, np.ndarray] = {
-            key: np.array([], dtype=dtype) for key, (dtype, _) in NUMERIC_FIELD_SPECS.items()
-        }
-        empty.update({key: np.array([], dtype="U") for key in EVENT_STRING_FIELDS})
-        return empty
+def _dataset_options(n_rows: int, n_columns: int | None = None) -> dict[str, Any]:
+    """Chunking and compression keywords for an events dataset of ``n_rows`` rows.
 
-    merged: dict[str, np.ndarray] = {}
-    for key in EVENT_FIELDS:
-        arrays = [chunk[key] for chunk in chunks]
-        merged[key] = np.concatenate(arrays) if len(arrays) > 1 else arrays[0]
-    return merged
+    HDF5 cannot chunk a zero-length dimension, so empty datasets are stored
+    contiguous and uncompressed: there is nothing to compress.
+    """
+    if n_rows == 0 or n_columns == 0:
+        return {}
+    if n_columns is None:
+        return {**DATASET_COMPRESSION, "chunks": (min(n_rows, CHUNK_ROWS),)}
+    rows = max(1, min(n_rows, CHUNK_ROWS // n_columns))
+    return {**DATASET_COMPRESSION, "chunks": (rows, n_columns)}
+
+
+def _storage_array(key: str, values: np.ndarray) -> np.ndarray:
+    """``values`` in the column's on-disk dtype; raises rather than wrap or overflow."""
+    storage = STORAGE_DTYPES.get(key)
+    if storage is None or values.size == 0:
+        return values
+    if np.issubdtype(storage, np.integer):
+        info = np.iinfo(storage)
+        low, high = values.min(), values.max()
+        if low < info.min or high > info.max:
+            raise ValueError(
+                f"Column '{key}' spans [{low}, {high}], outside the range of its "
+                f"on-disk dtype {np.dtype(storage).name}; widen STORAGE_DTYPES."
+            )
+        return values.astype(storage)
+    with np.errstate(over="ignore"):  # detected and reported just below
+        narrow = values.astype(storage)
+    overflow = np.isfinite(values) & ~np.isfinite(narrow)
+    if overflow.any():
+        raise ValueError(
+            f"Column '{key}' holds {values[overflow][0]}, which overflows its on-disk "
+            f"dtype {np.dtype(storage).name}; widen STORAGE_DTYPES."
+        )
+    return narrow
+
+
+def _write_header(
+    handle: h5py.File, metadata: dict[str, Any], event_count: int
+) -> None:
+    """Write the ``metadata`` attrs (with the NaN stamp) and ``run/event_count``."""
+    meta_group = handle.create_group("metadata")
+    for key, value in {**metadata, MISSING_FLOAT_KEY: MISSING_FLOAT_NAN}.items():
+        meta_group.attrs[key] = _serialize_attr(value)
+    run_group = handle.create_group("run")
+    run_group.attrs["event_count"] = int(event_count)
+
+
+def _create_event_datasets(
+    handle: h5py.File, event_count: int, matrix_columns: dict[str, int]
+) -> h5py.Group:
+    """Create the full-length, compressed ``events`` datasets, to be filled in slices."""
+    group = handle.create_group("events")
+    options = _dataset_options(event_count)
+    for key in EVENT_NUMERIC_FIELDS:
+        dtype = STORAGE_DTYPES.get(key, NUMERIC_FIELD_SPECS[key][0])
+        group.create_dataset(key, shape=(event_count,), dtype=dtype, **options)
+    group.create_dataset("interaction", shape=(event_count,), dtype=INTERACTION_DTYPE, **options)
+    for key, n_columns in matrix_columns.items():
+        group.create_dataset(
+            key,
+            shape=(event_count, n_columns),
+            dtype=np.float32,
+            **_dataset_options(event_count, n_columns),
+        )
+    return group
+
+
+def _write_event_slice(
+    group: h5py.Group,
+    start: int,
+    numeric_columns: dict[str, np.ndarray],
+    interaction_codes: np.ndarray,
+    matrices: dict[str, np.ndarray],
+) -> int:
+    """Write one block of events at row ``start``; returns the row after it."""
+    stop = start + len(interaction_codes)
+    if stop == start:
+        return stop
+    for key in EVENT_NUMERIC_FIELDS:
+        group[key][start:stop] = _storage_array(key, numeric_columns[key])
+    group["interaction"][start:stop] = interaction_codes
+    for key, matrix in matrices.items():
+        group[key][start:stop] = np.asarray(matrix, dtype=np.float32)
+    return stop
+
+
+def _encode_interaction_labels(labels: np.ndarray) -> np.ndarray:
+    """Vectorized ``_encode_interactions`` for an array of labels."""
+    unique, inverse = np.unique(np.asarray(labels, dtype=str), return_inverse=True)
+    unknown = [label for label in unique.tolist() if label not in INTERACTION_CODES]
+    if unknown:
+        raise ValueError(
+            f"Unknown interaction label(s) {unknown}; expected one of "
+            f"{', '.join(INTERACTION_LABELS)}"
+        )
+    codes = np.array([INTERACTION_CODES[label] for label in unique.tolist()], dtype=np.int8)
+    return codes[inverse.reshape(-1)] if len(unique) else np.array([], dtype=np.int8)
 
 
 def _encode_interactions(events: list[dict[str, Any]]) -> np.ndarray:
@@ -335,21 +469,13 @@ def write_common_hdf5(
     interaction_codes = _encode_interactions(events)
     metadata = {**metadata, **_file_level_values(metadata, events)}
 
+    present = {key: matrix for key, matrix in matrices.items() if matrix is not None}
     with h5py.File(output, "w") as handle:
-        meta_group = handle.create_group("metadata")
-        for key, value in metadata.items():
-            meta_group.attrs[key] = _serialize_attr(value)
-
-        run_group = handle.create_group("run")
-        run_group.attrs["event_count"] = int(len(events))
-
-        event_group = handle.create_group("events")
-        for key, values in numeric_columns.items():
-            event_group.create_dataset(key, data=values)
-        event_group.create_dataset("interaction", data=interaction_codes, dtype=INTERACTION_DTYPE)
-        for key, matrix in matrices.items():
-            if matrix is not None:
-                event_group.create_dataset(key, data=np.asarray(matrix, dtype=np.float32))
+        _write_header(handle, metadata, len(events))
+        event_group = _create_event_datasets(
+            handle, len(events), {key: matrix.shape[1] for key, matrix in present.items()}
+        )
+        _write_event_slice(event_group, 0, numeric_columns, interaction_codes, present)
 
     return str(output)
 
@@ -417,11 +543,53 @@ def _same_draw(a: Any, b: Any) -> bool:
     return True
 
 
-def _merge_weight_matrix(
-    read_files: list[tuple[str, dict[str, Any], dict[str, np.ndarray], float | None]],
-    key: str,
-) -> np.ndarray | None:
-    """Concatenate the inputs' ``key`` weight matrix, or None if none carry it.
+class _MergeInput(NamedTuple):
+    """What the first, metadata-only pass of a merge learns about one input."""
+
+    path: str
+    metadata: dict[str, Any]
+    event_count: int
+    # Column count of each weight matrix the input carries.
+    matrix_columns: dict[str, int]
+    # The input's FILE_LEVEL_FIELDS values; absent for an empty legacy file
+    # that carries them nowhere.
+    file_level: dict[str, str]
+    norm_count: float | None
+
+
+def _inspect_merge_input(path: str) -> _MergeInput:
+    """Read everything a merge needs from one input except its event columns.
+
+    Raises ``OSError``/``KeyError`` for a file that cannot be read or lacks a
+    required column, exactly as a full read would, so the merge can skip it
+    before writing anything.
+    """
+    with h5py.File(path, "r") as handle:
+        metadata: dict[str, Any] = {}
+        for key, value in handle["metadata"].attrs.items():
+            metadata[key] = value.decode() if isinstance(value, bytes) else value
+        events = handle["events"]
+        for key, (_, default) in NUMERIC_FIELD_SPECS.items():
+            if default is None and key not in events:
+                raise KeyError(f"Required event column '{key}' is missing from the file")
+        if "interaction" not in events:
+            raise KeyError("Required event column 'interaction' is missing from the file")
+        count = int(len(events["event_id"]))
+        file_level: dict[str, str] = {}
+        for key in FILE_LEVEL_FIELDS:
+            try:
+                file_level[key] = read_file_level_field(handle, key)
+            except KeyError:
+                if count:
+                    raise
+        matrix_columns = {
+            key: int(events[key].shape[1]) for key in WEIGHT_MATRICES if key in events
+        }
+    return _MergeInput(path, metadata, count, matrix_columns, file_level, _xsec_norm_count(metadata))
+
+
+def _merge_weight_matrix(inputs: list[_MergeInput], key: str) -> int | None:
+    """Column count of the merged ``key`` weight matrix, or None if no input carries it.
 
     Column ``k`` must mean the same parameter values in every input, so the
     inputs must agree on the paired metadata exactly; and either all of them
@@ -429,24 +597,51 @@ def _merge_weight_matrix(
     told apart from a real one.
     """
     meta_key = WEIGHT_MATRICES[key]
-    carrying = [path for path, _, columns, _ in read_files if key in columns]
+    carrying = [entry.path for entry in inputs if key in entry.matrix_columns]
     if not carrying:
         return None
-    if len(carrying) != len(read_files):
-        missing = [path for path, _, columns, _ in read_files if key not in columns]
+    if len(carrying) != len(inputs):
+        missing = [entry.path for entry in inputs if key not in entry.matrix_columns]
         raise MergeError(
-            f"Only {len(carrying)} of {len(read_files)} inputs carry {key}; "
+            f"Only {len(carrying)} of {len(inputs)} inputs carry {key}; "
             f"missing from {_summarize_paths(missing)}"
         )
-    reference_path, reference_metadata = read_files[0][0], read_files[0][1]
-    reference = reference_metadata.get(meta_key)
-    for path, metadata, _, _ in read_files[1:]:
-        if not _same_draw(metadata.get(meta_key), reference):
+    reference = inputs[0]
+    for entry in inputs[1:]:
+        if not _same_draw(entry.metadata.get(meta_key), reference.metadata.get(meta_key)):
             raise MergeError(
                 f"Refusing to merge {key} drawn differently: the '{meta_key}' "
-                f"metadata of {path} differs from {reference_path}"
+                f"metadata of {entry.path} differs from {reference.path}"
             )
-    return np.concatenate([columns[key] for _, _, columns, _ in read_files])
+        if entry.matrix_columns[key] != reference.matrix_columns[key]:
+            raise MergeError(
+                f"{key} of {entry.path} has {entry.matrix_columns[key]} columns, "
+                f"{reference.path} has {reference.matrix_columns[key]}"
+            )
+    return reference.matrix_columns[key]
+
+
+def _merged_file_level_values(
+    metadata: dict[str, Any], inputs: list[_MergeInput]
+) -> dict[str, str]:
+    """The merged file's ``FILE_LEVEL_FIELDS``; every input and ``metadata`` must agree.
+
+    A file mixing initial states (a merge of unlike jobs) has no single value
+    to record.
+    """
+    values: dict[str, str] = {}
+    for key in FILE_LEVEL_FIELDS:
+        seen = {entry.file_level[key] for entry in inputs if key in entry.file_level}
+        if key in metadata:
+            seen.add(str(metadata[key]))
+        if len(seen) > 1:
+            raise ValueError(
+                f"Events and metadata disagree on '{key}': {sorted(seen)}. A common-output "
+                "file holds one generator on one initial state."
+            )
+        if seen:
+            values[key] = seen.pop()
+    return values
 
 
 def merge_hdf5_files(
@@ -479,6 +674,13 @@ def merge_hdf5_files(
 
     A generator-version mismatch stays fatal: that is a physics error, not a
     partial run.
+
+    The merge streams: a first pass reads only each input's metadata and shapes,
+    a second copies one input at a time into the output, so memory stays at
+    about one chunk however many events the merged file holds. The output is
+    written under a temporary name and renamed into place only when complete; an
+    input that passed the first pass but fails to read in the second is an
+    error, not a skip, since half of it may already have been written.
     """
     normalized_inputs = [str(Path(path)) for path in input_files]
     if not normalized_inputs:
@@ -486,23 +688,19 @@ def merge_hdf5_files(
 
     identity: tuple[str, ...] | None = None
     identity_source: str | None = None
-    read_files: list[tuple[str, dict[str, Any], dict[str, np.ndarray], float | None]] = []
+    inputs: list[_MergeInput] = []
     unreadable: list[tuple[str, str]] = []
 
     for input_file in normalized_inputs:
         # A chunk still being written, or left truncated by a killed job, must
         # not take the whole merge down with it.
         try:
-            with h5py.File(input_file, "r") as handle:
-                file_metadata: dict[str, Any] = {}
-                for key, value in handle["metadata"].attrs.items():
-                    file_metadata[key] = value.decode() if isinstance(value, bytes) else value
-                columns = _read_event_columns(handle)
+            entry = _inspect_merge_input(input_file)
         except (OSError, KeyError) as exc:
             unreadable.append((input_file, f"{type(exc).__name__}: {exc}"))
             continue
 
-        current = _version_identity(file_metadata)
+        current = _version_identity(entry.metadata)
         if identity is None:
             identity = current
             identity_source = input_file
@@ -512,9 +710,7 @@ def merge_hdf5_files(
                 f"{identity_source} is {dict(zip(VERSION_IDENTITY_KEYS, identity))} "
                 f"but {input_file} is {dict(zip(VERSION_IDENTITY_KEYS, current))}"
             )
-        read_files.append(
-            (input_file, file_metadata, columns, _xsec_norm_count(file_metadata))
-        )
+        inputs.append(entry)
 
     if unreadable:
         LOGGER.warning(
@@ -525,51 +721,46 @@ def merge_hdf5_files(
             _summarize_paths([path for path, _ in unreadable]),
         )
 
-    declared_count = sum(1 for *_, count in read_files if count is not None)
+    declared_count = sum(1 for entry in inputs if entry.norm_count is not None)
     skipped_undeclared: list[str] = []
-    if declared_count and declared_count != len(read_files):
+    if declared_count and declared_count != len(inputs):
         # Their xsec_weight cannot be put on a common normalization with the
         # rest, so they are dropped rather than silently biasing the result.
-        skipped_undeclared = [path for path, _, _, count in read_files if count is None]
+        skipped_undeclared = [entry.path for entry in inputs if entry.norm_count is None]
         LOGGER.warning(
             "Skipping %d of %d readable input(s) that do not declare '%s' "
             "(stub output, or written before it was recorded); merging the "
             "remaining %d: %s",
             len(skipped_undeclared),
-            len(read_files),
+            len(inputs),
             XSEC_NORM_COUNT_KEY,
             declared_count,
             _summarize_paths(skipped_undeclared),
         )
-        read_files = [entry for entry in read_files if entry[3] is not None]
+        inputs = [entry for entry in inputs if entry.norm_count is not None]
 
-    if not read_files:
+    if not inputs:
         raise MergeError(
             f"No usable input files out of {len(normalized_inputs)}: "
             f"{len(unreadable)} could not be read and "
             f"{len(skipped_undeclared)} lacked '{XSEC_NORM_COUNT_KEY}'."
         )
 
-    first_file_metadata = read_files[0][1]
+    first_file_metadata = inputs[0].metadata
     expected_events_total = sum(
-        int(metadata.get("expected_events", 0)) for _, metadata, _, _ in read_files
+        int(entry.metadata.get("expected_events", 0)) for entry in inputs
     )
-    merged_chunks = [columns for _, _, columns, _ in read_files]
-    norm_counts = [count for *_, count in read_files]
-    merged_inputs = [path for path, _, _, _ in read_files]
+    merged_inputs = [entry.path for entry in inputs]
+    event_total = sum(entry.event_count for entry in inputs)
 
-    declared = [count for count in norm_counts if count is not None]
+    declared = [entry.norm_count for entry in inputs if entry.norm_count is not None]
     norm_count_total = float(sum(declared)) if declared else None
-    if norm_count_total:
-        # Rescale each chunk to its share of the combined estimate. With a single
-        # input this is a no-op (share == 1), so one-chunk runs are unaffected.
-        for columns, count in zip(merged_chunks, norm_counts):
-            assert count is not None
-            columns["xsec_weight"] = columns["xsec_weight"] * (count / norm_count_total)
 
-    matrices = {key: _merge_weight_matrix(read_files, key) for key in WEIGHT_MATRICES}
-    merged_columns = _concat_event_columns(merged_chunks)
-    merged_events = _rows_from_event_columns(merged_columns)
+    matrix_columns = {
+        key: n_columns
+        for key in WEIGHT_MATRICES
+        if (n_columns := _merge_weight_matrix(inputs, key)) is not None
+    }
 
     metadata = dict(run_metadata or {})
     # Guarantee the merged file records the (single, consistent) version identity,
@@ -586,7 +777,7 @@ def merge_hdf5_files(
 
     metadata.setdefault("merged_inputs", merged_inputs)
     metadata["merged_file_count"] = len(merged_inputs)
-    metadata["merged_event_count"] = int(len(merged_columns["event_id"]))
+    metadata["merged_event_count"] = event_total
     # Make a partial merge auditable from the file itself, so a cross section
     # computed from it can be traced back to how many chunks it actually covers.
     if len(merged_inputs) != len(normalized_inputs):
@@ -595,14 +786,43 @@ def merge_hdf5_files(
     # Carry the combined denominator so a merged file can itself be merged.
     if norm_count_total:
         metadata[XSEC_NORM_COUNT_KEY] = norm_count_total
-    for key, matrix in matrices.items():
-        if matrix is not None:
-            metadata[WEIGHT_MATRICES[key]] = first_file_metadata[WEIGHT_MATRICES[key]]
+    for key in matrix_columns:
+        metadata[WEIGHT_MATRICES[key]] = first_file_metadata[WEIGHT_MATRICES[key]]
+    metadata = {**metadata, **_merged_file_level_values(metadata, inputs)}
 
-    return write_common_hdf5(
-        output_path,
-        metadata,
-        merged_events,
-        universe_weights=matrices[UNIVERSE_WEIGHTS_KEY],
-        variation_weights=matrices[VARIATION_WEIGHTS_KEY],
-    )
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    partial = output.with_name(output.name + ".partial")
+    try:
+        with h5py.File(partial, "w") as handle:
+            _write_header(handle, metadata, event_total)
+            group = _create_event_datasets(handle, event_total, matrix_columns)
+            row = 0
+            for entry in inputs:
+                with h5py.File(entry.path, "r") as source:
+                    columns = _read_event_columns(source)
+                if len(columns["event_id"]) != entry.event_count:
+                    raise MergeError(
+                        f"{entry.path} holds {len(columns['event_id'])} events now, "
+                        f"{entry.event_count} when the merge started"
+                    )
+                if norm_count_total:
+                    # Rescale each chunk to its share of the combined estimate.
+                    # With a single input this is a no-op (share == 1), so
+                    # one-chunk runs are unaffected.
+                    assert entry.norm_count is not None
+                    columns["xsec_weight"] = columns["xsec_weight"] * (
+                        entry.norm_count / norm_count_total
+                    )
+                row = _write_event_slice(
+                    group,
+                    row,
+                    columns,
+                    _encode_interaction_labels(columns["interaction"]),
+                    {key: columns[key] for key in matrix_columns},
+                )
+        os.replace(partial, output)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    return str(output)

@@ -25,6 +25,7 @@ from neutrino_factory.final_state import FINAL_STATE_FIELDS, NATIVE_CODE_FIELD
 from neutrino_factory.kinematics import KINEMATIC_FIELDS, MISSING
 from neutrino_factory.normalizers.genie import GenieNormalizer
 from neutrino_factory.translators.genie import GENIE_UNITS_CM2, XSEC_SCALE
+from tests.stored_values import assert_stored_close
 
 
 def _write_gst_root(
@@ -426,7 +427,7 @@ class GenieNormalizerRootTests(unittest.TestCase):
             for event, energy in zip(events, energies):
                 expected = reference_kinematics(energy)
                 for field in KINEMATIC_FIELDS:
-                    self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+                    assert_stored_close(event[field], expected[field], msg=field)
 
     def test_resonant_primary_follows_the_channel(self) -> None:
         """GENIE's channels are its mechanisms, so the column follows the label."""
@@ -481,14 +482,10 @@ class GenieNormalizerRootTests(unittest.TestCase):
             GenieNormalizer().normalize(gst_path, out_path, _base_task(), "local")
 
             _, events = read_events(out_path)
-            self.assertAlmostEqual(
-                events[0]["w_true_gev"], reference_kinematics(2.0)["w_true_gev"], places=9
-            )
-            self.assertEqual(events[1]["w_true_gev"], MISSING)
+            assert_stored_close(events[0]["w_true_gev"], reference_kinematics(2.0)["w_true_gev"])
+            self.assertTrue(np.isnan(events[1]["w_true_gev"]))
             for event in events:
-                self.assertAlmostEqual(
-                    event["w_gev"], reference_kinematics(2.0)["w_gev"], places=9
-                )
+                assert_stored_close(event["w_gev"], reference_kinematics(2.0)["w_gev"])
 
     def test_mec_cluster_hit_nucleon_still_yields_a_true_w(self) -> None:
         """For MEC, gst's hitnuc is a 2-nucleon cluster code and En/pxn/... the pair."""
@@ -539,9 +536,7 @@ class GenieNormalizerRootTests(unittest.TestCase):
             expected = reference_final_state()
             for event in events:
                 for field in FINAL_STATE_FIELDS:
-                    self.assertAlmostEqual(
-                        event[field], expected[field], places=9, msg=field
-                    )
+                    assert_stored_close(event[field], expected[field], msg=field)
             self.assertEqual([e[NATIVE_CODE_FIELD] for e in events], [1, 11, 26])
 
     def test_derived_kinematics_agree_with_genie_native_branches(self) -> None:
@@ -580,10 +575,10 @@ class GenieNormalizerRootTests(unittest.TestCase):
 
             _, events = read_events(out_path)
             for index, event in enumerate(events):
-                self.assertAlmostEqual(event["q2_gev2"], native["Q2"][index], places=9)
-                self.assertAlmostEqual(event["bjorken_x"], native["x"][index], places=9)
-                self.assertAlmostEqual(event["inelasticity_y"], native["y"][index], places=9)
-                self.assertAlmostEqual(event["lepton_costheta"], native["cthl"][index], places=9)
+                assert_stored_close(event["q2_gev2"], native["Q2"][index])
+                assert_stored_close(event["bjorken_x"], native["x"][index])
+                assert_stored_close(event["inelasticity_y"], native["y"][index])
+                assert_stored_close(event["lepton_costheta"], native["cthl"][index])
 
     def test_normalize_gst_root_blanks_bjorken_x_for_coherent(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -607,7 +602,7 @@ class GenieNormalizerRootTests(unittest.TestCase):
 
             _, events = read_events(out_path)
             self.assertGreater(events[0]["bjorken_x"], 0.0)
-            self.assertEqual(events[1]["bjorken_x"], MISSING)
+            self.assertTrue(np.isnan(events[1]["bjorken_x"]))
             # Everything else stays physical for the coherent event.
             self.assertAlmostEqual(events[1]["q2_gev2"], reference_kinematics(2.0)["q2_gev2"])
             self.assertAlmostEqual(events[1]["inelasticity_y"], 0.5)
@@ -797,7 +792,7 @@ class GenieNormalizerRootTests(unittest.TestCase):
             total = sum(e["xsec_weight"] for e in events)
             sigma_per_nucleon = 1.0e-15 * (XSEC_SCALE / GENIE_UNITS_CM2) / 40
             expected = sigma_per_nucleon * (edges[-1] - edges[0])
-            self.assertAlmostEqual(total / expected, 1.0, places=9)
+            assert_stored_close(total / expected, 1.0)
 
             # And the weights genuinely track the stepped flux: an event in the
             # low-density bin [1.5, 3.0) must weigh more than one in [0.5, 0.8).

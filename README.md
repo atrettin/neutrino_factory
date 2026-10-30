@@ -172,6 +172,15 @@ the mapping, e.g. for `pandas.Categorical.from_codes`. `generator`, `probe` and
 `target` are the same for every event of a file, so they are `metadata`
 attributes, not columns.
 
+Every `events` dataset is gzip-compressed (with shuffle), which h5py and any
+other HDF5 reader undo transparently. The kinematic and final-state float
+columns are stored as `float32`, the multiplicities as `int16` and
+`native_interaction_code` as `int32`. `energy_gev`, `weight`, `xsec_weight`,
+`event_id` and `seed` keep full width. Together this makes a file about 3x
+smaller (~80 B per event). The framework's readers return every column in its
+full in-memory dtype (`float64`/`int64`); a direct `ds[()]` returns the stored
+one, so cast before accumulating large sums of a `float32` column.
+
 | column | unit | meaning |
 | --- | --- | --- |
 | `event_id`, `seed` | – | bookkeeping |
@@ -212,16 +221,16 @@ them. The two hadronic masses answer different questions: `w_gev` is the
 observable one and is defined identically for every generator, while
 `w_true_gev` is the invariant mass the generators cut on internally and carries
 each one's own treatment of Fermi motion and binding. Where a variable is not
-defined for an event it carries a clearly unphysical placeholder: `-1` for the
-non-negative quantities, `-999` for `lepton_p_parallel_gev` and
-`lepton_costheta` (whose physical range includes `-1`). Notably, `bjorken_x` and
-both W columns are `-1` for coherent events, which have no struck nucleon. See
+defined for an event it is NaN, which drops out of every histogram rather than
+being binned as a value. Notably, `bjorken_x` and both W columns are NaN for
+coherent events, which have no struck nucleon. Files written before 2026-10 used
+`-1` and `-999` instead; the framework's readers map those to NaN. See
 `docs/physics.md` for the full convention.
 
 The final-state columns are derived the same way, from each generator's post-FSI
 particle list (FSI is on in every generator): the multiplicities count exact PDG
 codes, and the two hadronic sums run over every final-state particle that is not
-a charged lepton, a neutrino or a nuclear remnant. Their placeholder is `-1`; an event with nothing
+a charged lepton, a neutrino or a nuclear remnant. Their placeholder is `-1` for the counts and NaN for the energies; an event with nothing
 hadronic out is a real zero. `native_interaction_code` is the deliberate
 exception to the format's universality — it is the generator's own channel code
 (GENIE `neut_code`, NEUT `mode`, GiBUU `evType`, NuWro `dyn`) and only means

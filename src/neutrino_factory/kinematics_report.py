@@ -59,8 +59,14 @@ REPORT_VARIABLES: tuple[tuple[str, str], ...] = (
     ("hadronic_kinetic_energy_gev", "GeV"),
 )
 
-# The placeholder to strip per column, across both column families.
-PLACEHOLDERS: dict[str, float] = {**FIELD_DEFAULTS, **FINAL_STATE_DEFAULTS}
+# The numeric placeholder to strip per column, across both column families. The
+# float columns' placeholder is NaN, which the finiteness test already drops, so
+# only the integer sentinels (the multiplicities' -1) remain here.
+PLACEHOLDERS: dict[str, float] = {
+    name: value
+    for name, value in {**FIELD_DEFAULTS, **FINAL_STATE_DEFAULTS}.items()
+    if not np.isnan(value)
+}
 
 ALL_LABEL = "all"
 
