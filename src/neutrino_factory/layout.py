@@ -44,6 +44,22 @@ def raw_output_path(config: Mapping[str, Any], task: Mapping[str, Any]) -> Path:
     return Path(config["storage"]["work_root"]) / "raw" / str(task["job_label"]) / stem / f"{stem}.json"
 
 
+def prune_raw_outputs(raw_dir: Path) -> int:
+    """Delete the raw generator event files (``*.root``) under ``raw_dir``.
+
+    Returns the bytes freed. Only the ROOT files go: they hold the events and
+    are nearly all of a task's footprint. Logs, jobcards, flux tables and
+    ``translated_config.json`` stay, so ``check-status --task`` can still show
+    what the task did.
+    """
+    freed = 0
+    for path in sorted(raw_dir.rglob("*.root")):
+        if path.is_file() and not path.is_symlink():
+            freed += path.stat().st_size
+            path.unlink()
+    return freed
+
+
 def chunk_output_path(config: Mapping[str, Any], task: Mapping[str, Any]) -> Path:
     """The normalized (common-format HDF5) output for one chunk."""
     stem = _stem_for_task(task)

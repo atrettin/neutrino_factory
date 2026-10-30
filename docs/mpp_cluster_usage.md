@@ -35,6 +35,32 @@ container, so paths under those trees resolve unchanged inside. `/scratch`
 (node-local SSD) is **not** accessible from inside containers, so the project
 does not use it — everything lives on `/ptmp`.
 
+### Disk budget
+
+The 6 TB `/ptmp` quota is the binding limit for a production run. Per stored
+event (measured on `keystone_prod_v3_pilot`, 2026-10):
+
+| What | Where | Size per event |
+|---|---|---|
+| Raw generator output (GENIE, NuWro, NEUT) | `work/raw/` | ~2 KB |
+| Raw generator output (GiBUU) | `work/raw/` | ~6 KB |
+| Chunk, common format | `output/chunks/` | ~80 B |
+| Merged file | `output/merged/` | ~80 B (a second copy of the chunks) |
+
+GiBUU stores more events than it is asked for: about 0.9 per requested event,
+and about 3.2 with `qes_oversampling: 8`.
+
+Raw output dominates: kept in full, it is ~25x the common output. Set
+`storage.keep_raw: first_chunk` (see
+[configuration.md](configuration.md#raw-generator-output-storagekeep_raw)) for any
+large run. Raw files then exist only while their task runs, plus chunk 0 of
+each job. Chunks written before 2026-10 are uncompressed (~250 B per event);
+re-merging them through the current code writes a compressed copy.
+
+`merge` streams: it holds one chunk in memory at a time (0.8 GB peak for a
+9M-event GiBUU job of 0.9M-event chunks), so its memory does not grow with the
+size of the merged file.
+
 ## Slurm: the NEW MPP cluster requires `--partition=alma`
 
 Submitting from `mppui1`/`mppui2` targets the **new** MPP Slurm cluster

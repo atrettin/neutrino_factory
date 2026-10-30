@@ -33,6 +33,16 @@ LOG_LEVELS = ("default", "essential", "quiet", "verbose")
 # common output.
 PHYSICS_CURRENTS = ("cc", "nc", "inclusive")
 
+# What happens to a task's raw generator output (the ``*.root`` files in its
+# work directory) once its chunk has normalized and validated. "all" keeps
+# everything; "first_chunk" keeps chunk 0 of every job, as a sample to debug or
+# re-check the normalizer on, and deletes the rest; "none" deletes all of it.
+# Logs, jobcards and configs are always kept, and a failed task keeps
+# everything. Raw output is ~10x the normalized size (~2 KB per event for the
+# rejection samplers, ~6 KB per stored GiBUU event), so for a production run it
+# is what decides whether the run fits on disk.
+KEEP_RAW_POLICIES = ("all", "first_chunk", "none")
+
 
 def physics_current(config: Dict[str, Any]) -> str:
     """The run's weak current, normalized to one of ``PHYSICS_CURRENTS``.
@@ -69,6 +79,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "software_root": "${NF_SOFTWARE_ROOT:-./software}",
         "output_root": "${NF_OUTPUT_ROOT:-./output}",
         "work_root": "${NF_WORK_ROOT:-./work}",
+        # See KEEP_RAW_POLICIES.
+        "keep_raw": "all",
         # Container image storage (Apptainer SIFs). containers.py reads the env
         # var directly; this key surfaces the resolved value for bookkeeping.
         "image_root": "${NF_IMAGE_ROOT:-./software/images}",
@@ -322,6 +334,12 @@ def validate_config(config: Dict[str, Any]) -> None:
         job_list = []
     elif not job_list:
         errors.append("At least one job must be configured")
+
+    keep_raw = config.get("storage", {}).get("keep_raw", "all")
+    if keep_raw not in KEEP_RAW_POLICIES:
+        errors.append(
+            f"storage.keep_raw must be one of {', '.join(KEEP_RAW_POLICIES)} (got '{keep_raw}')"
+        )
 
     config_path = config.get("config_path")
     flux_base_dir = str(Path(config_path).parent) if config_path else None

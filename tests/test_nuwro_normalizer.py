@@ -23,6 +23,7 @@ from neutrino_factory.common_output import (
 from neutrino_factory.final_state import FINAL_STATE_FIELDS, NATIVE_CODE_FIELD
 from neutrino_factory.kinematics import FIELD_DEFAULTS, KINEMATIC_FIELDS, MISSING
 from neutrino_factory.normalizers.nuwro import MEV_PER_GEV, NuWroNormalizer
+from tests.stored_values import assert_stored_close
 
 
 def _write_root_tree(
@@ -292,7 +293,7 @@ class NuWroNormalizerRootTests(unittest.TestCase):
             expected = reference_final_state()
             for event in events:
                 for field in FINAL_STATE_FIELDS:
-                    self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+                    assert_stored_close(event[field], expected[field], msg=field)
             # dyn = 0 is CC quasi-elastic, which is why the missing-value
             # placeholder for this column cannot be 0.
             self.assertEqual([e[NATIVE_CODE_FIELD] for e in events], [0, 2, 4])
@@ -321,7 +322,7 @@ class NuWroNormalizerRootTests(unittest.TestCase):
             for event, energy_gev in zip(events, [1.0, 2.5, 4.0]):
                 expected = reference_kinematics(energy_gev)
                 for field in KINEMATIC_FIELDS:
-                    self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+                    assert_stored_close(event[field], expected[field], msg=field)
 
     def test_mec_sums_the_whole_struck_hadronic_system(self) -> None:
         """NuWro's MEC emits the struck pair in e/out; the pair is the system."""
@@ -347,14 +348,12 @@ class NuWroNormalizerRootTests(unittest.TestCase):
 
             _, events = read_events(out_path)
             single = reference_kinematics(2.0)["w_true_gev"]
-            self.assertAlmostEqual(events[0]["w_true_gev"], single, places=9)
+            assert_stored_close(events[0]["w_true_gev"], single)
             # Two nucleons at rest weigh 2 M_N, so the pair's W is strictly larger
             # and demonstrably not just the first nucleon's.
             self.assertGreater(events[1]["w_true_gev"], single + 0.5)
             # w_gev knows nothing about the nucleon and is unchanged.
-            self.assertAlmostEqual(
-                events[1]["w_gev"], reference_kinematics(2.0)["w_gev"], places=9
-            )
+            assert_stored_close(events[1]["w_gev"], reference_kinematics(2.0)["w_gev"])
 
     def test_true_w_is_the_outgoing_hadrons_not_the_unbound_nucleon(self) -> None:
         """NuWro builds RES/DIS hadrons from a nucleon with E_b taken off its energy.
@@ -390,7 +389,7 @@ class NuWroNormalizerRootTests(unittest.TestCase):
             m_n = reference_nucleon_p4([2.0])[0, 0]
             expected = np.sqrt(unbound**2 - 2 * (binding_mev / 1000.0) * (m_n + 1.0)
                                + (binding_mev / 1000.0) ** 2)
-            self.assertAlmostEqual(events[0]["w_true_gev"], expected, places=9)
+            assert_stored_close(events[0]["w_true_gev"], expected)
             self.assertLess(events[0]["w_true_gev"], unbound - 0.02)
 
     def test_qel_true_w_ignores_the_src_spectator(self) -> None:
@@ -417,7 +416,7 @@ class NuWroNormalizerRootTests(unittest.TestCase):
 
             _, events = read_events(out_path)
             single = reference_kinematics(2.0)["w_true_gev"]
-            self.assertAlmostEqual(events[0]["w_true_gev"], single, places=9)
+            assert_stored_close(events[0]["w_true_gev"], single)
             # Outside qel every outgoing hadron belongs to the system.
             self.assertGreater(events[1]["w_true_gev"], single + 0.5)
 
@@ -445,10 +444,8 @@ class NuWroNormalizerRootTests(unittest.TestCase):
 
             _, events = read_events(out_path)
             for event in events:
-                self.assertEqual(event["w_true_gev"], MISSING)
-                self.assertAlmostEqual(
-                    event["w_gev"], reference_kinematics(2.0)["w_gev"], places=9
-                )
+                self.assertTrue(np.isnan(event["w_true_gev"]))
+                assert_stored_close(event["w_gev"], reference_kinematics(2.0)["w_gev"])
 
     def test_resonant_primary_splits_the_res_channel_on_res_delta(self) -> None:
         """NuWro's `res` blends in non-resonant background; the column separates it."""
@@ -534,7 +531,7 @@ class NuWroNormalizerRootTests(unittest.TestCase):
             # ...the one without gets placeholders throughout, while the
             # non-kinematic columns stay valid.
             for field in KINEMATIC_FIELDS:
-                self.assertEqual(events[1][field], FIELD_DEFAULTS[field], msg=field)
+                assert_stored_close(events[1][field], FIELD_DEFAULTS[field], msg=field)
             self.assertAlmostEqual(events[1]["energy_gev"], 2.0)
             self.assertEqual(events[1]["interaction"], "qel")
 
@@ -560,7 +557,7 @@ class NuWroNormalizerRootTests(unittest.TestCase):
 
             _, events = read_events(out_path)
             self.assertGreater(events[0]["bjorken_x"], 0.0)
-            self.assertEqual(events[1]["bjorken_x"], MISSING)
+            self.assertTrue(np.isnan(events[1]["bjorken_x"]))
             self.assertAlmostEqual(events[1]["q2_gev2"], reference_kinematics(2.0)["q2_gev2"])
 
     def test_xsec_weight_matches_hand_derivation_for_flat_flux(self) -> None:

@@ -672,3 +672,51 @@ values the translator checks (`ConfigTranslator.validate_section`).
   need. The pilot showed QE `n_eff` growing linearly with the sample (9.6–9.96×
   for 10×).
 
+
+## Disk footprint: compressed narrow columns, NaN placeholders, raw pruning, streaming merge (2026-10)
+
+**The problem.** The full v3 production (~5.8e9 stored events) was projected
+at ~9 TB against the 6 TB `/ptmp` quota. Raw generator ROOT files were ~6.3 TB
+of that. The common output was ~2.9 TB (chunks plus merged copies), at 251 B
+per event: uncompressed, and with 31 of 35 columns in 64 bits, including
+multiplicities that never exceed ~20. Merging a GiBUU job of ~1.9e8 events was
+not possible either, because the merge built one Python dict per event.
+
+**The decisions.**
+- *gzip (level 4) with shuffle on every `events` dataset, and narrow on-disk
+  dtypes* (`common_output.STORAGE_DTYPES`): `float32` for the kinematic and
+  final-state floats, `int16` for multiplicities, `int32` for
+  `native_interaction_code`. Measured on pilot chunks this is 77–80 B per event,
+  3.1–3.3x smaller. Readers cast back to the `NUMERIC_FIELD_SPECS` dtypes, so
+  nothing downstream changes. Writing a value its narrow dtype cannot hold
+  raises instead of wrapping.
+- *Kept at full width:* `energy_gev`, because `float32(0.1) != 0.1` and an event
+  at the flux edge must stay inside the simulated range; `weight` and
+  `xsec_weight`, which are summed over up to ~1e8 events (storing `xsec_weight`
+  as float32 would only have saved another 9%); `event_id` and `seed`, which
+  compress to almost nothing anyway.
+- *gzip, not lzf:* every HDF5 tool reads gzip, and gzip is ~10% smaller. It
+  costs ~3 s per 1e6 events to write and 0.4 s to read.
+- *NaN placeholders for float columns.* The -1/-999 sentinels bought nothing,
+  and they could be processed as if they were physics. keystone, for example,
+  folds overflow into its edge bins by default, which put coherent events'
+  `bjorken_x = -1` into the lowest x bin. NaN costs nothing on disk and is
+  dropped by binning. Integer columns cannot hold NaN and keep `-1` (counts) and
+  `-2**31` (native code). Files get a `missing_float = "nan"` attribute;
+  `_read_event_columns` maps the legacy sentinels of unstamped files to NaN,
+  per column, so merges of old and new chunks are consistent.
+- *`storage.keep_raw`*, default `all`, with `first_chunk` for production. Chunk
+  0 of each job stays as a raw sample for debugging the normalizer; the rest is
+  deleted once its chunk validates.
+- *A two-pass streaming merge.* The first pass reads only metadata and shapes,
+  so every check (version identity, skipped inputs, `xsec_norm_count`, weight
+  matrices, initial state) still happens before anything is written. The second
+  pass copies one input at a time into preallocated datasets. The output is
+  written under a temporary name and renamed into place only once complete.
+
+**Ruled out.**
+- *Dropping derived columns* (`lepton_momentum_gev`, `lepton_p_parallel_gev` and
+  `lepton_p_transverse_gev` follow from energy, angle and mass). That would save
+  ~15% more, but it changes the schema keystone reads.
+- *Deleting chunks after merging.* Chunks are what a merge is redone from after
+  retries, and compressed they cost only ~0.5 TB.

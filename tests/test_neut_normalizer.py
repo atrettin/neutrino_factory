@@ -18,6 +18,7 @@ from neutrino_factory.common_output import RESONANT_PRIMARY_UNKNOWN, read_events
 from neutrino_factory.final_state import FINAL_STATE_FIELDS, NATIVE_CODE_FIELD
 from neutrino_factory.kinematics import FIELD_DEFAULTS, KINEMATIC_FIELDS, MISSING
 from neutrino_factory.normalizers.neut import FlatSchemaError, NeutNormalizer
+from tests.stored_values import assert_stored_close
 
 
 def _write_flat_root(
@@ -240,7 +241,7 @@ class NeutNormalizerRootTests(unittest.TestCase):
             for event, energy in zip(events, energies):
                 expected = reference_kinematics(energy)
                 for field in KINEMATIC_FIELDS:
-                    self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+                    assert_stored_close(event[field], expected[field], msg=field)
 
     def test_normalize_root_summarizes_the_final_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -258,7 +259,7 @@ class NeutNormalizerRootTests(unittest.TestCase):
             expected = reference_final_state()
             for event in events:
                 for field in FINAL_STATE_FIELDS:
-                    self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+                    assert_stored_close(event[field], expected[field], msg=field)
             self.assertEqual([e[NATIVE_CODE_FIELD] for e in events], [1, 11, -1])
 
     def test_normalize_root_reports_a_flat_file_without_final_state_branches(self) -> None:
@@ -291,8 +292,8 @@ class NeutNormalizerRootTests(unittest.TestCase):
 
             _, events = read_events(out_path)
             self.assertGreater(events[0]["bjorken_x"], 0.0)
-            self.assertEqual(events[1]["bjorken_x"], MISSING)
-            self.assertEqual(events[2]["bjorken_x"], MISSING)
+            self.assertTrue(np.isnan(events[1]["bjorken_x"]))
+            self.assertTrue(np.isnan(events[2]["bjorken_x"]))
             # Only x is suppressed for coherent events.
             for event in events:
                 self.assertAlmostEqual(event["q2_gev2"], reference_kinematics(2.0)["q2_gev2"])
@@ -313,7 +314,7 @@ class NeutNormalizerRootTests(unittest.TestCase):
             _, events = read_events(out_path)
             self.assertAlmostEqual(events[0]["lepton_costheta"], 0.8)
             for field in KINEMATIC_FIELDS:
-                self.assertEqual(events[1][field], FIELD_DEFAULTS[field], msg=field)
+                assert_stored_close(events[1][field], FIELD_DEFAULTS[field], msg=field)
             # Non-kinematic columns are unaffected.
             self.assertAlmostEqual(events[1]["energy_gev"], 2.0)
             self.assertEqual(events[1]["interaction"], "qel")
@@ -389,16 +390,14 @@ class NeutNormalizerRootTests(unittest.TestCase):
 
             _, events = read_events(out_path)
             single = reference_kinematics(2.0)["w_true_gev"]
-            self.assertAlmostEqual(events[0]["w_true_gev"], single, places=9)
+            assert_stored_close(events[0]["w_true_gev"], single)
             self.assertGreater(events[1]["w_true_gev"], single + 0.5)
             # Mode 16 is coherent: no nucleon, and the label blanks it as well.
-            self.assertEqual(events[2]["w_true_gev"], MISSING)
-            self.assertEqual(events[2]["w_gev"], MISSING)
+            self.assertTrue(np.isnan(events[2]["w_true_gev"]))
+            self.assertTrue(np.isnan(events[2]["w_gev"]))
             # The lepton-only W survives wherever there is a struck nucleon.
             for event in events[:2]:
-                self.assertAlmostEqual(
-                    event["w_gev"], reference_kinematics(2.0)["w_gev"], places=9
-                )
+                assert_stored_close(event["w_gev"], reference_kinematics(2.0)["w_gev"])
 
     def test_mode_maps_to_every_interaction_category(self) -> None:
         # One representative NEUT mode per common-output category, plus an
@@ -491,9 +490,7 @@ class NeutNormalizerRootTests(unittest.TestCase):
             # And the absolute scale: sigma_avg / (N * phi_hat) with phi_hat the
             # unit-normalized density of the bin the event fell in.
             integral = float(np.sum(density * widths))
-            self.assertAlmostEqual(
-                events[0]["xsec_weight"], 0.75 * integral / (2 * density[0]), places=9
-            )
+            assert_stored_close(events[0]["xsec_weight"], 0.75 * integral / (2 * density[0]))
 
     def test_xsec_weight_matches_hand_derivation_for_flat_flux(self) -> None:
         """Flat flux and flat histograms make every weight the same number.
@@ -517,7 +514,7 @@ class NeutNormalizerRootTests(unittest.TestCase):
             _, events = read_events(out_path)
             expected = sigma_avg * (5.0 - 0.5) / 3
             for event in events:
-                self.assertAlmostEqual(event["xsec_weight"], expected, places=9)
+                assert_stored_close(event["xsec_weight"], expected)
 
     def test_normalize_root_event_ids_start_at_start_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -603,7 +600,7 @@ class NeutNormalizerRootTests(unittest.TestCase):
                     _, events = read_events(out_path)
                     self.assertEqual([e["probe"] for e in events], [probe, probe])
                     for event in events:
-                        self.assertAlmostEqual(event["xsec_weight"], expected, places=9)
+                        assert_stored_close(event["xsec_weight"], expected)
 
     def test_generic_histograms_do_not_shadow_the_flavour_named_pair(self) -> None:
         """A real NEUT run writes both pairs; the flavour-named one is used.
@@ -641,7 +638,7 @@ class NeutNormalizerRootTests(unittest.TestCase):
             _, events = read_events(out_path)
             expected = sigma_avg * (5.0 - 0.5) / 2
             for event in events:
-                self.assertAlmostEqual(event["xsec_weight"], expected, places=9)
+                assert_stored_close(event["xsec_weight"], expected)
 
     def test_normalize_root_raises_on_ambiguous_normalization_histograms(self) -> None:
         # Two flux histograms leave the choice of normalization to a guess.

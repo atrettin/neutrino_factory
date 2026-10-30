@@ -391,6 +391,33 @@ The `storage` config values reference the same variables via `${VAR:-default}`
 expansion, so one `.env` drives the YAML config, the shell scripts, and the
 Slurm jobs consistently.
 
+## Raw generator output: `storage.keep_raw`
+
+Each task writes the generator's own event files (`*.root`) into its work
+directory under `work_root/raw/`, normalizes them into a chunk under
+`output_root/chunks/`, and by default keeps both. The raw files are about ten
+times the size of the chunk, so for a production run they decide whether the
+run fits on disk. `storage.keep_raw` sets what is deleted once a chunk has
+normalized **and** validated:
+
+| Value | Keeps |
+|---|---|
+| `all` (default) | every raw file |
+| `first_chunk` | chunk 0 of every job, as a sample to debug or re-check the normalizer on |
+| `none` | no raw event files |
+
+Only `*.root` files are deleted. Logs, jobcards, flux tables and
+`translated_config.json` stay, so `check-status --task` still works, and a task
+whose output fails validation keeps everything. The task's Slurm log records the
+amount freed. Without raw files, a later normalizer fix means regenerating the
+affected chunks rather than re-normalizing them.
+
+```yaml
+storage:
+  work_root: "/ptmp/mpp/$USER/neutrino_factory/work/my_run"
+  keep_raw: first_chunk
+```
+
 ## Slurm manifest schema (v4)
 
 `neutrino-factory submit --executor slurm` writes `work/manifests/<run>.json`

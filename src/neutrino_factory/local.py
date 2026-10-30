@@ -112,7 +112,25 @@ def run_task(config: dict[str, Any], task: dict[str, Any], execution_mode: str =
 
     valid = bool(validate_file(normalized_path, expected_events=None)["valid"])
     status.finish_sidecar(sidecar_path, valid=valid)
+    if valid and _prunes_raw(config, task):
+        freed = layout.prune_raw_outputs(raw_path.parent)
+        print(
+            f"neutrino-factory: deleted {freed / 1e9:.2f} GB of raw output in "
+            f"{raw_path.parent} (storage.keep_raw: {config['storage'].get('keep_raw')})",
+            file=sys.stderr,
+            flush=True,
+        )
     return normalized
+
+
+def _prunes_raw(config: dict[str, Any], task: dict[str, Any]) -> bool:
+    """Whether storage.keep_raw says to delete this task's raw output once it is valid."""
+    policy = config["storage"].get("keep_raw", "all")
+    if policy == "none":
+        return True
+    if policy == "first_chunk":
+        return int(task["chunk_id"]) != 0
+    return False
 
 
 def run_local(config: dict[str, Any], manifest_path: str | Path | None = None) -> dict[str, Any]:

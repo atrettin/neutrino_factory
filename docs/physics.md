@@ -400,9 +400,14 @@ is displaced by tens of MeV.
 - The lepton variables are filled for NC as well as CC events; for NC the
   "lepton" is the scattered neutrino.
 
-**Placeholders.** `MISSING = -1.0` for the non-negative-definite columns and
-`MISSING_SIGNED = -999.0` for `lepton_p_parallel_gev` and `lepton_costheta` (a
-backward-scattered lepton genuinely has `cos θ = -1`). Blanking rules:
+**Placeholders.** A blank value is NaN (`kinematics.MISSING`). NaN never lands
+in a histogram bin and turns any sum it enters into NaN, so a forgotten mask
+shows up instead of quietly biasing a result. Files written before
+2026-10 used `-1.0` for the non-negative-definite columns and `-999.0` for
+`lepton_p_parallel_gev` and `lepton_costheta` (a backward-scattered lepton
+genuinely has `cos θ = -1`). Such files lack the `missing_float = "nan"`
+metadata attribute, and `common_output` maps their placeholders to NaN on read
+(see the [common output format](../README.md#common-output-format)). Blanking rules:
 
 | Column(s) | Blank when |
 |---|---|
@@ -491,12 +496,13 @@ one from NuWro means:
   nucleons carry Fermi motion that did not come from the neutrino. Nor is it
   GENIE's `sumKEf`.
 
-**Placeholders.** The counts default to `-1` and the energies to `-1.0`; an event
-with nothing hadronic out is a real zero. An event without a pion (or proton) has
-no leading one, so it keeps `-1.0` for the kinetic energy and `-999.0` for the
-cosines (−1 is a physical cosine), as does a particle at rest, or an event
-without a lepton momentum, for the angle that needs it. Stub mode leaves every
-column at its placeholder.
+**Placeholders.** The counts are integers and default to `-1`; every float
+column (energies, leading-particle kinetic energies and cosines) defaults to NaN.
+An event with nothing hadronic out is a real zero. An event without a pion (or
+proton) has no leading one, so its leading-particle columns stay NaN, as does
+the angle of a particle at rest, or of an event without a lepton momentum. Stub
+mode leaves every column at its placeholder. Older files used `-1.0` for the
+energies and `-999.0` for the cosines; they are mapped to NaN on read.
 
 ### `native_interaction_code` is the one non-universal column
 

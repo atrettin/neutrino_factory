@@ -1,27 +1,38 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import h5py
 import numpy as np
 
+from neutrino_factory import common_output
 from neutrino_factory.common_output import (
+    EVENT_NUMERIC_FIELDS,
     FILE_LEVEL_FIELDS,
     INTERACTION_CODES,
+    MISSING_FLOAT_KEY,
+    MISSING_FLOAT_NAN,
+    NUMERIC_FIELD_SPECS,
+    STORAGE_DTYPES,
     MergeError,
     merge_hdf5_files,
     read_events,
+    read_interaction_column,
     write_common_hdf5,
 )
 from neutrino_factory.final_state import (
+    COUNT_FIELDS,
     FINAL_STATE_FIELDS,
     MISSING_NATIVE_CODE,
     NATIVE_CODE_FIELD,
 )
 from neutrino_factory.final_state import FIELD_DEFAULTS as FINAL_STATE_DEFAULTS
 from neutrino_factory.kinematics import FIELD_DEFAULTS, KINEMATIC_FIELDS
+from tests.stored_values import assert_stored_close
 
 
 def _write_chunk(path: Path, generator: str, code_version: str, config_version: str, n: int) -> str:
@@ -194,9 +205,9 @@ class LegacyFileCompatibilityTests(unittest.TestCase):
             for event in events:
                 self.assertAlmostEqual(event["energy_gev"], 1.0 + event["event_id"])
                 for field in KINEMATIC_FIELDS:
-                    self.assertEqual(event[field], FIELD_DEFAULTS[field], msg=field)
+                    np.testing.assert_equal(event[field], FIELD_DEFAULTS[field], err_msg=field)
                 for field in FINAL_STATE_FIELDS:
-                    self.assertEqual(event[field], FINAL_STATE_DEFAULTS[field], msg=field)
+                    np.testing.assert_equal(event[field], FINAL_STATE_DEFAULTS[field], err_msg=field)
                 self.assertEqual(event[NATIVE_CODE_FIELD], MISSING_NATIVE_CODE)
 
     def test_merging_legacy_and_current_files_succeeds(self) -> None:
@@ -211,9 +222,9 @@ class LegacyFileCompatibilityTests(unittest.TestCase):
             self.assertEqual(len(events), 4)
             for event in events:
                 for field in KINEMATIC_FIELDS:
-                    self.assertEqual(event[field], FIELD_DEFAULTS[field], msg=field)
+                    np.testing.assert_equal(event[field], FIELD_DEFAULTS[field], err_msg=field)
                 for field in FINAL_STATE_FIELDS:
-                    self.assertEqual(event[field], FINAL_STATE_DEFAULTS[field], msg=field)
+                    np.testing.assert_equal(event[field], FINAL_STATE_DEFAULTS[field], err_msg=field)
 
     def test_a_missing_required_column_still_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -587,3 +598,232 @@ class MergeCrossSectionNormalizationTests(unittest.TestCase):
             with self.assertRaises(MergeError) as ctx:
                 merge_hdf5_files([d / "a.h5", d / "b.h5"], d / "merged.h5")
             self.assertIn("different generator versions", str(ctx.exception))
+
+
+def _rich_chunk(path: Path, n: int, *, offset: int = 0, norm_count: float = 10.0,
+                matrix_columns: int | None = None, **overrides: object) -> str:
+    """A chunk whose kinematic and final-state columns all carry real values."""
+    rng = np.random.default_rng(offset + n)
+    metadata: dict[str, object] = {
+        "generator": "neut",
+        "code_version": "5.7.0-nuint2024",
+        "config_version": "default",
+        "generator_version_id": "5.7.0-nuint2024+default",
+        "run_name": "test_run",
+        "chunk_id": offset,
+        "seed": 1,
+        "xsec_norm_count": norm_count,
+    }
+    events = []
+    for i in range(n):
+        event: dict[str, object] = {
+            "event_id": offset + i,
+            "seed": 1,
+            "energy_gev": float(rng.uniform(0.1, 500.0)),
+            "weight": 1.0,
+            "is_cc": bool(i % 2),
+            "xsec_weight": float(rng.uniform(0.0, 3.0)),
+            "interaction": ("qel", "res", "dis")[i % 3],
+            "probe": "numu",
+            "target": "C12",
+            "generator": "neut",
+            NATIVE_CODE_FIELD: int(rng.integers(-60, 60)),
+        }
+        event.update({field: float(rng.uniform(-1.0, 50.0)) for field in KINEMATIC_FIELDS})
+        event.update({
+            field: int(rng.integers(0, 20)) if field in COUNT_FIELDS else float(rng.uniform(0, 9))
+            for field in FINAL_STATE_FIELDS
+        })
+        event.update(overrides)
+        events.append(event)
+    matrix = None
+    if matrix_columns is not None:
+        metadata["universes"] = json.dumps({"z": [[0.0] * matrix_columns]})
+        matrix = rng.uniform(0.5, 1.5, (n, matrix_columns))
+    return write_common_hdf5(path, metadata, events, universe_weights=matrix)
+
+
+class StorageFormatTests(unittest.TestCase):
+    """Columns are stored compressed and narrowed, and read back in their spec dtype."""
+
+    def test_columns_are_compressed_and_narrowed_on_disk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _rich_chunk(Path(tmpdir) / "chunk.h5", 50)
+            with h5py.File(path) as handle:
+                events = handle["events"]
+                for key in (*EVENT_NUMERIC_FIELDS, "interaction"):
+                    self.assertEqual(events[key].compression, "gzip", msg=key)
+                    self.assertTrue(events[key].shuffle, msg=key)
+                    expected = STORAGE_DTYPES.get(key, NUMERIC_FIELD_SPECS.get(key, (None,))[0])
+                    if expected is not None:
+                        self.assertEqual(events[key].dtype, np.dtype(expected), msg=key)
+                self.assertEqual(events["q2_gev2"].dtype, np.float32)
+                self.assertEqual(events["n_proton"].dtype, np.int16)
+                self.assertEqual(events[NATIVE_CODE_FIELD].dtype, np.int32)
+                for key in ("energy_gev", "weight", "xsec_weight"):
+                    self.assertEqual(events[key].dtype, np.float64, msg=key)
+                self.assertEqual(handle["metadata"].attrs[MISSING_FLOAT_KEY], MISSING_FLOAT_NAN)
+
+    def test_values_round_trip_to_storage_precision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "chunk.h5"
+            metadata = {"generator": "neut", "code_version": "a", "config_version": "b"}
+            event = {
+                "event_id": 2**40, "seed": 2**33, "energy_gev": 0.1, "weight": 1.0,
+                "is_cc": True, "xsec_weight": 1.0 / 3.0, "interaction": "qel",
+                "probe": "numu", "target": "C12", "generator": "neut",
+                "q2_gev2": 1.0 / 3.0, "lepton_costheta": -1.0, "n_pi_zero": 12,
+                NATIVE_CODE_FIELD: MISSING_NATIVE_CODE,
+            }
+            write_common_hdf5(path, metadata, [event])
+            _, (read,) = read_events(path)
+            for key in ("event_id", "seed", "energy_gev", "xsec_weight", "n_pi_zero",
+                        NATIVE_CODE_FIELD):
+                self.assertEqual(read[key], event[key], msg=key)
+            assert_stored_close(read["q2_gev2"], 1.0 / 3.0)
+            self.assertNotEqual(read["q2_gev2"], 1.0 / 3.0)  # really stored as float32
+            # -1 is a physical cosine and must survive.
+            self.assertEqual(read["lepton_costheta"], -1.0)
+            # Columns not given are NaN, not a number that could be binned.
+            self.assertTrue(np.isnan(read["w_gev"]))
+            self.assertTrue(np.isnan(read["leading_proton_costheta"]))
+
+    def test_empty_file_round_trips(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "empty.h5"
+            write_common_hdf5(
+                path,
+                {"generator": "neut", "probe": "numu", "target": "C12"},
+                [],
+                universe_weights=np.zeros((0, 3)),
+            )
+            metadata, events = read_events(path)
+            self.assertEqual(events, [])
+            self.assertEqual(metadata["probe"], "numu")
+
+    def test_value_overflowing_its_storage_dtype_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(ValueError) as ctx:
+                _rich_chunk(Path(tmpdir) / "chunk.h5", 2, n_proton=40000)
+            self.assertIn("n_proton", str(ctx.exception))
+            with self.assertRaises(ValueError) as ctx:
+                _rich_chunk(Path(tmpdir) / "chunk.h5", 2, hadronic_energy_gev=1e39)
+            self.assertIn("hadronic_energy_gev", str(ctx.exception))
+
+
+class LegacyPlaceholderTests(unittest.TestCase):
+    """Files from before the NaN switch carry -1/-999, which reading maps to NaN."""
+
+    def _legacy(self, path: Path) -> str:
+        _rich_chunk(path, 3)
+        with h5py.File(path, "a") as handle:
+            del handle["metadata"].attrs[MISSING_FLOAT_KEY]
+            events = handle["events"]
+            events["q2_gev2"][1] = -1.0
+            events["lepton_costheta"][0] = -1.0  # physical: must survive
+            events["lepton_costheta"][1] = -999.0
+            events["leading_proton_kinetic_energy_gev"][2] = -1.0
+            events["leading_proton_costheta"][2] = -999.0
+            events["n_proton"][2] = -1  # integer placeholder: unchanged
+        return str(path)
+
+    def test_legacy_placeholders_read_as_nan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _, events = read_events(self._legacy(Path(tmpdir) / "legacy.h5"))
+            self.assertTrue(np.isnan(events[1]["q2_gev2"]))
+            self.assertEqual(events[0]["lepton_costheta"], -1.0)
+            self.assertTrue(np.isnan(events[1]["lepton_costheta"]))
+            self.assertTrue(np.isnan(events[2]["leading_proton_kinetic_energy_gev"]))
+            self.assertTrue(np.isnan(events[2]["leading_proton_costheta"]))
+            self.assertEqual(events[2]["n_proton"], -1)
+            self.assertFalse(np.isnan(events[0]["q2_gev2"]))
+
+    def test_stamped_files_are_not_rewritten(self) -> None:
+        # Only unstamped files carry legacy placeholders; in a current file a
+        # -1.0 is whatever the normalizer wrote.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _rich_chunk(Path(tmpdir) / "chunk.h5", 1, q2_gev2=-1.0)
+            _, (event,) = read_events(path)
+            self.assertEqual(event["q2_gev2"], -1.0)
+
+    def test_merging_legacy_and_current_files_gives_nan_placeholders(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            legacy = self._legacy(d / "legacy.h5")
+            current = _rich_chunk(d / "current.h5", 2, offset=10, q2_gev2=float("nan"))
+            merged = merge_hdf5_files([legacy, current], d / "merged.h5")
+            with h5py.File(merged) as handle:
+                self.assertEqual(handle["metadata"].attrs[MISSING_FLOAT_KEY], MISSING_FLOAT_NAN)
+                q2 = handle["events"]["q2_gev2"][()]
+            self.assertTrue(np.isnan(q2[1]))
+            self.assertTrue(np.isnan(q2[3:]).all())
+            self.assertFalse((q2 == -1.0).any())
+
+
+class StreamingMergeTests(unittest.TestCase):
+    """The streaming merge reproduces a plain concatenation, chunk by chunk."""
+
+    def _expected(self, paths: list[str], counts: list[float]) -> dict[str, np.ndarray]:
+        columns: dict[str, list[np.ndarray]] = {}
+        for path, count in zip(paths, counts):
+            with h5py.File(path) as handle:
+                events = handle["events"]
+                for key in (*EVENT_NUMERIC_FIELDS, "universe_weights"):
+                    values = np.asarray(events[key][()], dtype=np.float64)
+                    if key == "xsec_weight":
+                        values = values * count / sum(counts)
+                    columns.setdefault(key, []).append(values)
+        return {key: np.concatenate(parts) for key, parts in columns.items()}
+
+    def test_merge_equals_scaled_concatenation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            counts = [10.0, 30.0, 5.0]
+            paths = [
+                _rich_chunk(d / f"c{i}.h5", n, offset=100 * i, norm_count=count, matrix_columns=4)
+                for i, (n, count) in enumerate(zip([7, 12, 0], counts))
+            ]
+            merged = merge_hdf5_files(paths, d / "merged.h5")
+            expected = self._expected(paths, counts)
+            with h5py.File(merged) as handle:
+                events = handle["events"]
+                self.assertEqual(int(handle["run"].attrs["event_count"]), 19)
+                self.assertEqual(float(handle["metadata"].attrs["xsec_norm_count"]), 45.0)
+                for key, values in expected.items():
+                    np.testing.assert_allclose(
+                        np.asarray(events[key][()], dtype=np.float64), values,
+                        rtol=1e-15, err_msg=key,
+                    )
+                labels = read_interaction_column(events["interaction"])
+            self.assertEqual(labels.tolist()[:3], ["qel", "res", "dis"])
+            self.assertEqual(labels.tolist()[7:10], ["qel", "res", "dis"])
+
+    def test_failed_merge_leaves_no_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            paths = [_rich_chunk(d / f"c{i}.h5", 3, offset=10 * i) for i in range(2)]
+            calls = {"n": 0}
+            real = common_output._read_event_columns
+
+            def flaky(handle: h5py.File) -> dict[str, np.ndarray]:
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    raise OSError("disk went away")
+                return real(handle)
+
+            with mock.patch.object(common_output, "_read_event_columns", flaky):
+                with self.assertRaises(OSError):
+                    merge_hdf5_files(paths, d / "merged.h5")
+            self.assertEqual(sorted(p.name for p in d.iterdir()), ["c0.h5", "c1.h5"])
+
+    def test_weight_matrices_with_different_widths_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            a = _rich_chunk(d / "a.h5", 2, matrix_columns=3)
+            b = _rich_chunk(d / "b.h5", 2, offset=5, matrix_columns=3)
+            with h5py.File(b, "a") as handle:
+                del handle["events"]["universe_weights"]
+                handle["events"].create_dataset("universe_weights", data=np.ones((2, 4)))
+            with self.assertRaises(MergeError) as ctx:
+                merge_hdf5_files([a, b], d / "merged.h5")
+            self.assertIn("columns", str(ctx.exception))

@@ -27,6 +27,7 @@ from neutrino_factory.normalizers.gibuu import (
     GiBUUNormalizer,
     _leave_nucleus,
 )
+from tests.stored_values import assert_stored_close
 
 
 def _write_roottuple(
@@ -229,7 +230,7 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
             for event, energy in zip(events, [1.0, 2.5, 4.0]):
                 expected = reference_kinematics(energy)
                 for field in KINEMATIC_FIELDS:
-                    self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+                    assert_stored_close(event[field], expected[field], msg=field)
 
     def test_2p2h_blanks_the_true_w_because_only_one_nucleon_is_stored(self) -> None:
         """GiBUU writes one of the 2p2h pair's nucleons; the pair is unrecoverable.
@@ -253,7 +254,7 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
 
             _, events = read_events(out_path)
             self.assertEqual(events[1]["interaction"], "mec")
-            self.assertEqual(events[1]["w_true_gev"], MISSING)
+            self.assertTrue(np.isnan(events[1]["w_true_gev"]))
             # The quasi-elastic event is unaffected, and the lepton-only W needs
             # no nucleon so it survives for both.
             self.assertGreater(events[0]["w_true_gev"], 0.0)
@@ -323,9 +324,7 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
 
             _, events = read_events(out_path)
             for event, energy in zip(events, [1.0, 4.0]):
-                self.assertAlmostEqual(
-                    event["w_true_gev"], reference_kinematics(energy)["w_true_gev"], places=9
-                )
+                assert_stored_close(event["w_true_gev"], reference_kinematics(energy)["w_true_gev"])
 
     def test_normalize_root_summarizes_the_final_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -354,7 +353,7 @@ class GiBUUNormalizerRootTests(unittest.TestCase):
             expected["leading_proton_lepton_costheta"] = 0.8
             for event in events:
                 for field in FINAL_STATE_FIELDS:
-                    self.assertAlmostEqual(event[field], expected[field], places=9, msg=field)
+                    assert_stored_close(event[field], expected[field], msg=field)
             # evType is carried through verbatim as the native code.
             self.assertEqual([e[NATIVE_CODE_FIELD] for e in events], [1, 2, 34])
 

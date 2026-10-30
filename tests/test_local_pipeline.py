@@ -7,9 +7,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from neutrino_factory.common_output import read_events
-from neutrino_factory.config import load_config
+from neutrino_factory import layout
+from neutrino_factory.config import ConfigError, load_config, validate_config
 from neutrino_factory.cli import build_parser
 from neutrino_factory.local import run_local
+from neutrino_factory.slurm import build_task_manifest
 from neutrino_factory.status import read_sidecar
 
 from .helpers import job, run_config
@@ -137,6 +139,65 @@ class LocalPipelineTests(unittest.TestCase):
                 self.assertIn("VALID", text)
                 for job in config["jobs"]:
                     self.assertIn(job["label"], text)
+
+
+class KeepRawTests(unittest.TestCase):
+    """storage.keep_raw deletes raw ROOT output once a chunk validates."""
+
+    def _run(self, keep_raw: str | None, tmpdir: str) -> dict[int, list[str]]:
+        """Run a 3-chunk stub job with a planted ROOT file per task; list what survives."""
+        env = {
+            "NF_SOFTWARE_ROOT": f"{tmpdir}/software",
+            "NF_OUTPUT_ROOT": f"{tmpdir}/output",
+            "NF_WORK_ROOT": f"{tmpdir}/work",
+        }
+        storage = {} if keep_raw is None else {"storage": {"keep_raw": keep_raw}}
+        with patch.dict(os.environ, env, clear=False):
+            config = run_config([job(events=6, chunks=3)], **storage)
+            raw_dirs = {}
+            for task in build_task_manifest(config)["tasks"]:
+                raw_dir = layout.raw_output_path(config, task).parent
+                (raw_dir / "pass").mkdir(parents=True)
+                (raw_dir / "pass" / "events.ghep.root").write_bytes(b"x" * 100)
+                (raw_dir / "jobcard.txt").write_text("kept")
+                raw_dirs[int(task["chunk_id"])] = raw_dir
+            run_local(config)
+        return {
+            chunk: sorted(p.name for p in raw_dir.rglob("*") if p.is_file())
+            for chunk, raw_dir in raw_dirs.items()
+        }
+
+    def test_default_keeps_everything(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for files in self._run(None, tmpdir).values():
+                self.assertIn("events.ghep.root", files)
+
+    def test_first_chunk_keeps_only_chunk_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            survivors = self._run("first_chunk", tmpdir)
+        self.assertIn("events.ghep.root", survivors[0])
+        for chunk in (1, 2):
+            self.assertNotIn("events.ghep.root", survivors[chunk])
+            # Logs, jobcards and configs stay for check-status --task.
+            self.assertIn("jobcard.txt", survivors[chunk])
+            self.assertTrue(any(name.endswith(".json") for name in survivors[chunk]))
+
+    def test_none_deletes_every_chunk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for files in self._run("none", tmpdir).values():
+                self.assertNotIn("events.ghep.root", files)
+                self.assertIn("jobcard.txt", files)
+
+    def test_invalid_output_keeps_its_raw_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("neutrino_factory.local.validate_file", return_value={"valid": False}):
+                for files in self._run("none", tmpdir).values():
+                    self.assertIn("events.ghep.root", files)
+
+    def test_unknown_policy_is_rejected(self) -> None:
+        with self.assertRaises(ConfigError) as ctx:
+            validate_config(run_config([job()], storage={"keep_raw": "some"}))
+        self.assertIn("storage.keep_raw", str(ctx.exception))
 
 
 if __name__ == "__main__":

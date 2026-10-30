@@ -7,8 +7,8 @@ import numpy as np
 from neutrino_factory.kinematics import (
     FIELD_DEFAULTS,
     KINEMATIC_FIELDS,
+    LEGACY_FIELD_DEFAULTS,
     MISSING,
-    MISSING_SIGNED,
     NUCLEON_MASS_GEV,
     derive_kinematics,
     missing_kinematics,
@@ -23,13 +23,20 @@ class MissingKinematicsTests(unittest.TestCase):
             self.assertEqual(len(columns[field]), 4)
             np.testing.assert_array_equal(columns[field], FIELD_DEFAULTS[field])
 
-    def test_signed_quantities_use_a_distinct_placeholder(self) -> None:
+    def test_every_placeholder_is_nan(self) -> None:
+        # NaN drops out of every histogram and poisons every sum; a numeric
+        # sentinel could be binned as if it were a measurement.
+        self.assertTrue(np.isnan(MISSING))
+        for name, default in FIELD_DEFAULTS.items():
+            self.assertTrue(np.isnan(default), msg=name)
+
+    def test_legacy_placeholders_are_unphysical(self) -> None:
         # -1 is a physical value for cos(theta) and for the parallel momentum, so
-        # those two must not share the -1 placeholder with the rest.
-        self.assertEqual(FIELD_DEFAULTS["lepton_costheta"], MISSING_SIGNED)
-        self.assertEqual(FIELD_DEFAULTS["lepton_p_parallel_gev"], MISSING_SIGNED)
-        self.assertEqual(FIELD_DEFAULTS["q2_gev2"], MISSING)
-        self.assertNotEqual(MISSING, MISSING_SIGNED)
+        # old files gave those two a distinct placeholder.
+        self.assertEqual(LEGACY_FIELD_DEFAULTS["lepton_costheta"], -999.0)
+        self.assertEqual(LEGACY_FIELD_DEFAULTS["lepton_p_parallel_gev"], -999.0)
+        self.assertEqual(LEGACY_FIELD_DEFAULTS["q2_gev2"], -1.0)
+        self.assertEqual(set(LEGACY_FIELD_DEFAULTS), set(FIELD_DEFAULTS))
 
 
 class DeriveKinematicsTests(unittest.TestCase):
@@ -55,7 +62,7 @@ class DeriveKinematicsTests(unittest.TestCase):
         # transverse component along -z.
         off_axis = derive_kinematics([[10.0, 10.0, 0.0, 0.0]], [[5.0, 4.0, 0.0, -3.0]])
         for field in KINEMATIC_FIELDS:
-            self.assertAlmostEqual(off_axis[field][0], along_z[field][0], msg=field)
+            np.testing.assert_almost_equal(off_axis[field][0], along_z[field][0], err_msg=field)
 
     def test_backward_scatter_keeps_negative_values_distinct_from_placeholders(self) -> None:
         columns = derive_kinematics([[10.0, 0.0, 0.0, 10.0]], [[5.0, 0.0, 0.0, -5.0]])
@@ -63,7 +70,7 @@ class DeriveKinematicsTests(unittest.TestCase):
         self.assertAlmostEqual(columns["lepton_p_parallel_gev"][0], -5.0)
         self.assertAlmostEqual(columns["lepton_p_transverse_gev"][0], 0.0)
         # -1 here is the *physical* cos(theta), not the missing marker.
-        self.assertNotEqual(columns["lepton_costheta"][0], MISSING_SIGNED)
+        self.assertFalse(np.isnan(columns["lepton_costheta"][0]))
 
     def test_quasi_elastic_like_kinematics_give_bjorken_x_near_one(self) -> None:
         # Elastic scattering off a nucleon at rest: nu = Q^2 / (2 M) exactly,
@@ -89,7 +96,7 @@ class DeriveKinematicsTests(unittest.TestCase):
         lepton = [[5.0, 3.0, 0.0, 4.0]] * 2
         columns = derive_kinematics(nu, lepton, ["dis", "coh"])
         self.assertGreater(columns["bjorken_x"][0], 0.0)
-        self.assertEqual(columns["bjorken_x"][1], MISSING)
+        self.assertTrue(np.isnan(columns["bjorken_x"][1]))
         # Only x is suppressed; everything else stays physical.
         self.assertAlmostEqual(columns["q2_gev2"][1], 20.0)
         self.assertAlmostEqual(columns["inelasticity_y"][1], 0.5)
@@ -99,13 +106,13 @@ class DeriveKinematicsTests(unittest.TestCase):
         # Fermi motion can push the outgoing lepton above the beam energy; y then
         # goes slightly negative (kept) but x is undefined (blanked).
         columns = derive_kinematics([[5.0, 0.0, 0.0, 5.0]], [[5.2, 1.0, 0.0, 5.1]])
-        self.assertEqual(columns["bjorken_x"][0], MISSING)
+        self.assertTrue(np.isnan(columns["bjorken_x"][0]))
         self.assertLess(columns["inelasticity_y"][0], 0.0)
         self.assertGreaterEqual(columns["q2_gev2"][0], 0.0)
 
     def test_zero_momentum_lepton_blanks_only_the_angle(self) -> None:
         columns = derive_kinematics([[10.0, 0.0, 0.0, 10.0]], [[1.0, 0.0, 0.0, 0.0]])
-        self.assertEqual(columns["lepton_costheta"][0], MISSING_SIGNED)
+        self.assertTrue(np.isnan(columns["lepton_costheta"][0]))
         # p_parallel is well-defined (and zero) even with no lepton momentum.
         self.assertAlmostEqual(columns["lepton_p_parallel_gev"][0], 0.0)
         self.assertAlmostEqual(columns["lepton_momentum_gev"][0], 0.0)
@@ -113,10 +120,10 @@ class DeriveKinematicsTests(unittest.TestCase):
 
     def test_zero_momentum_beam_blanks_the_directional_variables(self) -> None:
         columns = derive_kinematics([[0.0, 0.0, 0.0, 0.0]], [[1.0, 1.0, 0.0, 0.0]])
-        self.assertEqual(columns["lepton_costheta"][0], MISSING_SIGNED)
-        self.assertEqual(columns["lepton_p_parallel_gev"][0], MISSING_SIGNED)
-        self.assertEqual(columns["lepton_p_transverse_gev"][0], MISSING)
-        self.assertEqual(columns["inelasticity_y"][0], MISSING)
+        self.assertTrue(np.isnan(columns["lepton_costheta"][0]))
+        self.assertTrue(np.isnan(columns["lepton_p_parallel_gev"][0]))
+        self.assertTrue(np.isnan(columns["lepton_p_transverse_gev"][0]))
+        self.assertTrue(np.isnan(columns["inelasticity_y"][0]))
         # Q^2 and the lepton's own scalars remain well-defined.
         self.assertAlmostEqual(columns["lepton_energy_gev"][0], 1.0)
         self.assertAlmostEqual(columns["q2_gev2"][0], 0.0)
@@ -129,15 +136,15 @@ class DeriveKinematicsTests(unittest.TestCase):
         nucleon = [[NUCLEON_MASS_GEV, 0.0, 0.0, 0.0]] * 2
         columns = derive_kinematics(nu, lepton, valid=[True, False], nucleon_p4=nucleon)
         for field in KINEMATIC_FIELDS:
-            self.assertNotEqual(columns[field][0], FIELD_DEFAULTS[field], msg=field)
-            self.assertEqual(columns[field][1], FIELD_DEFAULTS[field], msg=field)
+            self.assertFalse(np.isnan(columns[field][0]), msg=field)
+            self.assertTrue(np.isnan(columns[field][1]), msg=field)
 
     def test_non_finite_four_vectors_are_blanked(self) -> None:
         columns = derive_kinematics(
             [[10.0, 0.0, 0.0, 10.0]], [[np.nan, 3.0, 0.0, 4.0]]
         )
         for field in KINEMATIC_FIELDS:
-            self.assertEqual(columns[field][0], FIELD_DEFAULTS[field], msg=field)
+            self.assertTrue(np.isnan(columns[field][0]), msg=field)
 
     def test_forward_scatter_does_not_produce_negative_q2(self) -> None:
         # Exactly forward, equal energies: Q^2 is zero up to rounding and must
@@ -288,7 +295,7 @@ class HadronicMassTests(unittest.TestCase):
         )
         self.assertGreater(columns["q2_gev2"][0], 50.0)
         for field in ("w_gev", "w_true_gev"):
-            self.assertEqual(columns[field][0], MISSING, msg=field)
+            self.assertTrue(np.isnan(columns[field][0]), msg=field)
             # A clamp would have piled these up at exactly zero, where they would
             # be indistinguishable from a measured value.
             self.assertNotEqual(columns[field][0], 0.0, msg=field)
@@ -300,8 +307,8 @@ class HadronicMassTests(unittest.TestCase):
         columns = derive_kinematics(nu, lepton, ["dis", "coh"], nucleon_p4=nucleon)
         self.assertGreater(columns["w_gev"][0], 0.0)
         self.assertGreater(columns["w_true_gev"][0], 0.0)
-        self.assertEqual(columns["w_gev"][1], MISSING)
-        self.assertEqual(columns["w_true_gev"][1], MISSING)
+        self.assertTrue(np.isnan(columns["w_gev"][1]))
+        self.assertTrue(np.isnan(columns["w_true_gev"][1]))
         # As for Bjorken-x, only the struck-nucleon variables are suppressed.
         self.assertAlmostEqual(columns["q2_gev2"][1], 3.2)
         self.assertAlmostEqual(columns["inelasticity_y"][1], 0.5)
@@ -309,7 +316,7 @@ class HadronicMassTests(unittest.TestCase):
     def test_negative_energy_transfer_keeps_w_but_blanks_bjorken_x(self) -> None:
         """W does not divide by nu, so Fermi motion above the beam energy is fine."""
         columns = derive_kinematics([[5.0, 0.0, 0.0, 5.0]], [[5.2, 0.4, 0.0, 5.1]])
-        self.assertEqual(columns["bjorken_x"][0], MISSING)
+        self.assertTrue(np.isnan(columns["bjorken_x"][0]))
         self.assertLess(columns["inelasticity_y"][0], 0.0)
         self.assertGreater(columns["w_gev"][0], 0.0)
         self.assertLess(columns["w_gev"][0], NUCLEON_MASS_GEV)
@@ -317,7 +324,7 @@ class HadronicMassTests(unittest.TestCase):
     def test_no_nucleon_supplied_blanks_only_the_true_w(self) -> None:
         columns = derive_kinematics(self.NU, self.LEPTON)
         self.assertGreater(columns["w_gev"][0], 0.0)
-        self.assertEqual(columns["w_true_gev"][0], MISSING)
+        self.assertTrue(np.isnan(columns["w_true_gev"][0]))
 
     def test_nucleon_valid_mask_blanks_only_the_true_w_per_event(self) -> None:
         nu = np.repeat(self.NU, 2, axis=0)
@@ -329,14 +336,14 @@ class HadronicMassTests(unittest.TestCase):
             nu, lepton, nucleon_p4=nucleon, nucleon_valid=[True, False]
         )
         self.assertGreater(columns["w_true_gev"][0], 0.0)
-        self.assertEqual(columns["w_true_gev"][1], MISSING)
+        self.assertTrue(np.isnan(columns["w_true_gev"][1]))
         self.assertGreater(columns["w_gev"][1], 0.0)
 
     def test_non_finite_nucleon_blanks_only_the_true_w(self) -> None:
         columns = derive_kinematics(
             self.NU, self.LEPTON, nucleon_p4=[[np.nan, 0.0, 0.0, 0.0]]
         )
-        self.assertEqual(columns["w_true_gev"][0], MISSING)
+        self.assertTrue(np.isnan(columns["w_true_gev"][0]))
         self.assertGreater(columns["w_gev"][0], 0.0)
 
     def test_random_batch_w_columns_are_positive_or_blank(self) -> None:
@@ -360,12 +367,12 @@ class HadronicMassTests(unittest.TestCase):
 
         for field in ("w_gev", "w_true_gev"):
             values = columns[field]
-            self.assertTrue(np.all((values > 0.0) | (values == MISSING)), msg=field)
+            self.assertTrue(np.all((values > 0.0) | np.isnan(values)), msg=field)
         # This sample spans the high-Q^2 corner, so it must exercise both branches.
-        self.assertTrue(np.any(columns["w_gev"] == MISSING))
+        self.assertTrue(np.any(np.isnan(columns["w_gev"])))
         self.assertTrue(np.any(columns["w_gev"] > 0.0))
         # A nucleon at rest makes the two definitions identical event by event.
-        filled = columns["w_gev"] != MISSING
+        filled = ~np.isnan(columns["w_gev"])
         np.testing.assert_allclose(
             columns["w_true_gev"][filled], columns["w_gev"][filled], rtol=1e-9, atol=1e-9
         )

@@ -192,6 +192,10 @@ storage:
   software_root: ${NF_SOFTWARE_ROOT:-./software}
   output_root: ${NF_OUTPUT_ROOT:-./output}
   work_root: ${NF_WORK_ROOT:-./work}
+  # Raw generator output (*.root) to keep once a chunk has validated: "all"
+  # (default), "first_chunk" (chunk 0 of each job) or "none". Logs, jobcards
+  # and configs are always kept, and failed tasks keep everything.
+  keep_raw: all
 
 slurm:
   partition: alma

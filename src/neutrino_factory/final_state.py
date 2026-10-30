@@ -40,12 +40,15 @@ import numpy as np
 # construction, so -1 is unmistakably "not available" rather than "none found".
 MISSING_COUNT = -1
 
-# Placeholder for the hadronic energy columns, matching kinematics.MISSING.
-MISSING_ENERGY = -1.0
+# Placeholder for the float columns (energies, leading-particle kinematics),
+# matching kinematics.MISSING: NaN cannot be binned or summed by mistake.
+MISSING = float("nan")
 
-# Placeholder for the leading-particle cosines, matching kinematics.MISSING_SIGNED:
-# -1 is a physical value of a cosine.
-MISSING_SIGNED = -999.0
+# The float placeholders of files written before MISSING became NaN: -1.0 for
+# energies, -999.0 for cosines (-1 is a physical cosine). See
+# kinematics.LEGACY_FIELD_DEFAULTS.
+LEGACY_MISSING_ENERGY = -1.0
+LEGACY_MISSING_SIGNED = -999.0
 
 # Placeholder for the generator-native interaction code. It cannot be 0: NuWro's
 # dyn = 0 is CC quasi-elastic, and it cannot be a small negative number either,
@@ -103,11 +106,13 @@ LEADING_PROTON_FIELDS = (
 # before these columns existed).
 FIELD_DEFAULTS: dict[str, Any] = {
     **{name: MISSING_COUNT for name in COUNT_FIELDS},
-    **{name: MISSING_ENERGY for name in ENERGY_FIELDS},
-    **{
-        name: MISSING_ENERGY if name.endswith("_gev") else MISSING_SIGNED
-        for name in (*LEADING_PION_FIELDS, *LEADING_PROTON_FIELDS)
-    },
+    **{name: MISSING for name in (*ENERGY_FIELDS, *LEADING_PION_FIELDS, *LEADING_PROTON_FIELDS)},
+}
+
+# The legacy placeholder of each float column, for reading old files.
+LEGACY_FIELD_DEFAULTS: dict[str, float] = {
+    name: LEGACY_MISSING_ENERGY if name.endswith("_gev") else LEGACY_MISSING_SIGNED
+    for name in (*ENERGY_FIELDS, *LEADING_PION_FIELDS, *LEADING_PROTON_FIELDS)
 }
 
 FINAL_STATE_FIELDS = tuple(FIELD_DEFAULTS)
