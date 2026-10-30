@@ -204,3 +204,6 @@ slurm:
   time: "00:30:00"
   cpus_per_task: 1
   mem: "2G"
+  # Most array tasks Slurm runs at once (--array=...%N); null for no limit.
+  # Overridden by `submit --array-limit N`.
+  array_limit: null

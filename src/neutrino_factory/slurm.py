@@ -155,6 +155,12 @@ def save_manifest(manifest: dict[str, Any], path: str | Path) -> None:
     tmp.replace(destination)
 
 
+def array_throttle(config: dict[str, Any]) -> str:
+    """The ``%N`` suffix of ``--array`` for ``slurm.array_limit``, or "" without a limit."""
+    limit = config["slurm"].get("array_limit")
+    return f"%{int(limit)}" if limit else ""
+
+
 def render_sbatch_script(config: dict[str, Any], manifest_path: str | Path) -> str:
     manifest = build_task_manifest(config)
     array_max = max(0, len(manifest["tasks"]) - 1)
@@ -198,7 +204,7 @@ apptainer exec "$NF_BASE_SIF" bash "{repo_root}/jobs/run_task.sh" "{config.get('
 #SBATCH --mem={slurm['mem']}
 #SBATCH --time={slurm['time']}
 #SBATCH --partition={slurm['partition']}
-#SBATCH --array=0-{array_max}
+#SBATCH --array=0-{array_max}{array_throttle(config)}
 
 set -euo pipefail
 # Storage roots and container settings persisted by `neutrino-factory setup`.
@@ -328,7 +334,7 @@ apptainer exec "$NF_BASE_SIF" bash "{repo_root}/jobs/run_task.sh" "{config.get('
 #SBATCH --mem={slurm['mem']}
 #SBATCH --time={time_override}
 #SBATCH --partition={slurm['partition']}
-#SBATCH --array={array_spec}
+#SBATCH --array={array_spec}{array_throttle(config)}
 
 set -euo pipefail
 # Storage roots and container settings persisted by `neutrino-factory setup`.

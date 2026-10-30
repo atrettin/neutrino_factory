@@ -54,8 +54,13 @@ Raw output dominates: kept in full, it is ~25x the common output. Set
 `storage.keep_raw: first_chunk` (see
 [configuration.md](configuration.md#raw-generator-output-storagekeep_raw)) for any
 large run. Raw files then exist only while their task runs, plus chunk 0 of
-each job. Chunks written before 2026-10 are uncompressed (~250 B per event);
-re-merging them through the current code writes a compressed copy.
+each job. Running tasks still hold theirs: up to ~2 GB for a 1e6-event
+rejection chunk and ~8 GB for a GiBUU chunk of ~1.3M stored events. Cap how many
+run at once with `slurm.array_limit` (see
+[configuration.md](configuration.md#slurm-manifest-schema-v4)), e.g. 300 GiBUU
+tasks hold at most ~2.4 TB. Chunks written before 2026-10 are uncompressed
+(~250 B per event); re-merging them through the current code writes a
+compressed copy.
 
 `merge` streams: it holds one chunk in memory at a time (0.8 GB peak for a
 9M-event GiBUU job of 0.9M-event chunks), so its memory does not grow with the

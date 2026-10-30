@@ -151,10 +151,24 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _positive_int(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be a positive integer (got {value})")
+    return value
+
+
+def _apply_array_limit(config: dict[str, Any], args: argparse.Namespace) -> None:
+    """Let --array-limit override slurm.array_limit from the config."""
+    if getattr(args, "array_limit", None) is not None:
+        config["slurm"]["array_limit"] = args.array_limit
+
+
 def cmd_submit(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     if args.executor is not None:
         config["run"]["executor"] = args.executor
+    _apply_array_limit(config, args)
     executor = str(config["run"]["executor"])
     manifest_path = write_manifest(config, args.manifest)
 
@@ -301,6 +315,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
     base_payload["reseeded"] = {str(i): {"old": old, "new": new} for i, (old, new) in reseeded.items()}
 
     # Generate retry sbatch script
+    _apply_array_limit(config, args)
     retry_script = render_retry_sbatch_script(
         config, manifest_path, selected_indices, args.time
     )
@@ -816,6 +831,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="With --executor slurm, render the sbatch script but do not submit it",
     )
+    submit_parser.add_argument(
+        "--array-limit",
+        type=_positive_int,
+        metavar="N",
+        help=(
+            "Run at most N array tasks at once (Slurm's --array=...%%N); overrides "
+            "slurm.array_limit from the config. Caps the raw output held on disk by "
+            "running tasks"
+        ),
+    )
     submit_parser.set_defaults(func=cmd_submit)
 
     retry_parser = subparsers.add_parser(
@@ -875,6 +900,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Give the retried tasks new seeds, for failures that would otherwise "
             "recur with the same seed (generator crashes, hangs)"
+        ),
+    )
+    retry_parser.add_argument(
+        "--array-limit",
+        type=_positive_int,
+        metavar="N",
+        help=(
+            "Run at most N array tasks at once (Slurm's --array=...%%N); overrides "
+            "slurm.array_limit from the config. Caps the raw output held on disk by "
+            "running tasks"
         ),
     )
     retry_parser.set_defaults(func=cmd_retry)
