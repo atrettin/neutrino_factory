@@ -672,3 +672,37 @@ values the translator checks (`ConfigTranslator.validate_section`).
   need. The pilot showed QE `n_eff` growing linearly with the sample (9.6–9.96×
   for 10×).
 
+
+## Old generator versions: NEUT 5.4.2 from source, GENIE 2.12.8 without MEC (2026-10)
+
+**The need.** Production with NEUT 5.4.2 and GENIE R-2_12_8 with no 2p2h.
+Until now NEUT ran only as 5.7.0 extracted from a published image, and GENIE
+only at 3.x.
+
+**NEUT.** 5.4.2 is compiled inside `nuisancemc/tutorial:nuint2024`, the image
+the 5.7.0 payload already comes from, because that image carries a CERNLIB with
+every library NEUT 5.4.2 links and the ROOT and gfortran it needs; NEUT is
+installed over `/opt/neut`, so the image's environment and the existing
+`neut.def` stage 2 apply unchanged. One script, `setup/neut/build_neut.sh`, is
+shared by `setup/Dockerfile.neut` and `neut.def` stage 1. The source is
+access-restricted, so it is fetched on the host into a git-ignored
+`setup/neut/src/` and never inside a build. Details and the four build fixes are
+in [generators/neut.md](generators/neut.md#container-build).
+- *Ruled out: building CERNLIB 2005 from source.* A project of its own, for
+  libraries the image already has.
+- *Ruled out: a separate def per NEUT version.* `build_apptainer_images.sh` maps
+  one def per generator; the def branches on whether the tarball for
+  `CODE_VERSION` exists, and the script now passes `CODE_VERSION` to every def.
+
+**GENIE.** R-2_12_8 shares `Dockerfile.genie`/`genie.def` with GENIE 3, with a
+`GENIE_TAG` branch around configure. "No MEC" needs no switch: 2.12.8's `CC`,
+`NC` and `Default` event-generator lists contain no MEC generator. FNAL's
+2.12.8 splines exist only bundled with a MEC model, so the MEC splines are
+stripped at staging to keep the `xsec_weight` spline sum equal to what `gevgen`
+generates; the staged set is named `default`. Details in
+[generators/genie.md](generators/genie.md#genie-2-r-2_12_8).
+- *Ruled out: computing splines with `gmkspl`.* Hours per target under
+  emulation, for numbers FNAL already publishes.
+- *Ruled out: filtering MEC in the spline-sum code.* It would make a GENIE-wide
+  normalization path version-dependent; stripping at staging keeps the staged
+  file an exact description of the generated channels.

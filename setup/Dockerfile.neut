@@ -1,0 +1,17 @@
+# NEUT built from source, on top of the image that also supplies the 5.7.0
+# payload (see setup/neut/build_neut.sh for why this image).
+# Build (setup/setup_neut.sh does this): docker build --platform linux/amd64 \
+#   --build-arg NEUT_REF=5.4.2 -t neut:5.4.2 -f setup/Dockerfile.neut setup/
+# The source tarball must already sit at setup/neut/src/neut-<NEUT_REF>.tar.gz:
+# NEUT is access-restricted, so it is fetched on the host, never in the build.
+
+ARG NEUT_SOURCE_IMAGE=nuisancemc/tutorial:nuint2024
+FROM --platform=linux/amd64 ${NEUT_SOURCE_IMAGE}
+
+ARG NEUT_REF
+ARG JOBS=4
+
+COPY neut/build_neut.sh /tmp/build_neut.sh
+COPY neut/src/neut-${NEUT_REF}.tar.gz /tmp/neut.tar.gz
+RUN bash /tmp/build_neut.sh /tmp/neut.tar.gz "${JOBS}" && \
+    rm /tmp/build_neut.sh /tmp/neut.tar.gz

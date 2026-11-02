@@ -79,7 +79,18 @@ class GenieAdapter(GeneratorAdapter):
             "repo": "https://github.com/GENIE-MC/Generator",
             "git_ref": "R-3_04_00",
         },
+        # GENIE 2 has no tunes: physics comes from UserPhysicsOptions.xml, and
+        # the spline is staged under the placeholder tune "default".
+        "R-2_12_8": {
+            "repo": "https://github.com/GENIE-MC/Generator",
+            "git_ref": "R-2_12_8",
+        },
     }
+
+    @staticmethod
+    def _is_genie2(code_version: object) -> bool:
+        """GENIE 2's gevgen has no ``--tune`` and no ``WIDTH`` flux field."""
+        return str(code_version or "").startswith("R-2_")
 
     @staticmethod
     def _tag_safe(value: str) -> str:
@@ -222,8 +233,11 @@ class GenieAdapter(GeneratorAdapter):
 
         flux_spec = translated_config["genie_flux"]
         flux_file = Path(flux_spec["file"]) if flux_spec["kind"] == "histogram" else None
+        genie2 = self._is_genie2(code_version)
         if flux_spec["kind"] == "generated_histogram":
-            self._write_flux_histogram(flux_spec, translated_config, work_dir)
+            self._write_flux_histogram(
+                flux_spec, translated_config, work_dir, per_bin_integrals=genie2
+            )
 
         # gevgen zeroes every flux histogram bin that is not strictly inside the
         # -e range (Apps/gEvGen.cxx, TH1FluxDriver, root-file branch), and it
@@ -240,12 +254,13 @@ class GenieAdapter(GeneratorAdapter):
             "-p", str(translated_config["probe_pdg"]),
             "-t", str(translated_config.get("target_pdg", translated_config["target"])),
             "-e", f"{edge_lo!r},{edge_hi!r}",
-            "-f", self._flux_arg(flux_spec, flux_file),
+            "-f", self._flux_arg(flux_spec, flux_file, width_field=not genie2),
             "--seed", str(translated_config["seed"]),
             "-o", "events.ghep.root",
         ]
         tune = str(translated_config.get("config_version") or "").strip()
-        if tune:
+        # GENIE 2 gevgen has no --tune; its config_version only names the spline.
+        if tune and not genie2:
             gevgen_args.extend(["--tune", tune])
         event_generator_list = translated_config.get("event_generator_list")
         if event_generator_list:
@@ -328,14 +343,18 @@ class GenieAdapter(GeneratorAdapter):
 
     @staticmethod
     def _write_flux_histogram(
-        flux_spec: dict, translated_config: dict, work_dir: Path
+        flux_spec: dict, translated_config: dict, work_dir: Path, per_bin_integrals: bool = False
     ) -> Path:
         """Materialize the flux histogram gevgen's TH1 driver will clone.
 
         Bin contents are the flux *density* at the bin centers; the ``WIDTH``
         field appended by :meth:`_flux_arg` makes gevgen multiply them by the bin
-        widths to obtain the per-bin sampling probability. Written as float64 so
-        uproot emits a TH1D, which is what gevgen casts the object to.
+        widths to obtain the per-bin sampling probability. GENIE 2's gevgen has
+        no ``WIDTH`` field and samples the contents as they are, so with
+        ``per_bin_integrals`` the multiplication is done here instead. Either way
+        gevgen ends up sampling, and writing to ``input-flux.root``, the same
+        per-bin integrals. Written as float64 so uproot emits a TH1D, which is
+        what gevgen casts the object to.
         """
         try:
             import uproot
@@ -349,6 +368,8 @@ class GenieAdapter(GeneratorAdapter):
         edges, contents = flux.to_histogram(
             nbins=int(flux_spec["nbins"]), spacing=str(flux_spec["spacing"])
         )
+        if per_bin_integrals:
+            contents = np.asarray(contents) * np.diff(edges)
         path = work_dir / str(flux_spec["file"])
         with uproot.recreate(path) as handle:
             handle[str(flux_spec["name"])] = (
@@ -358,17 +379,19 @@ class GenieAdapter(GeneratorAdapter):
         return path
 
     @staticmethod
-    def _flux_arg(flux_spec: dict, flux_file: Path | None) -> str:
+    def _flux_arg(flux_spec: dict, flux_file: Path | None, width_field: bool = True) -> str:
         """Build gevgen's -f value: 'file.root,histname[,WIDTH]'.
 
         ``WIDTH`` is gevgen's optional third field; it forces the per-bin
         multiplication by the bin width, so a density histogram is interpreted
         correctly regardless of whether the binning is uniform. Only set for the
         histogram we write ourselves — a user-supplied file is passed through
-        unchanged, since we do not know its content convention.
+        unchanged, since we do not know its content convention. GENIE 2 rejects
+        a third field (``width_field=False``).
         """
         if flux_spec["kind"] == "generated_histogram":
-            return f"{flux_spec['file']},{flux_spec['name']},WIDTH"
+            arg = f"{flux_spec['file']},{flux_spec['name']}"
+            return f"{arg},WIDTH" if width_field else arg
         return f"{flux_file},{flux_spec['name']}"
 
     def _run_gntpc(self, work_dir: Path, code_version: str | None) -> None:

@@ -21,8 +21,9 @@ run YAML.
 
 Python is installed in a virtual environment in `.venv`. Generators are compiled
 inside Docker images built by `setup/setup_<generator>.sh` — one each for
-`genie`, `nuwro`, `gibuu` and `neut` (the last pulls and retags a published image
-rather than building; see [generators/neut.md](generators/neut.md)).
+`genie`, `nuwro`, `gibuu` and `neut` (for NEUT 5.7.0 it pulls and retags a
+published image rather than building, and builds 5.4.2 on top of that image; see
+[generators/neut.md](generators/neut.md)).
 `setup/setup_all.sh` drives all of them, with `--only <generator>` to restrict it.
 
 When the generator binary is not on `$PATH`, the adapter's `build_run_command`
@@ -53,9 +54,10 @@ for why.
 
 The cost is deliberate duplication: **each `setup/apptainer/<gen>.def` and its
 `setup/Dockerfile.<gen>` are parallel implementations of the same build, and are
-only correct while they agree.** Each def's header names its source. (NEUT is the
-exception — it has no Dockerfile at all, since its payload is extracted from a
-published image; see [generators/neut.md](generators/neut.md).)
+only correct while they agree.** Each def's header names its source. (NEUT is a
+partial exception: 5.7.0's payload is extracted from a published image, so only
+5.4.2's source build, shared through `setup/neut/build_neut.sh`, has a Dockerfile
+counterpart, `setup/Dockerfile.neut`; see [generators/neut.md](generators/neut.md).)
 
 Divergences that are expected and correct: the defs drop `--platform` pinning,
 add the Python runtime dependencies, and — for NuWro — relocate the ROOTEGPythia6

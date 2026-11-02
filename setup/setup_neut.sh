@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # Make the NEUT Docker image available locally for the given code version.
 #
-# Unlike every other generator, NEUT is not built from source: its source code is
-# not publicly available. The NUISANCE collaboration publishes a tutorial image
-# containing a working NEUT build, so this script pulls that image and retags it
-# under the project's uniform "<generator>:<code_version>" convention. There is
-# consequently no setup/Dockerfile.neut for setup/apptainer/neut.def to mirror —
-# see docs/generators/neut.md.
+# NEUT's source is access-restricted, so there are two kinds of code version
+# (see docs/generators/neut.md):
+#   - with a catalogued git_ref (5.4.2): built from source by setup/Dockerfile.neut.
+#     The source tarball is read from setup/neut/src/neut-<ref>.tar.gz; if it is
+#     missing it is downloaded with your GitHub credentials (`gh auth token`),
+#     which need read access to neut-devel/neut.
+#   - without one (5.7.0-nuint2024): the NUISANCE tutorial image's NEUT build is
+#     pulled and retagged under the "<generator>:<code_version>" convention.
 #
-# Usage: setup/setup_neut.sh [5.7.0-nuint2024]
-#        setup/setup_neut.sh --code-version 5.7.0-nuint2024
+# Usage: setup/setup_neut.sh [--jobs N] [CODE_VERSION]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,20 +21,24 @@ usage() {
 Usage: setup/setup_neut.sh [CODE_VERSION]
        setup/setup_neut.sh --code-version CODE_VERSION
 
-Pull the published NEUT-bearing image for the given NEUT code_version and retag
-it as the catalogued image name. CODE_VERSION must be catalogued
-(see: neutrino-factory list-generators --generator neut).
+Build (from source) or pull the NEUT image for the given NEUT code_version.
+CODE_VERSION must be catalogued (see: neutrino-factory list-generators --generator neut).
 
 Options:
   --code-version V  NEUT code version (default: 5.7.0-nuint2024)
+  --jobs N          Parallel compile jobs for a source build (default: 4)
   --list-versions   Print catalogued NEUT code/config versions and exit
   --help            Show this help
 EOF
 }
 
 CODE_VERSION=""
+JOBS=4
 while (($#)); do
   case "$1" in
+    --jobs)
+      [[ $# -ge 2 ]] || { echo "--jobs requires an argument" >&2; exit 1; }
+      JOBS="$2"; shift 2 ;;
     --code-version|--tag)
       [[ $# -ge 2 ]] || { echo "$1 requires an argument" >&2; exit 1; }
       CODE_VERSION="$2"; shift 2 ;;
@@ -60,23 +65,48 @@ require_command docker
 nf_default_paths
 META_DIR="$NF_SOFTWARE_ROOT/neut/metadata"
 
-# The source image is multi-arch. Pin linux/amd64 like every other project image
-# (containers.docker_wrap always passes --platform linux/amd64), so an Apple
-# Silicon machine that would otherwise get the arm64 variant stays consistent and
-# runs it under Rosetta 2.
-echo "Pulling ${SOURCE_IMAGE} for linux/amd64 (~5 GB, this takes a while)..."
-docker pull --platform linux/amd64 "$SOURCE_IMAGE"
-docker tag "$SOURCE_IMAGE" "$IMAGE_NAME"
+GIT_REF="$(nf_catalog_git_ref neut "$CODE_VERSION")"
+if [[ -n "$GIT_REF" ]]; then
+  TARBALL="$SCRIPT_DIR/neut/src/neut-${GIT_REF}.tar.gz"
+  if [[ ! -s "$TARBALL" ]]; then
+    require_command gh
+    require_command curl
+    echo "Downloading NEUT ${GIT_REF} source to ${TARBALL}..."
+    mkdir -p "$(dirname "$TARBALL")"
+    curl -fsSL -H "Authorization: token $(gh auth token)" \
+      "https://api.github.com/repos/neut-devel/neut/tarball/${GIT_REF}" -o "$TARBALL.part"
+    mv "$TARBALL.part" "$TARBALL"
+  fi
+  echo "Building Docker image ${IMAGE_NAME} from NEUT ${GIT_REF} source..."
+  docker build \
+    --platform linux/amd64 \
+    --build-arg "NEUT_SOURCE_IMAGE=${SOURCE_IMAGE}" \
+    --build-arg "NEUT_REF=${GIT_REF}" \
+    --build-arg "JOBS=${JOBS}" \
+    -t "${IMAGE_NAME}" \
+    -f "${SCRIPT_DIR}/Dockerfile.neut" \
+    "${SCRIPT_DIR}"
+  STATUS="built-from-source:${GIT_REF}"
+else
+  # The source image is multi-arch. Pin linux/amd64 like every other project image
+  # (containers.docker_wrap always passes --platform linux/amd64), so an Apple
+  # Silicon machine that would otherwise get the arm64 variant stays consistent and
+  # runs it under Rosetta 2.
+  echo "Pulling ${SOURCE_IMAGE} for linux/amd64 (~5 GB, this takes a while)..."
+  docker pull --platform linux/amd64 "$SOURCE_IMAGE"
+  docker tag "$SOURCE_IMAGE" "$IMAGE_NAME"
+  STATUS="pulled-from-published-image"
+fi
 
 write_metadata "$META_DIR" \
   "generator=NEUT" \
   "code_version=$CODE_VERSION" \
   "image=$IMAGE_NAME" \
   "source_image=$SOURCE_IMAGE" \
-  "status=pulled-from-published-image"
+  "status=$STATUS"
 
 echo ""
-echo "Image available: ${IMAGE_NAME} (retagged from ${SOURCE_IMAGE})"
+echo "Image available: ${IMAGE_NAME} (${STATUS}, base ${SOURCE_IMAGE})"
 echo ""
 echo "To run neutroot2 (NEUT reads its RANLUX seed from \$RANFILE):"
 echo "  docker run --platform linux/amd64 --rm \\"

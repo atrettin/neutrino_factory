@@ -521,6 +521,7 @@ def _collect_catalog_rows(generator_filter: str | None, built_only: bool) -> lis
                     "image": image,
                     "buildable": catalog.is_buildable(generator, code_version),
                     "build_arg": catalog.build_arg(generator, code_version),
+                    "git_ref": catalog.git_ref(generator, code_version),
                     "built": built,
                 }
             )

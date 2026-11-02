@@ -1,0 +1,39 @@
+# End-to-end smoke test — NEUT 5.4.2 (built from source).
+# Minimal real (non-stub) run to confirm the pipeline can translate a config,
+# write NEUT's card / flux histogram / RANLUX seed file, run neutroot2, flatten
+# its NeutVect output with nf-neut-flatten, and normalize to the common HDF5.
+
+run:
+  name: smoke_neut542_c12
+  seed: 12345
+  executor: local
+  stub_mode: false
+
+jobs:
+  - generator: neut
+    code_version: "5.4.2"
+    config_version: "default"
+    events: 50
+    chunks: 1
+    flux:
+      type: power_law
+      particle: numu
+      emin_gev: 0.5
+      emax_gev: 5.0
+      gamma: -2.0
+    target:
+      nucleus: C12
+    physics:
+      mode: inclusive
+      current: cc
+
+storage:
+  software_root: ${NF_SOFTWARE_ROOT:-./software}
+  output_root: ${NF_OUTPUT_ROOT:-./output}
+  work_root: ${NF_WORK_ROOT:-./work}
+
+slurm:
+  partition: alma
+  time: "00:10:00"
+  cpus_per_task: 1
+  mem: "2G"

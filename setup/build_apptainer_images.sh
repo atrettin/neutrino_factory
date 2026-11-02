@@ -184,9 +184,10 @@ build_def() {
   mkdir -p "$(dirname "$sif")"
   sif="$(cd "$(dirname "$sif")" && pwd)/$(basename "$sif")"
   def="$(cd "$(dirname "$def")" && pwd)/$(basename "$def")"
-  # --warn-unused-build-args: JOBS is passed to every def uniformly, but a def
-  # that compiles nothing (setup/apptainer/neut.def, whose payload is extracted
-  # from a prebuilt image) never references it. Apptainer's default is to abort
+  # --warn-unused-build-args: JOBS and CODE_VERSION are passed to every def
+  # uniformly, but not every def references them (only neut.def uses
+  # CODE_VERSION; the others select their version through their catalog build
+  # arg, e.g. GENIE_TAG). Apptainer's default is to abort
   # on a build arg it does not see used — declaring it in %arguments is not
   # enough, it must actually appear as {{ JOBS }} — so downgrade that to a
   # warning rather than making every def carry a dummy reference.
@@ -287,7 +288,7 @@ if [[ "$COMPOSE_ONLY" -ne 1 ]]; then
 
     args=()
     [[ -n "$ba_name" ]] && args+=(--build-arg "$ba_name=$ba_value")
-    args+=(--build-arg "JOBS=$JOBS")
+    args+=(--build-arg "JOBS=$JOBS" --build-arg "CODE_VERSION=$cv")
 
     sif="$(sif_path_for "$image")"
     build_def "$sif" "$def" "${args[@]}"

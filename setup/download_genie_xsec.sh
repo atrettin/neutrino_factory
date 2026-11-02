@@ -13,6 +13,14 @@
 # and stages it as:
 #   <software_root>/genie/genie_xsec/<tag-safe>/<tune>/xsecs.xml
 #
+# GENIE 2 (R-2_*) has no tunes. FNAL publishes its splines only bundled with a
+# MEC model, so the single "tune" staged is "default": the DefaultPlusValenciaMEC
+# FNALsmall spline with every MEC spline removed. Its other splines were made
+# with GENIE's stock physics options (the bundle's UserPhysicsOptions.xml differs
+# only in the MEC model and decay flags), and gevgen's generator lists contain no
+# MEC, so the staged file is exactly the set of channels gevgen generates — which
+# the xsec_weight spline sum (translators/genie.py) relies on.
+#
 # Usage: setup/download_genie_xsec.sh [--code-version R-3_06_00] [--tune NAME]...
 #                                     [--software-root DIR] [--force]
 set -euo pipefail
@@ -74,7 +82,13 @@ BASE_URL="https://scisoft.fnal.gov/scisoft/packages/genie_xsec/${UPSVER}"
 # scraping the SciSoft directory listing (no hard-coded tune list). Tarballs are
 # named genie_xsec-<dotver>-noarch-<TUNEKEY>-k250-e1000.tar.bz2; the <TUNEKEY> is
 # the compact (underscore-stripped) tune identifier.
-if ((${#TUNES[@]} == 0)); then
+GENIE2=0
+[[ "$CODE_VERSION" == R-2_* ]] && GENIE2=1
+if ((GENIE2)); then
+  [[ ${#TUNES[@]} -eq 0 || "${TUNES[*]}" == "default" ]] || fail \
+    "GENIE ${CODE_VERSION} has no tunes; the only stageable config_version is 'default'"
+  TUNES=(default)
+elif ((${#TUNES[@]} == 0)); then
   log "No --tune given; discovering published tunes from ${BASE_URL}/"
   listing="$(curl -fsL "${BASE_URL}/" 2>/dev/null || true)"
   read -r -a TUNES <<< "$(
@@ -105,11 +119,16 @@ for tune in "${TUNES[@]}"; do
     continue
   fi
 
-  tunekey="${tune//_/}"   # underscores stripped, case preserved: G18_10a_02_11a -> G1810a0211a
-  filename="genie_xsec-${DOTVER}-noarch-${tunekey}-k250-e1000.tar.bz2"
+  if ((GENIE2)); then
+    filename="genie_xsec-${DOTVER}-noarch-DefaultPlusValenciaMEC.tar.bz2"
+    member="genie_xsec/${UPSVER}/NULL/DefaultPlusValenciaMEC/data/gxspl-FNALsmall.xml"
+  else
+    tunekey="${tune//_/}"   # underscores stripped, case preserved: G18_10a_02_11a -> G1810a0211a
+    filename="genie_xsec-${DOTVER}-noarch-${tunekey}-k250-e1000.tar.bz2"
+    member="genie_xsec/${UPSVER}/NULL/${tunekey}-k250-e1000/data/gxspl-NUsmall.xml"
+  fi
   url="${BASE_URL}/${filename}"
   cache="${CACHE_DIR}/${filename}"
-  member="genie_xsec/${UPSVER}/NULL/${tunekey}-k250-e1000/data/gxspl-NUsmall.xml"
 
   if [[ ! -f "$cache" || "$FORCE" -eq 1 ]]; then
     log "Downloading ${url}"
@@ -126,7 +145,14 @@ for tune in "${TUNES[@]}"; do
 
   log "Extracting ${member} -> ${dest}"
   ensure_dir "${XSEC_DIR}/${tune}"
-  if ! tar -xjOf "$cache" "$member" > "${dest}.part" 2>/dev/null; then
+  # GENIE 2: drop every MEC spline block (see the header).
+  if ((GENIE2)); then
+    strip=(awk '/<spline name="[^"]*,MEC;"/{skip=1} !skip{print} /<\/spline>/{skip=0}')
+  else
+    strip=(cat)
+  fi
+  if ! tar -xjOf "$cache" "$member" 2>/dev/null | "${strip[@]}" > "${dest}.part" \
+      || [[ ! -s "${dest}.part" ]]; then
     log "WARNING: ${member} not found in ${filename}; skipping tune '${tune}'"
     rm -f "${dest}.part"
     skipped+=("$tune")

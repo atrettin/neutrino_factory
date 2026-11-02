@@ -179,6 +179,20 @@ for r in json.load(sys.stdin)["generators"]:
         break' "$code_version"
 }
 
+# Echo the source git ref catalogued for a generator + code version, or empty
+# when the payload is taken from a prebuilt image instead.
+nf_catalog_git_ref() {
+  local generator="$1" code_version="$2"
+  nf_require_cli
+  nf_cli_exec list-generators --generator "$generator" --json \
+    | python3 -c 'import json,sys
+cv=sys.argv[1]
+for r in json.load(sys.stdin)["generators"]:
+    if r["code_version"]==cv:
+        print(r.get("git_ref") or "")
+        break' "$code_version"
+}
+
 # Fail unless code_version is catalogued for the generator.
 nf_validate_code_version() {
   local generator="$1" code_version="$2"

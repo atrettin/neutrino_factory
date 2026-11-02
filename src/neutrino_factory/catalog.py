@@ -87,6 +87,11 @@ def build_arg(generator: str, code_version: str) -> dict[str, str] | None:
     return _adapter(generator).build_arg(code_version)
 
 
+def git_ref(generator: str, code_version: str) -> str | None:
+    """Source ref ``code_version`` is built from, or ``None`` for a prebuilt payload."""
+    return (_adapter(generator).CODE_VERSIONS.get(code_version) or {}).get("git_ref")
+
+
 def ensure_known(generator: str, code_version: str) -> None:
     _adapter(generator).ensure_code_version(code_version)
 

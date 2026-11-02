@@ -26,6 +26,7 @@ ARG GENIE_TAG=R-3_06_00
 ARG LHAPDF_VERSION=6.5.6
 ARG ROOT_VERSION=6.24.08
 ARG PYTHIA6_VERSION=6.4.28
+ARG PYTHIA6_SCRIPT_REF=R-3_06_00
 ARG JOBS=4
 
 # ── Stage 1: Builder ──────────────────────────────────────────────────────────
@@ -35,6 +36,7 @@ ARG GENIE_TAG
 ARG LHAPDF_VERSION
 ARG ROOT_VERSION
 ARG PYTHIA6_VERSION
+ARG PYTHIA6_SCRIPT_REF
 ARG JOBS
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -59,16 +61,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# ── GENIE source ──────────────────────────────────────────────────────────────
-# Clone straight into the final location and build in place. GENIE resolves its
-# tunes (config/) and physics data (data/) from $GENIE at runtime; a relocating
-# --prefix install of GENIE R-3 is fragile and drops the data/ tree, so we keep
-# $GENIE pointing at the build tree both at build and run time.
-RUN git clone --depth 1 --branch "${GENIE_TAG}" \
-      https://github.com/GENIE-MC/Generator.git /opt/genie
-
 # ── Pythia6 ───────────────────────────────────────────────────────────────────
-# Build using GENIE's own upstream build script (same approach as NuWro).
+# Build using GENIE's own upstream build script (same approach as NuWro), always
+# R-3_06_00's: R-2_12_8's older copy fails to link. Fetching it by URL instead of
+# from the GENIE clone keeps Pythia6/LHAPDF/ROOT independent of GENIE_TAG, so all
+# tags share those (slow) layers; the clone therefore comes after ROOT.
 # pythia.org now 302-redirects the Fortran source to pythia8.web.cern.ch, but
 # the script fetches with `curl -f -O` (no -L) and silently saves the 85-byte
 # redirect page — libPythia6.so then lacks pyevnt_ etc. and the ROOT
@@ -82,8 +79,10 @@ RUN PY6_MAJ="$(echo "${PYTHIA6_VERSION}" | cut -d. -f1)" && \
     curl -fsSL \
       "https://pythia.org/download/pythia6/pythia${PY6_MAJ}${PY6_MIN}${PY6_TINY}.f" \
       -o "${PY6_DL}/pythia${PY6_MAJ}${PY6_MIN}${PY6_TINY}.f_with_dummies" && \
+    curl -fsSL "https://raw.githubusercontent.com/GENIE-MC/Generator/${PYTHIA6_SCRIPT_REF}/src/scripts/build/ext/build_pythia6.sh" \
+      -o /tmp/build_pythia6.sh && \
     cd /opt/pythia6 && \
-    bash /opt/genie/src/scripts/build/ext/build_pythia6.sh "${PYTHIA6_VERSION}" && \
+    bash /tmp/build_pythia6.sh "${PYTHIA6_VERSION}" && \
     test -s "$(find /opt/pythia6 -maxdepth 4 -name 'libPythia6.so' | head -1)"
 
 # ── LHAPDF ────────────────────────────────────────────────────────────────────
@@ -145,6 +144,14 @@ RUN PYTHIA6_LIBDIR="$(find /opt/pythia6 -maxdepth 4 -name 'libPythia6.so' \
     test -f /opt/root/lib/libEGPythia6.so && \
     rm -rf /tmp/root-src /tmp/root-build /tmp/root-src.tar.gz
 
+# ── GENIE source ──────────────────────────────────────────────────────────────
+# Clone straight into the final location and build in place. GENIE resolves its
+# tunes (config/) and physics data (data/) from $GENIE at runtime; a relocating
+# --prefix install of GENIE R-3 is fragile and drops the data/ tree, so we keep
+# $GENIE pointing at the build tree both at build and run time.
+RUN git clone --depth 1 --branch "${GENIE_TAG}" \
+      https://github.com/GENIE-MC/Generator.git /opt/genie
+
 # ── GENIE ─────────────────────────────────────────────────────────────────────
 # Build in place at $GENIE=/opt/genie (no relocating --prefix). After make, both
 # config/ and data/ must exist under /opt/genie for tunes/physics data to resolve
@@ -152,6 +159,14 @@ RUN PYTHIA6_LIBDIR="$(find /opt/pythia6 -maxdepth 4 -name 'libPythia6.so' \
 # Set ROOT env explicitly instead of sourcing thisroot.sh: Docker RUN uses
 # /bin/sh (dash), and thisroot.sh is bash-only ("Bad substitution" under dash).
 # GENIE's configure only needs root-config on PATH and ROOTSYS set.
+# GENIE 2's configure predates the LHAPDF6/Pythia8 options; its DIS PDF (GRV98
+# LO) is built in, so it needs no LHAPDF at all.
+# Two GENIE 2 build fixes: Utils/AppInit.h uses an unqualified `string`, which
+# ROOT 6's dictionary generation no longer tolerates (no implicit `using
+# namespace std`), so it gets the declaration; and its top-level Makefile is not
+# -j safe (apps can link before the libraries exist), so a failed parallel make
+# is simply rerun: the second pass finds the libraries built and finishes, while
+# a real compile error fails both.
 RUN PYTHIA6_LIBDIR="$(find /opt/pythia6 -maxdepth 4 -name 'libPythia6.so' \
         -exec dirname {} \; | head -1)" && \
     export ROOTSYS=/opt/root && \
@@ -159,19 +174,21 @@ RUN PYTHIA6_LIBDIR="$(find /opt/pythia6 -maxdepth 4 -name 'libPythia6.so' \
     export LD_LIBRARY_PATH="/opt/root/lib:/opt/lhapdf6/lib:${PYTHIA6_LIBDIR}" && \
     export GENIE=/opt/genie && \
     cd /opt/genie && \
+    case "${GENIE_TAG}" in \
+      R-2_*) PDF_OPTS="--disable-lhapdf" && \
+             sed -i 's|^#define _APP_INIT_UTILS_H_|#define _APP_INIT_UTILS_H_\n#include <string>\nusing std::string;|' \
+               src/Utils/AppInit.h ;; \
+      *) PDF_OPTS="--disable-lhapdf5 --enable-lhapdf6 --enable-pythia6 --disable-pythia8 \
+           --with-lhapdf6-inc=/opt/lhapdf6/include --with-lhapdf6-lib=/opt/lhapdf6/lib" ;; \
+    esac && \
     ./configure \
-      --disable-lhapdf5 \
-      --enable-lhapdf6 \
-      --enable-pythia6 \
-      --disable-pythia8 \
-      --with-lhapdf6-inc=/opt/lhapdf6/include \
-      --with-lhapdf6-lib=/opt/lhapdf6/lib \
+      ${PDF_OPTS} \
       --with-libxml2-inc=/usr/include/libxml2 \
       --with-libxml2-lib=/usr/lib/x86_64-linux-gnu \
       --with-log4cpp-inc=/usr/include \
       --with-log4cpp-lib=/usr/lib/x86_64-linux-gnu \
       --with-pythia6-lib="${PYTHIA6_LIBDIR}" && \
-    make -j"${JOBS}" && \
+    { make -j"${JOBS}" || make -j"${JOBS}"; } && \
     test -d /opt/genie/config && test -d /opt/genie/data && \
     test -x /opt/genie/bin/gevgen
 

@@ -47,9 +47,9 @@ class NeutAdapter(GeneratorAdapter):
     translator_cls = NeutTranslator
     build_arg_name = "NEUT_SOURCE_IMAGE"
 
-    # NEUT's source code is not publicly available, so unlike every other
-    # generator this payload cannot be built from a git ref. It is extracted
-    # instead from the NUISANCE collaboration's published tutorial image, which
+    # NEUT's source code is not publicly available. 5.7.0's payload is not built
+    # from a git ref at all: it is extracted from the NUISANCE collaboration's
+    # published tutorial image, which
     # ships a working NEUT build (`neut-config --version` -> 5.7.0). The code
     # version therefore names both the NEUT release and the image tag it came
     # from: the image tag is the real pin, since we cannot reproduce the build.
@@ -57,6 +57,16 @@ class NeutAdapter(GeneratorAdapter):
         "5.7.0-nuint2024": {
             "repo": None,
             "git_ref": None,
+            "source_image": "nuisancemc/tutorial:nuint2024",
+            "config_versions": ["default"],
+        },
+        # Built from source (setup/Dockerfile.neut, setup/neut/build_neut.sh),
+        # with the same image as the build environment: it supplies CERNLIB,
+        # ROOT and gfortran. The source is access-restricted, so the tarball is
+        # fetched on the host (setup_neut.sh) rather than inside the build.
+        "5.4.2": {
+            "repo": "https://github.com/neut-devel/neut",
+            "git_ref": "5.4.2",
             "source_image": "nuisancemc/tutorial:nuint2024",
             "config_versions": ["default"],
         },
