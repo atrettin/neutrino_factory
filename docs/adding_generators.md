@@ -116,9 +116,11 @@ names resolve to the default (highest, sorted-last) version.
 
 ## Variant: a generator you cannot build from source
 
-NEUT is the one backend whose source is not publicly available, so its payload is
-*extracted from a published container image* rather than built. If you add
-another generator in that situation, follow `setup/apptainer/neut.def` and
+NEUT is the one backend whose source is not publicly available, so its 5.7.0
+payload is *extracted from a published container image* rather than built (its
+5.4.2 is built from an access-restricted tarball on top of the same image; see
+[generators/neut.md](generators/neut.md#container-build)). If you add another
+generator in the first situation, follow `setup/apptainer/neut.def` and
 `setup/setup_neut.sh`:
 
 - Record the image in the adapter's `CODE_VERSIONS` entry as `source_image`
@@ -127,8 +129,8 @@ another generator in that situation, follow `setup/apptainer/neut.def` and
   catalog-driven build script skips the generator entirely.
 - Override `build_arg()` to pass the image (e.g.
   `NEUT_SOURCE_IMAGE=nuisancemc/tutorial:nuint2024`) instead of the code version.
-  The def's `CODE_VERSION` argument then has to *default* to the catalog key,
-  because the build script passes only the catalog's single build arg.
+  `build_apptainer_images.sh` passes the code version separately, as
+  `CODE_VERSION`, to every def.
 - Make `code_version` name both the release and the image tag
   (`5.7.0-nuint2024`). The image tag is the real pin when the build cannot be
   reproduced from source.
@@ -137,14 +139,15 @@ another generator in that situation, follow `setup/apptainer/neut.def` and
   published image is usually far larger than the payload.
 - There is no Dockerfile to mirror, so the "update the def and the Dockerfile
   together" rule does not apply; say so in the def header.
-- Your def will not reference `{{ JOBS }}`, since nothing is compiled, but
-  `build_apptainer_images.sh` passes `--build-arg JOBS` to every def. Apptainer
+- Your def may not reference `{{ JOBS }}` or `{{ CODE_VERSION }}`, but
+  `build_apptainer_images.sh` passes both to every def. Apptainer
   aborts on a build arg it does not see *used* (`FATAL: unused build args:
   JOBS`) — and declaring it in `%arguments` does not satisfy that, it has to
   appear in the body. The build script therefore passes
   `--warn-unused-build-args`; nothing is needed in the def.
 - Watch for absolute paths baked into the original install. `neut.def` has to
-  rewrite `NEUT.pc`'s `prefix=` after relocation, or `neut-config` refuses to run.
+  rewrite `neut-config`'s install prefix after relocation (`NEUT.pc`'s `prefix=`
+  in 5.7.0), or `neut-config` fails.
 
 ## Variant: a second processing stage
 

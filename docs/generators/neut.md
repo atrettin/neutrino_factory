@@ -1,9 +1,10 @@
 # NEUT
 
 NEUT's source is access-restricted (`github.com/neut-devel/neut`, granted on
-request), and the framework runs a NEUT build extracted from a published image
-rather than one built from source. That build is NEUT 5.7.0, whose DIS mode
-distorts high-energy kinematics ([Known limitations](#known-limitations)). It runs in two stages: NEUT's
+request). The framework runs two NEUT versions: 5.7.0, extracted from a published
+image, whose DIS mode distorts high-energy kinematics
+([Known limitations](#known-limitations)); and 5.4.2, built from source on top of
+that same image. It runs in two stages: NEUT's
 `neutroot2`, then a project-owned flattener, because NEUT's native output cannot
 be read from Python. It has no CC/NC switch; a single current is selected through
 its per-channel cross-section scale arrays. The conventions its output is
@@ -14,7 +15,7 @@ normalized onto are in [../physics.md](../physics.md); the run pipeline is in
 
 | | |
 |---|---|
-| Code versions | `5.7.0-nuint2024` (NEUT 5.7.0 from the `nuisancemc/tutorial:nuint2024` image) |
+| Code versions | `5.7.0-nuint2024` (NEUT 5.7.0 from the `nuisancemc/tutorial:nuint2024` image); `5.4.2` (built from the `5.4.2` tag) |
 | `config_version` | `default` only: `NEUT-MDLQE 2002`, `NEUT-MAQE 1.05` |
 | Sampling | unweighted (rejection-sampled) |
 | Raw σ → per nucleon | already 1e-38 cm² per nucleon, no conversion |
@@ -25,10 +26,15 @@ normalized onto are in [../physics.md](../physics.md); the run pipeline is in
 
 ## Setup
 
-`setup/setup_neut.sh` pulls `nuisancemc/tutorial:nuint2024` (~5 GB) and retags it
-as `neut:<code_version>` for Docker (`--platform linux/amd64`). For Apptainer,
-`build_apptainer_images.sh` builds the NEUT payload SIF from the same image like
-any other generator ([Container build](#container-build)). There is no data
+`setup/setup_neut.sh [--jobs N] <code_version>` makes `neut:<code_version>` for
+Docker (`--platform linux/amd64`). For `5.7.0-nuint2024` it pulls
+`nuisancemc/tutorial:nuint2024` (~5 GB) and retags it. For `5.4.2` it builds
+`setup/Dockerfile.neut` on top of that image from the source tarball
+`setup/neut/src/neut-5.4.2.tar.gz` (git-ignored), which it downloads first with
+`gh auth token` when absent; the token needs read access to `neut-devel/neut`.
+For Apptainer, `build_apptainer_images.sh` builds the NEUT payload SIF from the
+same image like any other generator; a `5.4.2` build needs the tarball placed in
+`setup/neut/src/` by hand ([Container build](#container-build)). There is no data
 staging step: the cross-section tables ship inside the payload.
 
 ## Configuring a job
@@ -103,7 +109,7 @@ NEUT has no reweight support in this framework.
 
 ## Known limitations
 
-- **DIS kinematics are wrong above ~10 GeV.** NEUT 5.7.0 rejects every mode-26/46
+- **DIS kinematics are wrong above ~10 GeV in 5.7.0.** NEUT 5.7.0 rejects every mode-26/46
   (W > 2 GeV) event whose lepton is within θ < 2.6° of the neutrino in the
   struck nucleon's rest frame (cos θ > 0.999), and generates a replacement. This
   removes Q² ≲ 0.002·E²(1−y), about 30(1−y) GeV² at 125 GeV, so the low-x, low-y
@@ -113,6 +119,10 @@ NEUT has no reweight support in this framework.
   distribution rising towards 1. Negligible below ~5 GeV, clearly biased by
   10–20 GeV; QE, 2p2h, RES and multi-π are unaffected. Fixed in NEUT 5.9.0
   ([upstream issue 4](#upstream-issues), [Validation](#dis-lepton-angle-cut)).
+  5.4.2's `nejet.F` has no forward cut, only a backward one (`COSTH < -0.75`);
+  its high-energy DIS kinematics have not been measured.
+- **NEUT 5.4.2 reports itself as 5.4.1** (`neut-config --version`, library
+  suffix `.541`): the tag's `configure.ac` was not bumped.
 - **Not bit-reproducible from its seed.** Different seeds give different,
   independent event sets, so chunking is safe; but two runs with the *same* seed
   diverge after a few events. Configs are reproducible in distribution, not in
@@ -138,7 +148,8 @@ NEUT has no reweight support in this framework.
 evidence. Users can stop here.*
 
 Files: `generators/neut.py`, `translators/neut.py`, `normalizers/neut.py`,
-`setup/neut/nf_flatten.C`, `setup/setup_neut.sh`, `setup/apptainer/neut.def`.
+`setup/neut/nf_flatten.C`, `setup/setup_neut.sh`, `setup/apptainer/neut.def`,
+`setup/Dockerfile.neut`, `setup/neut/build_neut.sh`.
 
 ## Implementation
 
@@ -323,13 +334,45 @@ read.
 
 ## Container build
 
-There is **no `setup/Dockerfile.neut`**: the Docker image is the retagged source
-image, so the def↔Dockerfile pairing that applies elsewhere does not apply here.
-`setup/apptainer/neut.def` bootstraps stage 1 from the source image and stages
-only `/opt/neut` (including `share/neut/crsdat` and `include/`; the headers are
-needed because the flattener compiles through Cling) plus the ROOT 6.30/04 build
-NEUT links against: ~1.5 GB of the ~5 GB image. The def's `CODE_VERSION` must stay
-in sync with `NeutAdapter.CODE_VERSIONS`.
+Both code versions start from `nuisancemc/tutorial:nuint2024`.
+`setup/apptainer/neut.def` bootstraps stage 1 from it and stages only
+`/opt/neut` (including `share/neut/crsdat` and `include/`; the headers are needed
+because the flattener compiles through Cling) plus the ROOT 6.30/04 build NEUT
+links against: ~1.5 GB of the ~5 GB image. `build_apptainer_images.sh` passes
+`CODE_VERSION`, which names the payload directory.
+
+For `5.7.0-nuint2024` the image's NEUT is used as is, and the Docker image is the
+retagged source image. For `5.4.2`, `setup/neut/build_neut.sh` compiles NEUT in
+the image and installs it over `/opt/neut`, so the image's environment
+(`PATH`, `LD_LIBRARY_PATH`, `NEUT_CRSPATH`, `neut-config`) and everything
+downstream apply unchanged. `setup/Dockerfile.neut` runs it for Docker; stage 1
+of `neut.def` runs it when `setup/neut/src/neut-<CODE_VERSION>.tar.gz` exists.
+The source build needs four adjustments, each of which caused a real failure:
+
+- **CERNLIB layout shim.** NEUT 5.4.2's configure requires the CERNLIB 2005
+  layout, `$CERN/$CERN_LEVEL/{bin/cernlib,lib,include/pdf804/pilot.h}`, and links
+  `jetset74 pdflib804 photos202 mathlib packlib kernlib`. The image's CERNLIB
+  2023 has all six libraries but is installed flat at `/opt/cern` with the PDF
+  headers under `include/pdf`; a symlink tree at `/opt/cernshim/2005` presents it
+  in the expected layout.
+- **Autotools timestamps.** A GitHub tarball gives every file one mtime, so make
+  tries to regenerate `aclocal.m4` with `aclocal-1.13`, which the image lacks.
+  The generated files are touched in dependency order instead.
+- **`-lEve`.** `neutgeom`'s `genev`, `event_rate` and `dumptotpau_nd280` link
+  ROOT's Eve, which this ROOT lacks; the flag is removed from the generated
+  Makefile. None of the three is used.
+- **Missing `return` statements.** `AddNuclei` (`n1p1h/src/N1p1hFortranInterface.C`)
+  and `NeutrootTreeSingleton::Destroy` are declared non-void and fall off their
+  end. That is undefined behaviour, and g++ 11 at `-O2` compiled
+  `AddNuclei` into a fall-through: `neutroot2` aborted with `free(): double free
+  detected in tcache 2` right after the Nieves 1p1h setup, before the first
+  event (backtrace `AddNuclei` ← `fn_1p1h_n_` ← `fntotpau_` ← `loadflx_`, via
+  `addr2line`). The script adds the returns and fails if the patterns no longer
+  match.
+
+NEUT is installed directly at `/opt/neut` rather than built elsewhere and moved:
+`neut-config` bakes in its install prefix (`INSTALL_ROOT`), which the
+flattener's include-directory lookup relies on.
 
 - **Catalog integration.** `NeutAdapter` overrides `is_buildable` to treat a
   `source_image` catalog entry as a source (the base class recognizes only
@@ -348,13 +391,15 @@ Three relocation fixes in `%post`, each of which caused a real failure:
   absolute symlink to `/opt/root/v6-30-04/bin/root.exe` in the source image and
   dangles once relocated, which bash reports as the confusing `root: not found`.
   `%test` runs `root --version` from the payload, so this fails at build time.
-- **`NEUT.pc`'s `prefix=` is repointed**: `neut-config` refuses to run when it
-  disagrees with its own location.
+- **`neut-config`'s install prefix is repointed**: in 5.7.0 through `NEUT.pc`'s
+  `prefix=` (`neut-config` refuses to run when it disagrees with its own
+  location), in 5.4.2 through `INSTALL_ROOT` in the script itself.
 - The wrapper exports `NF_NEUT_INCDIR` so Cling finds the NEUT headers, plus
   `$NEUT_CRSPATH` and `$RANFILE`.
 
 `/opt/cern` (CERNLIB) is deliberately **not** staged: `ldd` reported it unused,
-and it appears to be statically linked into `libNEUT.a`. `neutroot2` needs only
+and it is static (`/opt/cern/lib` holds only `.a` archives), so it is linked
+into the binaries. `neutroot2` needs only
 `libgfortran5`, `libpcre3`, `liblzma5`, `libz` and `libstdc++`, all in
 `nf-base.def`'s runtime baseline. If a missing-library error ever appears at
 startup, CERNLIB is the first suspect.
@@ -368,9 +413,18 @@ passes `NF_NEUT_INCDIR`.
 
 ### A payload extracted from a published image
 
-`code_version` is the NEUT release plus the image tag it came from. Since the
-build is not reproducible from source, the image tag is the real pin, and a
-re-push of that tag would otherwise be invisible.
+For 5.7.0, `code_version` is the NEUT release plus the image tag it came from.
+Since that build is not reproducible from source, the image tag is the real pin,
+and a re-push of that tag would otherwise be invisible.
+
+### Building 5.4.2 in the same image
+
+NEUT 5.4.2 needs CERNLIB, which no current distribution packages, and building
+CERNLIB 2005 from source is a project of its own. The tutorial image already
+carries a CERNLIB with every library NEUT links, together with the ROOT and
+gfortran a source build needs, and its NEUT 5.7.0 payload already relies on it.
+Building on it reuses that toolchain and the image's runtime environment, at the
+cost of tying 5.4.2's build to the same image tag.
 
 ### Histograms are found by prefix
 
@@ -463,6 +517,24 @@ has pull mean +0.06 and rms 0.88. At production binning (40k events, 40 log
 analysis bins) the ratio is 1.006 ± 0.044, and the four analysis bins between
 0.1 and 0.2 GeV, which all fell inside one bin of the old grid, return 0.0026,
 0.0033, 0.0077 and 0.0184, tracking NEUT's σ(E).
+
+### NEUT 5.4.2 against 5.7.0
+
+NEUT 5.4.2 (Docker, `config_version: default`), ν_μ CC on C12, E^-2 over
+0.5–5 GeV, 2000 events, against the 20k-event 5.7.0 run on the same config.
+The CC mask uses the 5.7.0 slot table unchanged, and every event came out in a CC
+mode: 1 (685), 2 (163), 11 (390), 12 (151), 13 (172), 16 (7), 17 (1), 21 (276),
+22 (31), 23 (2), 26 (122). The slot table itself was not re-measured slot by slot
+for 5.4.2. σ per nucleon from the `xsec_weight` sum, in 1e-38 cm²:
+
+| E (GeV) | 0.5–1 | 1–2 | 2–3 | 3–5 |
+|---|---|---|---|---|
+| 5.4.2 | 0.644 | 1.414 | 1.929 | 3.276 |
+| 5.7.0 | 0.646 | 1.370 | 2.145 | 3.194 |
+
+The differences are within the 2000-event statistics. Startup time is dominated,
+as in 5.7.0, by the Nieves 1p1h tables built for all six flavours before the
+first event.
 
 ### Slot mapping
 
