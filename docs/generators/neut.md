@@ -439,11 +439,11 @@ run fail at normalization.
 ### Slot numbers are not mode numbers
 
 A **mode** is the physics-channel identifier written per event: sparse over
-1..52, CC ≤ 30, NC ≥ 31, negated for antineutrinos (`necard.h`; owned by the
-non-public `nemodsel.F`). A **slot** is a position in the dense 30-element
-`CRSNEUT(30)` / `CRSNEUTB(30)` arrays, ordered by NEUT's internal enumeration;
-the channel per slot is documented only in the shipped cards
-(`share/neut/Cards/neut_5.4.0_nd5_O.card`). They cannot line up:
+1..52, CC ≤ 30, NC ≥ 31, negated for antineutrinos (`necard.h`). A **slot** is a
+position in the dense 30-element `CRSNEUT(30)` / `CRSNEUTB(30)` arrays, ordered
+by NEUT's internal enumeration; the shipped cards
+(`share/neut/Cards/neut_5.4.0_nd5_O.card`) label it, and in the 5.4.2 source
+`neutcore/necrsmode.F` spells out the mode → slot map. They cannot line up:
 
 1. Slots resolve sub-channels that share a mode (free vs bound target): ν slots
    11 and 12 both produce mode 51, ν̄ slots 12 and 13 both produce mode 51.
@@ -524,15 +524,33 @@ NEUT 5.4.2 (Docker, `config_version: default`), ν_μ CC on C12, E^-2 over
 0.5–5 GeV, 2000 events, against the 20k-event 5.7.0 run on the same config.
 The CC mask uses the 5.7.0 slot table unchanged, and every event came out in a CC
 mode: 1 (685), 2 (163), 11 (390), 12 (151), 13 (172), 16 (7), 17 (1), 21 (276),
-22 (31), 23 (2), 26 (122). The slot table itself was not re-measured slot by slot
-for 5.4.2. σ per nucleon from the `xsec_weight` sum, in 1e-38 cm²:
+22 (31), 23 (2), 26 (122). σ per nucleon from the `xsec_weight` sum, in 1e-38 cm²:
 
 | E (GeV) | 0.5–1 | 1–2 | 2–3 | 3–5 |
 |---|---|---|---|---|
 | 5.4.2 | 0.644 | 1.414 | 1.929 | 3.276 |
 | 5.7.0 | 0.646 | 1.370 | 2.145 | 3.194 |
 
-The differences are within the 2000-event statistics. Startup time is dominated,
+The differences are within the 2000-event statistics.
+
+NC (`physics.current: nc`), same flux and target, 2000 events per beam sign,
+against 2000-event 5.7.0 runs on the same config. Every event came out in an NC
+mode: ν_μ 31 (209), 32 (215), 33 (154), 34 (140), 36 (22), 38 (1), 41 (244),
+42 (35), 43 (22), 44 (5), 45 (6), 46 (116), 51 (338), 52 (493); ν̄_μ likewise
+only −31…−52. The slot table needs no 5.4.2 variant: `neutcore/necrsmode.F` in the
+5.4.2 source maps every CC mode to a slot `CRS_SLOT_CURRENTS` marks CC and every
+NC mode to one it marks NC, for both arrays, and leaves ν slot 22 unassigned.
+σ per nucleon, in 1e-38 cm² (statistical errors ~4% at low E, ~5% at high E):
+
+| E (GeV) | 0.5–1 | 1–2 | 2–3 | 3–5 |
+|---|---|---|---|---|
+| ν_μ 5.4.2 | 0.226 | 0.417 | 0.660 | 0.968 |
+| ν_μ 5.7.0 | 0.223 | 0.464 | 0.739 | 0.990 |
+| ν̄_μ 5.4.2 | 0.068 | 0.173 | 0.279 | 0.497 |
+| ν̄_μ 5.7.0 | 0.073 | 0.180 | 0.316 | 0.488 |
+
+The largest gap, ν_μ at 1–2 GeV, is 1.9σ; 5.4.2 sits low at 1–3 GeV in both
+currents. Startup time is dominated,
 as in 5.7.0, by the Nieves 1p1h tables built for all six flavours before the
 first event.
 
