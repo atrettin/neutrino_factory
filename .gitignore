@@ -47,3 +47,6 @@ notebooks/explore_output/
 literature/
 reports/
 .opencode/TODOS.md
+
+# Restricted NEUT source (access on request; never commit)
+setup/neut/src/

@@ -96,6 +96,11 @@ def legacy_reason(generator: str, code_version: str, config_version: str) -> str
     return _adapter(generator).legacy_config_version_reason(code_version, config_version)
 
 
+def git_ref(generator: str, code_version: str) -> str | None:
+    """Source ref ``code_version`` is built from, or ``None`` for a prebuilt payload."""
+    return (_adapter(generator).CODE_VERSIONS.get(code_version) or {}).get("git_ref")
+
+
 def ensure_known(generator: str, code_version: str) -> None:
     _adapter(generator).ensure_code_version(code_version)
 

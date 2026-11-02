@@ -1,0 +1,44 @@
+# End-to-end smoke test — GENIE 2.12.8 (default physics, no MEC).
+# Minimal real (non-stub) run to confirm the composed nf-base.sif can translate
+# a config, run gevgen, convert with gntpc, and normalize to the common HDF5.
+# Requires the MEC-stripped default spline staged on disk
+# (setup/download_genie_xsec.sh --code-version R-2_12_8). Small event count keeps
+# the run fast; spline loading dominates regardless.
+
+run:
+  name: smoke_genie2_c12
+  seed: 12345
+  executor: local
+  stub_mode: false
+  # Keeps the gevgen job-configuration banner and the output-file writes while
+  # dropping the per-spline and per-event NOTICE floods.
+  log_level: essential
+
+jobs:
+  - generator: genie
+    code_version: "R-2_12_8"
+    config_version: "default"
+    events: 50
+    chunks: 1
+    flux:
+      type: power_law
+      particle: numu
+      emin_gev: 0.5
+      emax_gev: 5.0
+      gamma: -2.0
+    target:
+      nucleus: C12
+    physics:
+      mode: inclusive
+      current: cc
+
+storage:
+  software_root: ${NF_SOFTWARE_ROOT:-./software}
+  output_root: ${NF_OUTPUT_ROOT:-./output}
+  work_root: ${NF_WORK_ROOT:-./work}
+
+slurm:
+  partition: alma
+  time: "00:10:00"
+  cpus_per_task: 1
+  mem: "2G"
