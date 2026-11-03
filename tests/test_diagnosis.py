@@ -17,6 +17,7 @@ from neutrino_factory.diagnosis import (
     collapse_carriage_returns,
     diagnose_run,
     find_task_logs,
+    format_diagnosis_report,
     node_summary,
     parse_slurm_time,
     sacct_commands,
@@ -140,6 +141,18 @@ class DiagnoseRunTests(unittest.TestCase):
         sacct = sacct_commands([diagnoses[no_output]], [500])
         self.assertEqual(len(sacct), 1)
         self.assertIn(f"500_{no_output}", sacct[0])
+
+        # Without --list-failures each mode shows only its count; scancel stays.
+        short = format_diagnosis_report(diagnoses, [500])
+        self.assertIn("crash (1):", short)
+        self.assertNotIn("TASK  JOB", short)
+        self.assertNotIn("sacct", short)
+        self.assertIn(f"scancel 500_[{hung}]", short)
+        self.assertIn("--list-failures", short)
+        full = format_diagnosis_report(diagnoses, [500], list_failures=True)
+        self.assertIn("TASK  JOB", full)
+        self.assertIn(f"500_{no_output}", full)
+        self.assertNotIn("Rerun with --list-failures", full)
 
     def test_newest_submission_wins(self) -> None:
         index = self._add(self._running(1), err="old crash\n", array=500)

@@ -613,12 +613,12 @@ def cmd_check_status(args: argparse.Namespace) -> int:
     ]
     # Tasks still running or queued have no (complete) output yet; that is not an error.
     mode_by_chunk = {(d["job_label"], d["chunk_id"]): d["mode"] for d in diagnoses}
-    unfinished = [
-        i
-        for i, entry in enumerate(outputs["chunks"])
-        if mode_by_chunk.get((entry["job_label"], entry["chunk_id"])) in ("running", "no_output")
+    chunk_modes = [
+        mode_by_chunk.get((entry["job_label"], entry["chunk_id"])) for entry in outputs["chunks"]
     ]
-    chunks_summary = summarize(chunk_results, unfinished)
+    unfinished = [i for i, mode in enumerate(chunk_modes) if mode in ("running", "no_output")]
+    running = [i for i, mode in enumerate(chunk_modes) if mode == "running"]
+    chunks_summary = summarize(chunk_results, unfinished, running)
 
     # Per-job runtime status from the chunk sidecars: how many chunks have
     # started/finished/validated, plus timing, even before any HDF5 exists.
@@ -662,7 +662,7 @@ def cmd_check_status(args: argparse.Namespace) -> int:
         print(f"Per-job status ({len(shown_jobs)} {heading}):")
         print(format_status_table(shown_jobs))
         print()
-        print(format_diagnosis_report(diagnoses, array_ids))
+        print(format_diagnosis_report(diagnoses, array_ids, list_failures=args.list_failures))
 
     all_tasks_ok = all(d["mode"] == "ok" for d in diagnoses)
     all_merged_valid = all(r["valid"] for r in merged_results)
@@ -1020,8 +1020,9 @@ def build_parser() -> argparse.ArgumentParser:
             "cancelled, node_failure, hung, invalid, no_output -- from its sidecar, "
             "its Slurm logs and its output activity, and lists them with node and "
             "reason, plus the nodes with failures. Prints a ready-to-paste scancel "
-            "command for hung tasks and an sacct command for tasks that left no "
-            "output. Merged files are validated only with --check-merged. Exits "
+            "command for hung tasks. The task-by-task lists, and the sacct command "
+            "for tasks that left no output, are printed only with --list-failures; "
+            "without it each mode shows only its count. Merged files are validated only with --check-merged. Exits "
             "non-zero if any task is not finished and valid (or, with "
             "--check-merged, any merged file is invalid)."
         ),
@@ -1029,6 +1030,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Examples:\n"
             "  neutrino-factory check-status --config configs/examples/power_law_numu_Ar.yaml\n"
             "  neutrino-factory check-status --config <cfg> --failed-only\n"
+            "  neutrino-factory check-status --config <cfg> --list-failures\n"
             "  neutrino-factory check-status --config <cfg> --task 217 --task 2528\n"
             "  neutrino-factory check-status --config <cfg> --check-merged   # after merge"
         ),
@@ -1065,6 +1067,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--failed-only",
         action="store_true",
         help="List only jobs with chunks that are not finished and valid in the per-job table",
+    )
+    check_status_parser.add_argument(
+        "--list-failures",
+        action="store_true",
+        help=(
+            "List every task that is not finished and valid, one row per task, grouped by "
+            "failure mode, with an sacct command for tasks that left no output (default: "
+            "only the number of tasks per mode)"
+        ),
     )
     check_status_parser.add_argument(
         "--task",

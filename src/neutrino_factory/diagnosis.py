@@ -527,9 +527,17 @@ def format_node_table(nodes: Sequence[Mapping[str, Any]]) -> str:
 
 
 def format_diagnosis_report(
-    diagnoses: Sequence[Mapping[str, Any]], array_ids: Sequence[int]
+    diagnoses: Sequence[Mapping[str, Any]],
+    array_ids: Sequence[int],
+    list_failures: bool = False,
 ) -> str:
-    """The "Failed tasks by mode" and "Nodes" sections of ``check-status``."""
+    """The "Tasks by mode" and "Nodes" sections of ``check-status``.
+
+    The per-task tables, and the ``sacct`` command for tasks without output,
+    run to thousands of lines while a large run waits in the queue, so they are
+    printed only with ``list_failures``. The ``scancel`` command for hung tasks
+    is always printed: it is one line per array job and needs acting on.
+    """
     sections: list[str] = []
     counts = mode_counts(diagnoses)
     sections.append(
@@ -539,32 +547,38 @@ def format_diagnosis_report(
     running = [d for d in diagnoses if d["mode"] == "running"]
     slow = [d for d in running if is_slow(d)]
     if slow:
+        heading = f"running, over 2x their job's median duration ({len(slow)} of {len(running)})"
         sections.append(
-            f"\nrunning, over 2x their job's median duration ({len(slow)} of {len(running)}):\n"
-            + format_failure_table(slow)
+            f"\n{heading}:\n" + format_failure_table(slow) if list_failures else f"\n{heading}"
         )
 
     for mode in FAILURE_MODES:
         selected = [d for d in diagnoses if d["mode"] == mode]
         if not selected:
             continue
-        block = [f"\n{mode} ({len(selected)}):", format_failure_table(selected)]
+        block = [f"\n{mode} ({len(selected)}):"]
+        if list_failures:
+            block.append(format_failure_table(selected))
         if mode == "hung":
             block.append("Cancel them from the submission node, then retry with --modes cancelled:")
             block += [f"  {line}" for line in scancel_commands(selected)]
         if mode == "no_output":
             block.append(NO_OUTPUT_NOTE)
-            commands = sacct_commands(selected, array_ids)
+            commands = sacct_commands(selected, array_ids) if list_failures else []
             if commands:
                 block.append("Ask Slurm what happened to them (from the submission node):")
                 block += [f"  {line}" for line in commands]
-            else:
+            elif list_failures:
                 block.append("No Slurm logs found for this run, so its array job ID is unknown.")
         sections.append("\n".join(block))
 
     nodes = node_summary(diagnoses)
     if nodes:
         sections.append("\nNodes with failures:\n" + format_node_table(nodes))
+    if not list_failures and (slow or any(mode in FAILURE_MODES for mode in counts)):
+        sections.append(
+            "\nRerun with --list-failures for the task-by-task list, or --task INDEX for one task."
+        )
     return "\n".join(sections)
 
 
