@@ -25,6 +25,18 @@ class ConfigTranslator(ABC):
         """
         return []
 
+    @classmethod
+    def validate_target(cls, config_version: str, nucleus: str, where: str) -> list[str]:
+        """Check that ``config_version`` can predict ``nucleus``.
+
+        Some physics models exist only for certain nuclei. A config version
+        built on one must refuse the others rather than run with a channel
+        missing or a model swapped in, so that every target of a config
+        version shares the same physics. Returns one message per problem. The
+        default accepts every nucleus.
+        """
+        return []
+
     @abstractmethod
     def translate(self, config: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError

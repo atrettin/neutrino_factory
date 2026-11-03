@@ -147,7 +147,7 @@ class MergeValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             d = Path(tmpdir)
             a = _write_chunk(d / "a.h5", "genie", "R-3_06_00", "G18_10a_02_11a", 2)
-            b = _write_chunk(d / "b.h5", "nuwro", "nuwro_25.11", "default", 2)
+            b = _write_chunk(d / "b.h5", "nuwro", "nuwro_25.11", "sf", 2)
             with self.assertRaises(MergeError):
                 merge_hdf5_files([a, b], d / "merged.h5")
 

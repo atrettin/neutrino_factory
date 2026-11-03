@@ -14,7 +14,7 @@ from neutrino_factory.config import ConfigError
 from neutrino_factory.normalizers.nuwro import _universe_weights
 from tests.helpers import job, run_config
 
-NUWRO_JOB = {"generator": "nuwro", "code_version": "nuwro_25.11", "config_version": "default"}
+NUWRO_JOB = {"generator": "nuwro", "code_version": "nuwro_25.11", "config_version": "sf"}
 
 
 def _block(**parameters) -> dict:
@@ -226,7 +226,7 @@ class ConfigValidationTests(unittest.TestCase):
 
 def _chunk(path: Path, n: int, weights: np.ndarray | None, universes_meta: dict | None) -> str:
     metadata = {
-        "generator": "nuwro", "code_version": "nuwro_25.11", "config_version": "default",
+        "generator": "nuwro", "code_version": "nuwro_25.11", "config_version": "sf",
         "run_name": "t", "chunk_id": 0, "seed": 1, "xsec_norm_count": float(n),
     }
     if universes_meta is not None:

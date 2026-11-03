@@ -52,9 +52,18 @@ class NuWroAdapter(GeneratorAdapter):
         "nuwro_25.11": {
             "repo": "https://github.com/NuWro/nuwro",
             "git_ref": "nuwro_25.11",
-            # NuWro parameter-set versioning is a non-blocking TODO; only
-            # "default" exists for now.
-            "config_versions": ["default"],
+            # The QE nuclear model: "sf" (spectral function, C12/O16/Ar40/Fe56
+            # only) or "lfg" (local Fermi gas, every nucleus). The parameters
+            # are in translators/nuwro.py (CONFIG_VERSION_PARAMS).
+            "config_versions": ["sf", "lfg"],
+            "legacy_config_versions": {
+                "default": (
+                    "It ran NuWro's built-in parameters, whose spectral function exists only "
+                    "for C12, O16, Ar40 and Fe56; on every other nucleus NuWro silently "
+                    "generated no quasi-elastic events. Use 'sf' (same physics, those four "
+                    "nuclei only) or 'lfg'."
+                ),
+            },
         },
     }
 

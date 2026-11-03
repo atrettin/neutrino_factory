@@ -39,9 +39,55 @@ DYNAMICS_CHANNELS = ("qel", "res", "dis", "coh", "mec")
 #   irrelevant to a neutrino run and off in NuWro's defaults too.
 EXTRA_DYNAMICS = {"hyp_cc": "cc", "lep": None, "qel_el": None}
 
+# config_version -> the NuWro parameters that define it. Both pin the target
+# nucleon model of the non-QE channels to NuWro's own default, the local Fermi
+# gas (nucleus_target = 2), and differ only in the QE nuclear model:
+#
+# * "sf": the spectral function (sf_method = 1, NuWro's default). It exists only
+#   for the nuclei in SF_NUCLEI (``sfevent``, src/sfevent.cc, returns no event
+#   for any other), so validate_target refuses the rest.
+# * "lfg": the local Fermi gas for QE too (sf_method = 0, ``qelevent1``). It
+#   works on every nucleus. On H1 NuWro takes the proton at rest without binding
+#   energy (``nucleus::get_nucleon`` and ``qelevent1`` for A = 1).
+#
+# "default" is legacy: NuWro's built-in parameters, with nothing written. That
+# is the "sf" physics, but it ran on every nucleus, so its H1 and W184 samples
+# have no QE events. It is kept so that its runs can still be merged; submit
+# and retry refuse it (NuWroAdapter.CODE_VERSIONS).
+CONFIG_VERSION_PARAMS: dict[str, dict[str, int]] = {
+    "sf": {"sf_method": 1, "nucleus_target": 2},
+    "lfg": {"sf_method": 0, "nucleus_target": 2},
+    "default": {},
+}
+
+# The nuclei, as (protons, neutrons), that NuWro 25.11's sf_method = 1 has a
+# spectral function for (``sfevent``, src/sfevent.cc).
+SF_NUCLEI = {"C12": (6, 6), "O16": (8, 8), "Ar40": (18, 22), "Fe56": (26, 30)}
+
+# config_version -> the nuclei it can predict; absent means every nucleus.
+CONFIG_VERSION_NUCLEI = {"sf": SF_NUCLEI}
+
 
 class NuWroTranslator(ConfigTranslator):
     name = "nuwro"
+
+    @classmethod
+    def validate_target(cls, config_version: str, nucleus: str, where: str) -> list[str]:
+        """Refuse a nucleus the config version has no model for (``CONFIG_VERSION_NUCLEI``)."""
+        supported = CONFIG_VERSION_NUCLEI.get(config_version)
+        if supported is None:
+            return []
+        try:
+            composition = nucleus_composition(nucleus)
+        except ValueError:
+            return []  # config validation reports the malformed name itself
+        if composition in supported.values():
+            return []
+        return [
+            f"{where}: NuWro config_version '{config_version}' cannot predict {nucleus}: "
+            f"it is defined only for {', '.join(supported)}. Use 'lfg' for every nucleus, "
+            "or drop this target."
+        ]
 
     def translate(self, config: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
         flux_config = config["flux"]
@@ -61,6 +107,16 @@ class NuWroTranslator(ConfigTranslator):
         protons, neutrons = nucleus_composition(nucleus)
         current = physics_current(config)
 
+        config_version = str(task["config_version"])
+        if config_version not in CONFIG_VERSION_PARAMS:
+            raise KeyError(
+                f"No NuWro parameters defined for config_version '{config_version}'. "
+                f"Known: {', '.join(CONFIG_VERSION_PARAMS)}"
+            )
+        problems = self.validate_target(config_version, nucleus, "NuWro task")
+        if problems:
+            raise ValueError(problems[0])
+
         # NuWro (beam_type=0) reads the spectrum straight from `beam_energy`.
         # target_type=0 selects a single nucleus via nucleus_p / nucleus_n.
         nuwro_params = {
@@ -78,6 +134,7 @@ class NuWroTranslator(ConfigTranslator):
             # (params_all.h) too; pinned so the columns never silently fall
             # back to the pre-FSI copy NuWro writes into e/post when it is off.
             "FSI_on": 1,
+            **CONFIG_VERSION_PARAMS[config_version],
         }
 
         return {
@@ -93,7 +150,7 @@ class NuWroTranslator(ConfigTranslator):
             "mode": config["physics"].get("mode", "inclusive"),
             "current": current,
             "code_version": task["code_version"],
-            "config_version": task["config_version"],
+            "config_version": config_version,
             "generator_version_id": task.get("generator_version_id"),
             "nuwro_params": nuwro_params,
             # Reweight universes (optional): the validated config block, resolved

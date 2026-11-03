@@ -76,11 +76,12 @@ jobs:
       include:
         # Every generator version entry has two required, independent axes:
         #   code_version   - the code itself (git tag / release), must be catalogued
-        #   config_version - the physics parameter set (GENIE tune; "default" elsewhere)
+        #   config_version - the physics parameter set (GENIE tune; NuWro "sf"/"lfg";
+        #                    "default" for NEUT and GiBUU)
         # See catalogued options: neutrino-factory list-generators
         - {generator: genie, code_version: "R-3_06_00", config_version: "G18_10a_02_11a"}
         - {generator: genie, code_version: "R-3_06_00", config_version: "AR23_20i_00_000"}
-        - {generator: nuwro, code_version: "nuwro_25.11", config_version: "default"}
+        - {generator: nuwro, code_version: "nuwro_25.11", config_version: "sf"}
       exclude:
         - {generator: nuwro, nucleus: Ar40}
 
@@ -130,7 +131,7 @@ jobs:
   - name: nuwro_universes_c12
     generator: nuwro
     code_version: "nuwro_25.11"
-    config_version: "default"
+    config_version: "sf"
     events: 20000
     chunks: 2
     flux: {type: power_law, particle: numu, emin_gev: 0.5, emax_gev: 5.0, gamma: -2.0}

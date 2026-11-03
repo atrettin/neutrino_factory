@@ -37,7 +37,7 @@ def _config(current: str, *, particle: str = "numu", nucleus: str = "C12") -> di
 def _task(generator: str) -> dict:
     versions = {
         "genie": ("R-3_06_00", "G18_10a_02_11a"),
-        "nuwro": ("nuwro_25.11", "default"),
+        "nuwro": ("nuwro_25.11", "sf"),
         "neut": ("5.7.0-nuint2024", "default"),
         "gibuu": ("release2025", "default"),
     }

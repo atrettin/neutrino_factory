@@ -12,7 +12,7 @@ run:
 jobs:
   - generator: nuwro
     code_version: "nuwro_25.11"
-    config_version: "default"
+    config_version: "sf"
     events: 1000
     chunks: 1
     flux:

@@ -77,7 +77,7 @@ jobs:
       nucleus: [C12, O16, Ar40]
       include:
         - {generator: genie, code_version: "R-3_06_00", config_version: "G18_10a_02_11a"}
-        - {generator: nuwro, code_version: "nuwro_25.11", config_version: "default"}
+        - {generator: nuwro, code_version: "nuwro_25.11", config_version: "sf"}
       exclude:
         - {generator: nuwro, nucleus: Ar40}
 ```

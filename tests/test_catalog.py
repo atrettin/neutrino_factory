@@ -48,7 +48,7 @@ class CatalogTests(unittest.TestCase):
     def test_ensure_compatible_rejects_incompatible_config_version(self) -> None:
         # GENIE validation is availability-only (no static tune list), so an
         # incompatible config_version is only meaningful for generators that
-        # declare a static config-version set (e.g. NuWro's "default").
+        # declare a static config-version set (e.g. NuWro's "sf"/"lfg").
         with self.assertRaises(catalog.CatalogError):
             catalog.ensure_compatible("nuwro", "nuwro_25.11", "not_a_real_config")
 
@@ -139,7 +139,7 @@ class CatalogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(
                 catalog.available_config_versions("nuwro", "nuwro_25.11", Path(tmp)),
-                ["default"],
+                ["sf", "lfg"],
             )
 
 

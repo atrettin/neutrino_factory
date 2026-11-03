@@ -40,7 +40,7 @@ jobs:
         # code_version is the git tag / release; config_version is the GENIE tune.
         - {generator: genie, code_version: "R-3_06_00", config_version: "G18_10a_02_11a"}
         - {generator: genie, code_version: "R-3_06_00", config_version: "AR23_20i_00_000"}
-        - {generator: nuwro, code_version: "nuwro_25.11", config_version: "default"}
+        - {generator: nuwro, code_version: "nuwro_25.11", config_version: "sf"}
 
 storage:
   software_root: ${NF_SOFTWARE_ROOT:-./software}

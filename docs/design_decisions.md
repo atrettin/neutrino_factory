@@ -720,3 +720,40 @@ not possible either, because the merge built one Python dict per event.
   ~15% more, but it changes the schema keystone reads.
 - *Deleting chunks after merging.* Chunks are what a merge is redone from after
   retries, and compressed they cost only ~0.5 TB.
+
+
+## NuWro QE model as config versions `sf` and `lfg`; legacy config versions (2026-11)
+
+**The problem.** NuWro's `default` config version wrote no QE parameters, so it
+ran NuWro's built-in spectral function (`sf_method = 1`), which exists only for
+C12, O16, Ar40 and Fe56. On every other nucleus NuWro generated no QE events
+and reported no error. Every NuWro H1 and W184 sample since the first
+production run lacks QE ([generators/nuwro.md](generators/nuwro.md#no-qe-without-a-spectral-function)).
+
+**The decision.**
+- Two config versions that differ only in the QE model: `sf` (spectral
+  function) and `lfg` (local Fermi gas, every nucleus). The samples exist to
+  learn correlations between targets of one generator, so every target of a
+  config version must share the same physics.
+- A config version with a nucleus-limited model refuses the other nuclei at
+  validation time (`ConfigTranslator.validate_target`), and the translator
+  checks again.
+- `default` becomes a *legacy* config version (`legacy_config_versions` on the
+  adapter, with its reason): it still validates, with a warning, so old runs can
+  be merged and analyzed. `submit` and `retry` refuse it, and
+  `list-generators` no longer offers it. Its tasks write exactly the parameters
+  they did before.
+- `keystone_prod_v3_rejection` runs NuWro `sf` and drops NuWro's H1 and W184
+  targets.
+
+**Ruled out.**
+- *Falling back to the local Fermi gas where the spectral function is missing.*
+  It fills the gap, but with different physics on different targets under one
+  label, which is exactly what the comparisons must not contain.
+- *Removing `default`.* Every command validates the config on load, so the
+  configs of v1, v2 and the v3 pilot would no longer load for merging or
+  analysis, and renaming their entries would change their job labels and lose
+  their chunk files.
+- *Making `default` an alias of `sf`.* Two names for the same physics in the
+  version identity, and the old configs with NuWro H1/W184 jobs would still
+  stop loading.
