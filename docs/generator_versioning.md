@@ -28,7 +28,7 @@ for the other generators.
 reason it was retired (e.g. NuWro `default`). It still validates, with a
 warning, so the configs of runs made with it keep loading for `merge`,
 `check-status` and `analyze-kinematics`. `submit` and `retry` refuse it, and
-`list-generators` no longer offers it.
+`list-generators` does not offer it.
 
 **Nucleus restrictions.** A config version whose physics model exists only for
 some nuclei refuses the others during validation, through its translator's
