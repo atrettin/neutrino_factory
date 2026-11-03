@@ -37,28 +37,34 @@ does not use it — everything lives on `/ptmp`.
 
 ### Disk budget
 
-The 6 TB `/ptmp` quota is the binding limit for a production run. Per stored
-event (measured on `keystone_prod_v3_pilot`, 2026-10):
+The `/ptmp` quotas, 6 TB and 1 048 576 files per user (hard limits 7 TB and
+1 572 864 files), bound a production run. Check both with
+`/usr/lpp/mmfs/bin/mmlsquota --block-size=auto gpfsptmp` on the host (the
+command is not in the container). Per stored event (`keystone_prod_v3_smoke`,
+2026-11):
 
 | What | Where | Size per event |
 |---|---|---|
-| Raw generator output (GENIE, NuWro, NEUT) | `work/raw/` | ~2 KB |
-| Raw generator output (GiBUU) | `work/raw/` | ~6 KB |
+| Raw generator output (GENIE, NuWro, NEUT) | `work/raw/` | ~2–3 KB |
+| Raw generator output (GiBUU, `qes_oversampling: 8`) | `work/raw/` | ~0.3–0.6 KB, in ~300 files per chunk |
 | Chunk, common format | `output/chunks/` | ~80 B |
 | Merged file | `output/merged/` | ~80 B (a second copy of the chunks) |
 
 GiBUU stores more events than it is asked for: about 0.9 per requested event,
 and about 3.2 with `qes_oversampling: 8`.
 
-Raw output dominates: kept in full, it is ~25x the common output. Set
+Raw output dominates: kept in full, it is up to ~35x the common output, and
+GiBUU's files would exhaust the file quota in a few thousand chunks. Set
 `storage.keep_raw: first_chunk` (see
 [configuration.md](configuration.md#raw-generator-output-storagekeep_raw)) for any
-large run. Raw files then exist only while their task runs, plus chunk 0 of
-each job. Running tasks still hold theirs: up to ~2 GB for a 1e6-event
-rejection chunk and ~8 GB for a GiBUU chunk of ~1.3M stored events. Cap how many
-run at once with `slurm.array_limit` (see
-[configuration.md](configuration.md#slurm-manifest-schema-v4)), e.g. 300 GiBUU
-tasks hold at most ~2.4 TB. Chunks written before 2026-10 are uncompressed
+large run. A pruned chunk then leaves one file in `work/raw/`, and raw output
+exists only while its task runs, plus chunk 0 of each job. Running tasks still
+hold theirs: up to ~3 GB for a 1e6-event rejection chunk and ~0.6 GB for a
+GiBUU chunk of ~1.3M stored events. Cap how many run at once with
+`slurm.array_limit` (see
+[configuration.md](configuration.md#slurm-manifest-schema-v4)), e.g. 500
+rejection tasks hold at most ~1.5 TB. Every task also leaves two Slurm logs, a
+chunk and its sidecar: ~5 files. Chunks written before 2026-10 are uncompressed
 (~250 B per event); re-merging them through the current code writes a
 compressed copy.
 
@@ -83,7 +89,7 @@ Submitting from `mppui1`/`mppui2` targets the **new** MPP Slurm cluster
 | Interconnect | 10 Gb/s Ethernet, unsuitable for multi-node jobs |
 | OS, software | AlmaLinux 9 (may be upgraded without notice), Slurm 23.11.3, Apptainer, CVMFS |
 | Login nodes | `mppui1`, `mppui2`: 16 cores / 64 GB; each user may use 1/4 of the CPU time and 30 GB |
-| `/ptmp` quota | 6 TB per user (20 TB per project), no backup |
+| `/ptmp` quota | 6 TB and 1 048 576 files per user (20 TB per project), no backup |
 
 Source: https://docs.t2.mpcdf.mpg.de/resources/computing-new/ (read 2026-11-03),
 which notes that the limits "may change after migration". It does not list the

@@ -757,3 +757,26 @@ production run lacks QE ([generators/nuwro.md](generators/nuwro.md#no-qe-without
 - *Making `default` an alias of `sf`.* Two names for the same physics in the
   version identity, and the old configs with NuWro H1/W184 jobs would still
   stop loading.
+
+
+## Pruning removes every raw file but `translated_config.json` (2026-11)
+
+**The problem.** `storage.keep_raw` deleted only `*.root` files. GiBUU leaves
+~16 auxiliary files per pass (density tables, potentials, cross-section and
+multiplicity summaries, ~4.6 MB per pass), so a chunk with
+`qes_oversampling: 8` kept ~300 files and ~85 MB after pruning. The 4800
+GiBUU chunks of `keystone_prod_v3_gibuu` would have left ~1.4M files, beyond
+the 1 048 576-file `/ptmp` quota, and ~0.4 TB.
+
+**The decision.** Pruning deletes everything in a validated chunk's raw
+directory except `translated_config.json`, and removes the emptied
+subdirectories. That file records everything the task was run with: the
+jobcards, params files and flux tables are generated from it. Nothing reads a
+validated chunk's raw directory: `check-status --task` lists its newest files
+only as context, and the Slurm logs live in `work_root/logs/`.
+
+**Ruled out.**
+- *Per-generator lists of files to keep or delete.* They would have to follow
+  every generator's output files, and a file missed would accumulate silently.
+- *Keeping the jobcards as well.* They follow from the translated config, and
+  chunk 0 of every job keeps its complete raw directory as a sample.

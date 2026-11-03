@@ -44,20 +44,35 @@ def raw_output_path(config: Mapping[str, Any], task: Mapping[str, Any]) -> Path:
     return Path(config["storage"]["work_root"]) / "raw" / str(task["job_label"]) / stem / f"{stem}.json"
 
 
-def prune_raw_outputs(raw_dir: Path) -> int:
-    """Delete the raw generator event files (``*.root``) under ``raw_dir``.
+# The one file a pruned raw task directory keeps. It records everything the
+# task was run with: the jobcards, params files and flux tables are generated
+# from it.
+PRUNE_KEEP = "translated_config.json"
 
-    Returns the bytes freed. Only the ROOT files go: they hold the events and
-    are nearly all of a task's footprint. Logs, jobcards, flux tables and
-    ``translated_config.json`` stay, so ``check-status --task`` can still show
-    what the task did.
+
+def prune_raw_outputs(raw_dir: Path) -> tuple[int, int]:
+    """Delete everything the generator left in ``raw_dir`` but ``translated_config.json``.
+
+    Returns the bytes and the number of files freed. Besides the event files
+    (``*.root``), which are nearly all of the bytes, generators leave
+    auxiliary files: GiBUU writes ~16 per pass, ~300 per chunk with
+    ``qes_oversampling: 8``, which in a large run would exhaust the
+    filesystem's file quota. Only files in a validated chunk's directory are
+    deleted, which nothing reads any more; the Slurm logs live elsewhere.
+    Emptied subdirectories are removed too.
     """
-    freed = 0
-    for path in sorted(raw_dir.rglob("*.root")):
-        if path.is_file() and not path.is_symlink():
-            freed += path.stat().st_size
-            path.unlink()
-    return freed
+    freed_bytes = 0
+    freed_files = 0
+    for path in sorted(raw_dir.rglob("*")):
+        if path == raw_dir / PRUNE_KEEP or path.is_dir() and not path.is_symlink():
+            continue
+        freed_bytes += path.lstat().st_size
+        freed_files += 1
+        path.unlink()
+    for path in sorted(raw_dir.rglob("*"), reverse=True):
+        if path.is_dir() and not path.is_symlink() and not any(path.iterdir()):
+            path.rmdir()
+    return freed_bytes, freed_files
 
 
 def chunk_output_path(config: Mapping[str, Any], task: Mapping[str, Any]) -> Path:
