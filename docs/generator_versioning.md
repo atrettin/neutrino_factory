@@ -23,6 +23,18 @@ Config validation is *availability-only* for GENIE (known `code_version` +
 non-empty `config_version`) and strict against the static `config_versions`
 for the other generators.
 
+**Legacy config versions.** A retired config version moves from
+`config_versions` to `legacy_config_versions`, a map from its name to the
+reason it was retired (e.g. NuWro `default`). It still validates, with a
+warning, so the configs of runs made with it keep loading for `merge`,
+`check-status` and `analyze-kinematics`. `submit` and `retry` refuse it, and
+`list-generators` no longer offers it.
+
+**Nucleus restrictions.** A config version whose physics model exists only for
+some nuclei refuses the others during validation, through its translator's
+`validate_target` (e.g. NuWro `sf`). It never falls back to a different model
+for them, so all targets of one config version share the same physics.
+
 The uniform version identifier is `f"{code_version}+{config_version}"`.
 
 Version info is written to output HDF5 **metadata only** (keys

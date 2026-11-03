@@ -34,7 +34,7 @@ class ConfigTests(unittest.TestCase):
                     job(
                         generator="nuwro",
                         code_version="nuwro_25.11",
-                        config_version="default",
+                        config_version="sf",
                     ),
                 ]
             )
@@ -64,7 +64,7 @@ class ConfigTests(unittest.TestCase):
     def test_incompatible_config_version_raises(self) -> None:
         # GENIE validation is availability-only (tunes are not enumerated in
         # advance), so an incompatible config_version is checked against a
-        # generator that declares a static config-version set: NuWro's "default".
+        # generator that declares a static config-version set: NuWro's "sf"/"lfg".
         with self.assertRaises(ConfigError):
             run_config(
                 [

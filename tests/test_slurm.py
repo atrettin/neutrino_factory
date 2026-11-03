@@ -275,7 +275,7 @@ class RunTaskCliTests(unittest.TestCase):
                 {
                     "task_index": 0,
                     "generator_name": "nuwro",
-                    "generator_version_token": "nuwro_25.11_default",
+                    "generator_version_token": "nuwro_25.11_sf",
                     "chunk_id": 0,
                     "run_name": "test_run",
                 }

@@ -132,8 +132,8 @@ def _base_task() -> dict:
         "start_event": 0,
         "event_count": 3,
         "code_version": "nuwro_25.11",
-        "config_version": "default",
-        "generator_version_id": "nuwro_25.11+default",
+        "config_version": "sf",
+        "generator_version_id": "nuwro_25.11+sf",
     }
 
 

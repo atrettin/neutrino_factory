@@ -174,6 +174,17 @@ def _validate_job(
             )
         except catalog.CatalogError as error:
             errors.append(f"{where}: {error}")
+        else:
+            nucleus = str(job.get("target", {}).get("nucleus", ""))
+            errors.extend(
+                catalog.translator_cls(generator).validate_target(config_version, nucleus, where)
+            )
+            reason = catalog.legacy_reason(generator, code_version, config_version)
+            if reason:
+                warnings.add(
+                    f"{generator} config_version '{config_version}' is legacy: {reason} "
+                    "Configurations using it still load, but submit and retry refuse it."
+                )
 
     try:
         events = int(job.get("events", 0))
@@ -367,6 +378,28 @@ def validate_config(config: Dict[str, Any]) -> None:
     for warning in sorted(warnings):
         LOGGER.warning(warning)
 
+    if errors:
+        raise ConfigError("; ".join(errors))
+
+
+def ensure_no_legacy_versions(config: Dict[str, Any]) -> None:
+    """Refuse to create tasks for jobs whose config version is legacy.
+
+    Legacy config versions only stay known so that old runs keep loading
+    (``GeneratorAdapter.known_config_versions``). ``submit`` and ``retry`` call this
+    before they write anything.
+    """
+    errors = []
+    for job in config.get("jobs", []):
+        generator = str(job.get("generator") or "")
+        code_version = str(job.get("code_version") or "")
+        config_version = str(job.get("config_version") or "")
+        reason = catalog.legacy_reason(generator, code_version, config_version)
+        if reason:
+            errors.append(
+                f"{job.get('label', '?')}: {generator} config_version '{config_version}' "
+                f"is legacy and cannot be submitted. {reason}"
+            )
     if errors:
         raise ConfigError("; ".join(errors))
 

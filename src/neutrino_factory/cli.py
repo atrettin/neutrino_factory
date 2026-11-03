@@ -9,7 +9,13 @@ from typing import Any
 
 from . import catalog
 from .common_output import MergeError
-from .config import ConfigError, enabled_generators, load_config, load_env_file
+from .config import (
+    ConfigError,
+    enabled_generators,
+    ensure_no_legacy_versions,
+    load_config,
+    load_env_file,
+)
 from .jobs import job_summaries
 from .kinematics_report import (
     analyze_config,
@@ -166,6 +172,7 @@ def _apply_array_limit(config: dict[str, Any], args: argparse.Namespace) -> None
 
 def cmd_submit(args: argparse.Namespace) -> int:
     config = load_config(args.config)
+    ensure_no_legacy_versions(config)
     if args.executor is not None:
         config["run"]["executor"] = args.executor
     _apply_array_limit(config, args)
@@ -254,6 +261,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
     tasks are never selected.
     """
     config = load_config(args.config)
+    ensure_no_legacy_versions(config)
     manifest_path = default_manifest_path(config)
 
     if not manifest_path.exists():

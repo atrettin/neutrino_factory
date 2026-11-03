@@ -12,7 +12,7 @@ normalized onto are in [../physics.md](../physics.md); the run pipeline is in
 | | |
 |---|---|
 | Code versions | `nuwro_25.11` |
-| `config_version` | `default` only; no parameter-set versioning yet |
+| `config_version` | `sf` (spectral function, C12/O16/Ar40/Fe56 only) or `lfg` (local Fermi gas, any nucleus); `default` is legacy ([Config versions](#config-versions)) |
 | Sampling | unweighted (rejection-sampled) |
 | Raw σ → per nucleon | bare cm², already per nucleon → `× 1e38`, no `÷ A` |
 | `physics.current` | the `dyn_*` channel switches ([Weak current](#weak-current)) |
@@ -29,18 +29,41 @@ data staging step. Its image needs Pythia6, built by the shared
 ## Configuring a job
 
 There are no NuWro-specific knobs in the run config besides
-`nuwro.universes`. Everything else NuWro needs is generated:
+`config_version` and `nuwro.universes`. Everything else NuWro needs is
+generated:
 
 - **Flux.** Any framework flux works; NuWro gets it as a 500-bin equal-width
   histogram ([Implementation](#flux)).
-- **Target.** Any nucleus works. It is selected by proton and neutron count
-  derived from the name, so no table entry is needed.
+- **Target.** Selected by proton and neutron count derived from the name, so no
+  table entry is needed. Which nuclei work depends on the config version.
 - **Dynamics.** All channels of the selected current are on, except ν-e
   scattering (`dyn_lep`), which is off for every current because its target is an
   atomic electron ([Weak current](#weak-current)).
 - **Physics defaults that matter downstream** are NuWro's own and not
-  overridden: the spectral function for QE (`sf_method = 1`), the hybrid RES
-  model (`res_kind = 2`), and `res_dis_cut = 1900` MeV.
+  overridden: the hybrid RES model (`res_kind = 2`) and `res_dis_cut = 1900`
+  MeV. The QE nuclear model is the config version.
+
+### Config versions
+
+The two config versions differ only in the nuclear model of quasi-elastic
+scattering. Both pin the nucleon model of every other channel to NuWro's local
+Fermi gas (`nucleus_target = 2`).
+
+| `config_version` | QE model | Nuclei |
+|---|---|---|
+| `sf` | spectral function (`sf_method = 1`, NuWro's default) | C12, O16, Ar40, Fe56 only |
+| `lfg` | local Fermi gas (`sf_method = 0`) | any; on H1 the proton is at rest |
+
+- **`sf` refuses other nuclei.** `validate-config` fails for an `sf` job on any
+  nucleus outside the four, so a set of targets run with one config version
+  always shares the same physics. For other nuclei, use `lfg` for every target,
+  or drop them.
+- **`default` is legacy.** It wrote no QE parameters, so it ran NuWro's built-in
+  `sf` physics on every nucleus. On nuclei without a spectral function (H1,
+  W184) NuWro then generated no QE events at all, without an error. Configs
+  using `default` still load, so old runs can be merged, checked and analyzed,
+  with a warning. `submit` and `retry` refuse it. Its outputs on C12, O16, Ar40
+  and Fe56 are the same physics as `sf`; on other nuclei they lack QE.
 
 **Keep `NF_WORK_ROOT` short** when testing; NuWro aborts on long work-directory
 paths ([Known limitations](#known-limitations)).
@@ -162,9 +185,11 @@ energy subtracted from its energy alone, but stores the unbound nucleon in
   `nuc0.t -= _E_bind` in `disevent.cc`. The hadrons are built in that copy's rest
   frame with invariant mass W and boosted back. The three-momentum balances
   exactly; the energy is short by `E_b`, median ~33 MeV.
-- **QE:** `qelevent1.cc` subtracts it before solving the kinematics
+- **QE with `lfg`:** `qelevent1.cc` subtracts it before solving the kinematics
   (`aa.t -= _E_bind`). The stored QE vertex has a median energy deficit of
-  ~6 MeV and a median missing three-momentum of ~18 MeV.
+  ~6 MeV and a median missing three-momentum of ~18 MeV. With `sf`, QE comes
+  from `sfevent.cc` instead, which draws the nucleon's momentum and removal
+  energy from the spectral function.
 
 For the framework's runs (`nucleus_target = 2`, local Fermi gas):
 
@@ -245,8 +270,9 @@ a 20k-event chunk take seconds.
   every event count ≥ 3k (2k passes). Other flavours on W184 and `numubar` on
   Fe56 are unaffected. The cause is not diagnosed (probably unrelated to the path
   limit), and the production grid drops `nuwro/W184/numubar`.
-- `config_version` is `"default"` only; real parameter-set versions are not yet
-  defined.
+- **The spectral function covers four nuclei.** NuWro 25.11's `sf_method = 1`
+  has spectral functions for C12, O16, Ar40 and Fe56 only, hence the nucleus
+  restriction of `sf` ([Config versions](#config-versions)).
 - `run.log_level` is ignored.
 
 ---
@@ -277,8 +303,13 @@ generator wrapper that must `cd`.
 
 Like every adapter, `build_run_command` runs a binary found on `$PATH` before considering a container, since a cluster task already runs inside the Apptainer image, which cannot nest ([../apptainer_image.md](../apptainer_image.md)).
 
-Adding parameter-set versions means extending `config_versions` on the adapter
-and mapping each to a set of `params.txt` overrides.
+`CONFIG_VERSION_PARAMS` in `translators/nuwro.py` maps each `config_version`
+to its `params.txt` overrides, and `CONFIG_VERSION_NUCLEI` to the nuclei it can
+predict (absent: every nucleus). The translator's `validate_target` checks the
+nucleus during config validation, and `translate` checks it again. A new
+parameter set is an entry in both tables plus a `config_versions` entry on
+`NuWroAdapter`; a retired one moves to `legacy_config_versions` with its
+reason.
 
 ### Flux
 
@@ -414,6 +445,19 @@ call; the norms are applied in Python from the event flags.
 
 ## Design notes
 
+### The QE nuclear model is the config version (2026-11)
+
+The framework's samples exist to compare targets with one generator, so every
+target of a config version must share the same physics. NuWro's own default
+QE model, the spectral function, exists for only four nuclei, and on any other
+nucleus `sfevent` returns no event without an error. Switching to the local
+Fermi gas only where the spectral function is missing would fill the gap, but
+with different physics on different targets under one label. Instead `sf` and
+`lfg` are separate config versions, and `sf` refuses the nuclei it cannot
+predict, at validation time rather than after hours of generation. `default`
+stays known as a legacy version so the runs made with it can still be merged
+and analyzed.
+
 ### The flux is rebuilt from the config
 
 Elsewhere the framework normalizes against the flux the generator itself
@@ -506,6 +550,17 @@ channels unchanged.
 
 A sample generated at `pion_axial_mass = 1.04` has the same RES σ as one at 0.94
 (0.4131 ×10⁻³⁸ cm² both, same seed).
+
+### No QE without a spectral function
+
+In `keystone_prod_v3_pilot` and `keystone_prod_v3_smoke` (config version
+`default`), every NuWro sample on H1 and W184, all four flavours, had zero
+`qel` events, while each C12, O16, Ar40 and Fe56 sample had them (76k in one
+Fe56 chunk of 333k). NuWro's own summary (`events.root.txt`) lists σ = 0 for
+`dyn` 0 and 1 on W184. The cause is in `src/sfevent.cc`: with `sf_method = 1` it
+maps (Z, N) to C12, O16, Ar40 or Fe56 and returns 0 for any other target.
+NuWro's own test presets (`src/simulations.h`) run every nucleus with
+`sf_method = 0`.
 
 ## Upstream issues
 

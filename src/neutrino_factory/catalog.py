@@ -87,6 +87,15 @@ def build_arg(generator: str, code_version: str) -> dict[str, str] | None:
     return _adapter(generator).build_arg(code_version)
 
 
+def legacy_reason(generator: str, code_version: str, config_version: str) -> str | None:
+    """Why a config version was retired, or ``None`` if it is current.
+
+    Legacy config versions still validate, so old runs can be merged and
+    analyzed, but no new tasks may be submitted with them.
+    """
+    return _adapter(generator).legacy_config_version_reason(code_version, config_version)
+
+
 def ensure_known(generator: str, code_version: str) -> None:
     _adapter(generator).ensure_code_version(code_version)
 

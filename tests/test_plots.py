@@ -136,7 +136,7 @@ class MakeConfigPlotsTests(unittest.TestCase):
                 if jobs is not None
                 else [
                     self._job("genie", "R-3_06_00", "G18_10a_02_11a"),
-                    self._job("nuwro", "nuwro_25.11", "default"),
+                    self._job("nuwro", "nuwro_25.11", "sf"),
                 ],
                 "storage": {
                     "software_root": str(root / "software"),
@@ -207,7 +207,7 @@ class MakeConfigPlotsTests(unittest.TestCase):
                 root,
                 jobs=[
                     self._job("genie", "R-3_06_00", "G18_10a_02_11a"),
-                    self._job("nuwro", "nuwro_25.11", "default"),
+                    self._job("nuwro", "nuwro_25.11", "sf"),
                     self._job(
                         "genie",
                         "R-3_06_00",

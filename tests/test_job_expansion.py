@@ -182,7 +182,7 @@ class MatrixTests(unittest.TestCase):
                             "include": [
                                 TRIPLE,
                                 {"generator": "nuwro", "code_version": "nuwro_25.11",
-                                 "config_version": "default"},
+                                 "config_version": "sf"},
                             ],
                         },
                     }
@@ -194,9 +194,9 @@ class MatrixTests(unittest.TestCase):
             [(j["generator"], j["config_version"], j["flux"]["particle"]) for j in jobs],
             [
                 ("genie", "G18_10a_02_11a", "numu"),
-                ("nuwro", "default", "numu"),
+                ("nuwro", "sf", "numu"),
                 ("genie", "G18_10a_02_11a", "numubar"),
-                ("nuwro", "default", "numubar"),
+                ("nuwro", "sf", "numubar"),
             ],
         )
 
@@ -285,7 +285,7 @@ class LabelTests(unittest.TestCase):
         alone = expand_jobs({"jobs": [job(target={"nucleus": "C12"})]})
         with_neighbour = expand_jobs(
             {"jobs": [job(generator="nuwro", code_version="nuwro_25.11",
-                          config_version="default"),
+                          config_version="sf"),
                       job(target={"nucleus": "C12"})]}
         )
         self.assertEqual(alone[0]["label"], with_neighbour[1]["label"])
@@ -310,7 +310,7 @@ class SeedTests(unittest.TestCase):
             job(generator="genie", config_version=tune, events=100, chunks=20)
             for tune in ("G18_10a_02_11a", "AR23_20i_00_000")
         ] + [job(generator="nuwro", code_version="nuwro_25.11",
-                 config_version="default", events=100, chunks=20)]
+                 config_version="sf", events=100, chunks=20)]
         manifest = build_task_manifest(run_config(jobs))
         seeds = [task["seed"] for task in manifest["tasks"]]
         self.assertEqual(len(seeds), 60)
@@ -319,7 +319,7 @@ class SeedTests(unittest.TestCase):
     def test_inserting_a_job_leaves_other_seeds_untouched(self) -> None:
         original = job(target={"nucleus": "C12"}, chunks=4)
         inserted = job(generator="nuwro", code_version="nuwro_25.11",
-                       config_version="default", chunks=4)
+                       config_version="sf", chunks=4)
 
         before = build_task_manifest(run_config([original]))
         after = build_task_manifest(run_config([inserted, original]))

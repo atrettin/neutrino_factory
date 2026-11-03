@@ -113,20 +113,41 @@ class GeneratorAdapter(ABC):
 
     @classmethod
     def known_config_versions(cls, code_version: str) -> list[str]:
-        """Statically declared config versions for a code version."""
+        """Statically declared config versions for a code version, legacy ones included.
+
+        A legacy config version (``legacy_config_versions`` in the
+        ``CODE_VERSIONS`` entry, mapping its name to the reason it was retired)
+        stays known so that configurations of runs made with it still load for
+        merging, status checks and analysis. Submitting new tasks with it is
+        refused (:meth:`legacy_config_version_reason`).
+        """
         entry = cls.CODE_VERSIONS.get(code_version, {})
-        return list(entry.get("config_versions", ["default"]))
+        return [
+            *entry.get("config_versions", ["default"]),
+            *entry.get("legacy_config_versions", {}),
+        ]
+
+    @classmethod
+    def legacy_config_version_reason(cls, code_version: str, config_version: str) -> str | None:
+        """Why ``config_version`` was retired, or ``None`` if it is current."""
+        entry = cls.CODE_VERSIONS.get(code_version, {})
+        return entry.get("legacy_config_versions", {}).get(config_version)
 
     @classmethod
     def available_config_versions(
         cls, code_version: str, software_root: str | Path | None = None
     ) -> list[str]:
-        """Config versions to surface in bookkeeping.
+        """Config versions to surface in bookkeeping: those new runs may use.
 
-        The default is the static ``known_config_versions``. GENIE overrides this
-        to discover tunes from staged cross-section files on disk.
+        The default is the static ``known_config_versions`` without the legacy
+        ones. GENIE overrides this to discover tunes from staged cross-section
+        files on disk.
         """
-        return cls.known_config_versions(code_version)
+        return [
+            version
+            for version in cls.known_config_versions(code_version)
+            if cls.legacy_config_version_reason(code_version, version) is None
+        ]
 
     @classmethod
     def ensure_code_version(cls, code_version: str) -> None:

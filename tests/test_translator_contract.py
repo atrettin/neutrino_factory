@@ -76,7 +76,7 @@ class TranslatorFlavourTests(unittest.TestCase):
             "genie": ("R-3_06_00", "G18_10a_02_11a"),
             "gibuu": ("release2025", "default"),
             "neut": ("5.7.0-nuint2024", "default"),
-            "nuwro": ("nuwro_25.11", "default"),
+            "nuwro": ("nuwro_25.11", "sf"),
         }[generator]
         return {
             "event_count": 10,
