@@ -222,9 +222,13 @@ validated only with `--check-merged`, since they exist only after `merge`.
 
 ## Diagnosing and retrying failed tasks
 
-`check-status` classifies every task that is not finished and valid, and lists
-the failures by mode with the node, the elapsed time against the job's median
-chunk duration, and a one-line reason:
+`check-status` classifies every task that is not finished and valid and
+prints the number of tasks per mode. Its summary block counts the chunks whose
+task is running now (`running:`) and those not finished yet (`not finished:`,
+running or queued). With `--list-failures` it also lists the failures by mode,
+one row per task, with the node, the elapsed time against the job's median
+chunk duration, and a one-line reason. The list is opt-in because a large run
+waiting in the queue puts every queued task in it as `no_output`:
 
 | mode | meaning | evidence |
 |---|---|---|
@@ -238,13 +242,14 @@ chunk duration, and a one-line reason:
 | `no_output` | no sidecar and no log | still queued, **or** never started because its node failed |
 
 Inside the container, `check-status` cannot ask Slurm, so a `no_output` task is
-exactly that: one that left nothing behind. It prints the `sacct` command that
-tells the two cases apart; run it from the submission node. For hung tasks it
-prints a ready-to-paste `scancel` command. A "Nodes with failures" table counts
+exactly that: one that left nothing behind. With `--list-failures` it prints the
+`sacct` command that tells the two cases apart; run it from the submission node.
+For hung tasks it always prints a ready-to-paste `scancel` command. A "Nodes with failures" table counts
 failures per node, from the node each task records in its sidecar and log.
 
 ```bash
 neutrino-factory check-status --config <cfg> --failed-only      # per-job table: problem jobs only
+neutrino-factory check-status --config <cfg> --list-failures    # one row per failed task, plus sacct
 neutrino-factory check-status --config <cfg> --task 217 --task 2528   # everything about two tasks
 ```
 

@@ -211,13 +211,16 @@ def validate_file(
 
 
 def summarize(
-    results: list[dict[str, Any]], unfinished: Collection[int] = ()
+    results: list[dict[str, Any]],
+    unfinished: Collection[int] = (),
+    running: Collection[int] = (),
 ) -> dict[str, Any]:
     """Roll up a list of ``validate_file`` results into summary statistics.
 
     ``unfinished`` holds the positions in ``results`` of files whose task has not
     finished yet (still running or queued). Their missing or partial output is
     expected, so they are counted separately instead of under ``with_errors``.
+    ``running`` holds the positions of those whose task is running now.
     """
     total = len(results)
     existing = sum(1 for r in results if r["exists"])
@@ -234,6 +237,7 @@ def summarize(
         "valid": valid,
         "with_errors": with_errors,
         "unfinished": len(unfinished),
+        "running": len(set(running)),
         "fraction_existing": fraction(existing),
         "fraction_valid": fraction(valid),
         "fraction_with_errors": fraction(with_errors),
@@ -283,6 +287,7 @@ def format_summary(summary: dict[str, Any]) -> str:
         f"  with errors: {summary['with_errors']}/{summary['total']} "
         f"({summary['fraction_with_errors']:.0%})"
         + (
+            f"\n  running: {summary['running']}/{summary['total']}"
             f"\n  not finished: {summary['unfinished']}/{summary['total']}"
             if summary.get("unfinished")
             else ""

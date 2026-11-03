@@ -10,6 +10,7 @@ from neutrino_factory.common_output import write_common_hdf5
 from neutrino_factory.validate_output import (
     check_columns,
     check_event_count,
+    format_summary,
     summarize,
     validate_file,
 )
@@ -138,6 +139,16 @@ class ValidateOutputTests(unittest.TestCase):
             summary = summarize([good, pending, failed], unfinished=[1])
             self.assertEqual(summary["with_errors"], 1)
             self.assertEqual(summary["unfinished"], 1)
+
+    def test_summary_reports_running_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            results = [validate_file(d / f"{i}.h5") for i in range(3)]
+            summary = summarize(results, unfinished=[0, 1, 2], running=[0, 2])
+            self.assertEqual(summary["running"], 2)
+            text = format_summary(summary)
+            self.assertIn("running: 2/3", text)
+            self.assertIn("not finished: 3/3", text)
 
 
 if __name__ == "__main__":
