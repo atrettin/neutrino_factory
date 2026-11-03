@@ -142,10 +142,14 @@ class LocalPipelineTests(unittest.TestCase):
 
 
 class KeepRawTests(unittest.TestCase):
-    """storage.keep_raw deletes raw ROOT output once a chunk validates."""
+    """storage.keep_raw deletes a chunk's raw output once the chunk validates."""
 
     def _run(self, keep_raw: str | None, tmpdir: str) -> dict[int, list[str]]:
-        """Run a 3-chunk stub job with a planted ROOT file per task; list what survives."""
+        """Run a 3-chunk stub job with planted generator files per task; list what survives.
+
+        Each raw directory gets a ROOT file and an auxiliary file in a pass
+        subdirectory (like GiBUU's), a jobcard, and the translated config.
+        """
         env = {
             "NF_SOFTWARE_ROOT": f"{tmpdir}/software",
             "NF_OUTPUT_ROOT": f"{tmpdir}/output",
@@ -159,40 +163,43 @@ class KeepRawTests(unittest.TestCase):
                 raw_dir = layout.raw_output_path(config, task).parent
                 (raw_dir / "pass").mkdir(parents=True)
                 (raw_dir / "pass" / "events.ghep.root").write_bytes(b"x" * 100)
-                (raw_dir / "jobcard.txt").write_text("kept")
+                (raw_dir / "pass" / "sigma.dat").write_text("aux")
+                (raw_dir / "jobcard.txt").write_text("card")
+                # Real adapters write it; stub mode does not.
+                (raw_dir / "translated_config.json").write_text("{}")
                 raw_dirs[int(task["chunk_id"])] = raw_dir
             run_local(config)
         return {
-            chunk: sorted(p.name for p in raw_dir.rglob("*") if p.is_file())
+            chunk: sorted(str(p.relative_to(raw_dir)) for p in raw_dir.rglob("*"))
             for chunk, raw_dir in raw_dirs.items()
         }
 
     def test_default_keeps_everything(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             for files in self._run(None, tmpdir).values():
-                self.assertIn("events.ghep.root", files)
+                self.assertIn("pass/events.ghep.root", files)
+                self.assertIn("pass/sigma.dat", files)
 
     def test_first_chunk_keeps_only_chunk_zero(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             survivors = self._run("first_chunk", tmpdir)
-        self.assertIn("events.ghep.root", survivors[0])
+        self.assertIn("pass/events.ghep.root", survivors[0])
+        self.assertIn("jobcard.txt", survivors[0])
         for chunk in (1, 2):
-            self.assertNotIn("events.ghep.root", survivors[chunk])
-            # Logs, jobcards and configs stay for check-status --task.
-            self.assertIn("jobcard.txt", survivors[chunk])
-            self.assertTrue(any(name.endswith(".json") for name in survivors[chunk]))
+            # Only the translated config stays; emptied subdirectories go too.
+            self.assertEqual(survivors[chunk], ["translated_config.json"])
 
     def test_none_deletes_every_chunk(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             for files in self._run("none", tmpdir).values():
-                self.assertNotIn("events.ghep.root", files)
-                self.assertIn("jobcard.txt", files)
+                self.assertEqual(files, ["translated_config.json"])
 
     def test_invalid_output_keeps_its_raw_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("neutrino_factory.local.validate_file", return_value={"valid": False}):
                 for files in self._run("none", tmpdir).values():
-                    self.assertIn("events.ghep.root", files)
+                    self.assertIn("pass/events.ghep.root", files)
+                    self.assertIn("pass/sigma.dat", files)
 
     def test_unknown_policy_is_rejected(self) -> None:
         with self.assertRaises(ConfigError) as ctx:

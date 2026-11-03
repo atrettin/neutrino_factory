@@ -113,10 +113,11 @@ def run_task(config: dict[str, Any], task: dict[str, Any], execution_mode: str =
     valid = bool(validate_file(normalized_path, expected_events=None)["valid"])
     status.finish_sidecar(sidecar_path, valid=valid)
     if valid and _prunes_raw(config, task):
-        freed = layout.prune_raw_outputs(raw_path.parent)
+        freed_bytes, freed_files = layout.prune_raw_outputs(raw_path.parent)
         print(
-            f"neutrino-factory: deleted {freed / 1e9:.2f} GB of raw output in "
-            f"{raw_path.parent} (storage.keep_raw: {config['storage'].get('keep_raw')})",
+            f"neutrino-factory: deleted {freed_bytes / 1e9:.2f} GB in {freed_files} files of "
+            f"raw output in {raw_path.parent} "
+            f"(storage.keep_raw: {config['storage'].get('keep_raw')})",
             file=sys.stderr,
             flush=True,
         )

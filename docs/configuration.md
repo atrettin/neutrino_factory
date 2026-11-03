@@ -393,22 +393,25 @@ Slurm jobs consistently.
 
 ## Raw generator output: `storage.keep_raw`
 
-Each task writes the generator's own event files (`*.root`) into its work
-directory under `work_root/raw/`, normalizes them into a chunk under
-`output_root/chunks/`, and by default keeps both. The raw files are about ten
-times the size of the chunk, so for a production run they decide whether the
-run fits on disk. `storage.keep_raw` sets what is deleted once a chunk has
+Each task writes the generator's own event files (`*.root`) and auxiliary
+files into its work directory under `work_root/raw/`, normalizes them into a
+chunk under `output_root/chunks/`, and by default keeps both. The raw files are
+up to ~35 times the size of the chunk, and GiBUU leaves ~300 files per chunk
+with `qes_oversampling: 8`, so for a production run they decide whether the run
+fits within the disk and file quotas. `storage.keep_raw` sets what is deleted once a chunk has
 normalized **and** validated:
 
 | Value | Keeps |
 |---|---|
 | `all` (default) | every raw file |
 | `first_chunk` | chunk 0 of every job, as a sample to debug or re-check the normalizer on |
-| `none` | no raw event files |
+| `none` | no raw files |
 
-Only `*.root` files are deleted. Logs, jobcards, flux tables and
-`translated_config.json` stay, so `check-status --task` still works, and a task
-whose output fails validation keeps everything. The task's Slurm log records the
+Pruning a chunk deletes everything in its raw directory except
+`translated_config.json`, which records everything the task was run with (the
+jobcards, params files and flux tables are generated from it). The Slurm logs
+live in `work_root/logs/` and stay. A task whose output fails validation keeps
+everything, so `check-status --task` can show what it left. The task's Slurm log records the
 amount freed. Without raw files, a later normalizer fix means regenerating the
 affected chunks rather than re-normalizing them.
 
