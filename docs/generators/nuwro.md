@@ -58,12 +58,12 @@ Fermi gas (`nucleus_target = 2`).
   nucleus outside the four, so a set of targets run with one config version
   always shares the same physics. For other nuclei, use `lfg` for every target,
   or drop them.
-- **`default` is legacy.** It wrote no QE parameters, so it ran NuWro's built-in
-  `sf` physics on every nucleus. On nuclei without a spectral function (H1,
-  W184) NuWro then generated no QE events at all, without an error. Configs
-  using `default` still load, so old runs can be merged, checked and analyzed,
-  with a warning. `submit` and `retry` refuse it. Its outputs on C12, O16, Ar40
-  and Fe56 are the same physics as `sf`; on other nuclei they lack QE.
+- **`default` is legacy.** It writes no QE parameters, so it runs NuWro's
+  built-in `sf` physics on every nucleus, and on nuclei without a spectral
+  function (e.g. H1, W184) its samples contain no QE events. Configs using
+  `default` load with a warning, so their runs can be merged, checked and
+  analyzed; `submit` and `retry` refuse it. Its samples on C12, O16, Ar40 and
+  Fe56 are the same physics as `sf`.
 
 **Keep `NF_WORK_ROOT` short** when testing; NuWro aborts on long work-directory
 paths ([Known limitations](#known-limitations)).
@@ -455,8 +455,8 @@ Fermi gas only where the spectral function is missing would fill the gap, but
 with different physics on different targets under one label. Instead `sf` and
 `lfg` are separate config versions, and `sf` refuses the nuclei it cannot
 predict, at validation time rather than after hours of generation. `default`
-stays known as a legacy version so the runs made with it can still be merged
-and analyzed.
+is a legacy version, known only so that runs made with it can be merged and
+analyzed.
 
 ### The flux is rebuilt from the config
 

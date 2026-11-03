@@ -75,8 +75,8 @@ Submitting from `mppui1`/`mppui2` targets the **new** MPP Slurm cluster
 | Property | Value |
 | --- | --- |
 | Partition | `alma` (mandatory; the only one) |
-| Max job duration | 1 day (`1-00:00:00`) |
-| Queue limits | 25 000 queued / 10 000 running jobs per user |
+| Max job duration | 1 day (`1-00:00:00`); `MaxNodes=1`, no partition QOS |
+| Job limits per user | 25 000 submitted (queued + running), **3 000 running**; array tasks count individually (see below) |
 | Job array size | `MaxArraySize = 10000`, so indices 0–9999 (`scontrol show config`, 2026-11) |
 | Nodes (documented) | `bt[01-28]`: 32 cores / 187 GB (~5.8 GB per core); `kt[01-12]`: 64 cores / 256 GB (~4 GB per core) |
 | Nodes (observed) | old-cluster nodes are being added: tasks ran on `gt03` in 2026-10 |
@@ -88,9 +88,24 @@ Submitting from `mppui1`/`mppui2` targets the **new** MPP Slurm cluster
 Source: https://docs.t2.mpcdf.mpg.de/resources/computing-new/ (read 2026-11-03),
 which notes that the limits "may change after migration". It does not list the
 array size, nor default or maximum memory per job; the array size above was
-read with `scontrol show config | grep MaxArraySize`. An earlier belief in a
-4000-task array limit has no source and is wrong for this cluster. Check
-quotas with `/usr/lpp/mmfs/bin/mmlsquota --block-size=auto gpfsptmp` (and
+read with `scontrol show config | grep MaxArraySize`.
+
+**Job limits: the page's numbers are account defaults.** The page gives
+25 000 queued and 10 000 running jobs per user. Those are the limits on the
+`mpp` account, which Slurm passes down to its users as defaults. A user's own
+association can override them: for `atrettin` (2026-11) it sets
+`MaxJobs=3000`, so at most 3000 tasks run at once and the rest wait with
+reason `AssocMaxJobsLimit`. That is harmless while `slurm.array_limit` stays
+below it. No `Grp*` (shared) limits are set on the account. To see the limits
+the controller actually enforces for you (cluster `tier2`):
+
+```bash
+scontrol show assoc_mgr users=$USER flags=assoc | grep -A1 "UserName=$USER"
+```
+
+The numbers in brackets are current usage.
+
+Check quotas with `/usr/lpp/mmfs/bin/mmlsquota --block-size=auto gpfsptmp` (and
 `gpfsu` for home).
 
 Beware: a job submitted there with an old-cluster partition name (`short`,

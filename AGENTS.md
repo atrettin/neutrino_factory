@@ -43,7 +43,7 @@ Before running any of the commands below, ensure the correct environment is acti
   - **Inside `nf-base.sif`**: Production runs (`neutrino-factory` CLI, generator execution, Python scripts) via `cenv nf-env`.
   - **Inside `nf-dev.sif`**: Contains all packages `nf-base.sif` contains, and also packages necessary for development, testing and remote management with VSCode (`curl`, `git`, `nano`, `wget`, `pyright`, `pytest`, etc.). See `setup/apptainer/nf-dev.def` for full package list. If you are on a cluster, can run `neutrino-factory` but are missing the development packages, STOP and tell the user to build the development image. This CANNOT be done by you if you are already running from inside a container, because `apptainer` is not available.
 - Cluster scripts use `apptainer` directly; interactive work via `cenv nf-env` or `cenv nf-dev`
-- Mandatory Slurm partition: `--partition=alma` on new cluster. Max duration: 1 day. Max array size: 10000 tasks (indices 0–9999). Per user: 25 000 queued / 10 000 running jobs. Details, sources and measured per-task memory: `docs/mpp_cluster_usage.md`.
+- Mandatory Slurm partition: `--partition=alma` on new cluster. Max duration: 1 day. Max array size: 10000 tasks (indices 0–9999). Per user: 25 000 submitted / 3 000 running jobs (the user association's limits, not the 10 000 on the MPCDF page). Details, sources and measured per-task memory: `docs/mpp_cluster_usage.md`.
 - Filesystems: `/u` (home, 125 GB, backed up), `/ptmp/mpp/$USER` (6 TB, shared, no backup). Use `/ptmp` for repo, images, output, work. `/scratch` is NOT accessible inside containers.
 
 ## Architecture essentials
