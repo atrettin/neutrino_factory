@@ -74,16 +74,50 @@ Submitting from `mppui1`/`mppui2` targets the **new** MPP Slurm cluster
 
 | Property | Value |
 | --- | --- |
-| Partition | `alma` (mandatory) |
+| Partition | `alma` (mandatory; the only one) |
 | Max job duration | 1 day (`1-00:00:00`) |
-| Nodes | 28× Intel Xeon (32 cores / 187 GB) + 12× AMD EPYC (64 cores / 256 GB) |
 | Queue limits | 25 000 queued / 10 000 running jobs per user |
+| Job array size | `MaxArraySize = 10000`, so indices 0–9999 (`scontrol show config`, 2026-11) |
+| Nodes (documented) | `bt[01-28]`: 32 cores / 187 GB (~5.8 GB per core); `kt[01-12]`: 64 cores / 256 GB (~4 GB per core) |
+| Nodes (observed) | old-cluster nodes are being added: tasks ran on `gt03` in 2026-10 |
+| Interconnect | 10 Gb/s Ethernet, unsuitable for multi-node jobs |
+| OS, software | AlmaLinux 9 (may be upgraded without notice), Slurm 23.11.3, Apptainer, CVMFS |
+| Login nodes | `mppui1`, `mppui2`: 16 cores / 64 GB; each user may use 1/4 of the CPU time and 30 GB |
+| `/ptmp` quota | 6 TB per user (20 TB per project), no backup |
+
+Source: https://docs.t2.mpcdf.mpg.de/resources/computing-new/ (read 2026-11-03),
+which notes that the limits "may change after migration". It does not list the
+array size, nor default or maximum memory per job; the array size above was
+read with `scontrol show config | grep MaxArraySize`. An earlier belief in a
+4000-task array limit has no source and is wrong for this cluster. Check
+quotas with `/usr/lpp/mmfs/bin/mmlsquota --block-size=auto gpfsptmp` (and
+`gpfsu` for home).
 
 Beware: a job submitted there with an old-cluster partition name (`short`,
 `standard`, …) is accepted, runs for a few seconds, and dies **without ever
 creating its log files** — an easy failure mode to misdiagnose. Note also that
 `/u` and `/ptmp` are *not* shared between the old and new clusters; the
 odslserv nodes share `/ptmp` with the new cluster.
+
+### Memory per task
+
+Peak memory (`sacct` MaxRSS) in `keystone_prod_v3_smoke`, 2026-11, including
+normalization:
+
+| Task | Events per chunk | MaxRSS |
+| --- | --- | --- |
+| GENIE, Ar40 | 1e6 | 0.9–1.1 GB |
+| NuWro, W184 | 1e6 | 1.1 GB |
+| NEUT, Ar40 | 1e6 | 0.3–2.8 GB |
+| GiBUU, C12 (`qes_oversampling: 8`) | 4e5 requested, 1.3M stored | 1.9 GB |
+| GiBUU, W184 (`qes_oversampling: 8`) | 3e5 requested, 1.0M stored | 1.6 GB |
+
+`slurm.mem: 8G` therefore leaves ~3x headroom for the rejection generators. One
+exception is GiBUU on H1: the translator puts one event in each ensemble for
+A = 1, and GiBUU's particle arrays then take ~8.5 GB per 1e6 requested events,
+so v3-pilot H1 chunks of 1e6 stalled at 8G. A 2.5e5 chunk ran (4 min) at 12G.
+MaxRSS is sampled, so short tasks can report nonsense: that H1 task reported
+1.25 MB.
 
 ## First-time setup
 
