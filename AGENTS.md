@@ -1,4 +1,4 @@
-# AGENTS.md — OpenCode instructions for neutrino-factory
+# AGENTS.md — Agent instructions for neutrino-factory
 
 ## Project purpose
 Neutrino monte carlo event generator orchestration. Compare cross sections between physics models (GENIE, NuWro, NEUT, GiBUU). Academic use only.

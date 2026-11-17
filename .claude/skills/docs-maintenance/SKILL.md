@@ -68,6 +68,6 @@ the paper — the id is what keeps the claim checkable.
 ## No agent instructions in `docs/`
 
 `docs/` addresses humans and agents as *readers*. Directives to agents belong in
-`AGENTS.md`, in `.opencode/`, or in this skill. Phrase invariants as facts about
+`AGENTS.md`, in `.claude/`, or in this skill. Phrase invariants as facts about
 the code — "the branch order is load-bearing because Apptainer cannot nest", not
 "do not reorder these branches".
