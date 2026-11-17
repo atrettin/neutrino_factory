@@ -248,6 +248,15 @@ class GiBUUQesOversamplingTests(unittest.TestCase):
         self.assertEqual(len(set(seeds)), len(seeds))
         self.assertLessEqual(max(seeds), INT32_MAX)
 
+    def test_seed_overflow_names_the_pass_index(self) -> None:
+        # Pass indices run over the full list (cc, nc, cc_qe01, nc_qe01), so
+        # cc_qe01 keeps index 2 although numu on H1 leaves it out.
+        task = {**_task(), "seed": INT32_MAX - 1}
+        with self.assertRaisesRegex(ValueError, r"pass index 3 \* 1000000 .*0\.\.3"):
+            GiBUUTranslator().translate(
+                self._config(particle="numu", nucleus="H1", qes_oversampling=1), task
+            )
+
     def test_single_current_run_oversamples_only_that_current(self) -> None:
         translated = GiBUUTranslator().translate(
             self._config("nc", qes_oversampling=2), _task()

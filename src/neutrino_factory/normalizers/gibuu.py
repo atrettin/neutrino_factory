@@ -240,21 +240,26 @@ class GiBUUNormalizer(OutputNormalizer):
         import awkward as ak
 
         columns: dict[str, list[np.ndarray]] = {name: [] for name in GiBUUNormalizer.PART_COLUMNS}
+        empty_parts: list[str] = []
         for part in parts:
             with uproot.open(part) as f:
                 tree = f["RootTuple"]
-                # A pass with no events at all writes a RootTuple holding only
-                # the particle branches: the neutrinoProdInfo ones (lepIn_*,
-                # weight, evType, nuc_*) are never created. That is a pass the
-                # translator should not have generated, so name it as such
-                # rather than as an unreadable branch.
-                if tree.num_entries == 0 or "lepIn_E" not in tree.keys():
-                    raise RuntimeError(
-                        f"GiBUU pass '{name}' produced no events ({part.name}: "
-                        f"RootTuple has {tree.num_entries} entries and only the "
-                        f"branches {sorted(tree.keys())}). A pass that cannot "
-                        "produce events should not be generated."
+                # A run with no events writes a RootTuple with 0 entries holding
+                # only the particle branches (barcode, E, P{x,y,z}, x/y/z and the
+                # particle perweight `weight`): the neutrinoProdInfo ones
+                # (lepIn_*, lepOut_*, evType, nuc_*) are never created. Such a
+                # run is skipped rather than read: it adds no events, and the
+                # weights of the other runs are still divided by the full
+                # num_runs, which is what a run that drew zero events means.
+                if tree.num_entries == 0:
+                    keys = sorted(tree.keys())
+                    empty_parts.append(
+                        f"{part.name}: empty RootTuple"
+                        if "lepIn_E" in keys
+                        else f"{part.name}: empty RootTuple, no neutrinoProdInfo "
+                        f"branches, only {keys}"
                     )
+                    continue
 
                 def branch(name: str, library: str = "np"):
                     try:
@@ -301,6 +306,14 @@ class GiBUUNormalizer(OutputNormalizer):
                 columns["fs_momentum"].append(fs_momentum)
                 columns["fs_counts"].append(fs_counts)
 
+        # Only a pass whose every run is empty is an error: it would silently
+        # report a zero cross section for the channels it samples.
+        if not columns["energies"]:
+            raise RuntimeError(
+                f"GiBUU pass '{name}' produced no events ({'; '.join(empty_parts)}). "
+                "If this pass cannot produce events the translator should omit it, "
+                "otherwise raise the event count."
+            )
         return {name: np.concatenate(values) for name, values in columns.items()}
 
     def _normalize_root(self, work_dir: Path, out_path, task: dict, mode: str) -> str:
