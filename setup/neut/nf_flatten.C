@@ -35,7 +35,8 @@ const Long64_t kProgressEvery = 100000;
 static void PrintProgress(const char* stage, Long64_t done, Long64_t total) {
   ProcInfo_t info;
   gSystem->GetProcInfo(&info);
-  printf("nf_flatten: %s %lld/%lld entries, RSS %.0f MB\n", stage, done, total,
+  // fMemResident is in KiB.
+  printf("nf_flatten: %s %lld/%lld entries, RSS %.0f MiB\n", stage, done, total,
          info.fMemResident / 1024.0);
   fflush(stdout);
 }
@@ -123,8 +124,9 @@ void nf_flatten(const char* in_path, const char* out_path) {
     // fNucFsiVertInfo, fNucFsiStepInfo). That allocates a new array per entry
     // and overwrites the pointer without deleting the old array or its
     // particles, despite the "->" comment in neutvect.h. Without this, resident
-    // memory grows by 8-14 kB per entry (O16: 8.9 GB after 1e6 entries), which
-    // stalled 1e6-event chunks under an 8G Slurm limit. The Set*(0) calls are
+    // memory grows by 7.6-14 KiB per entry (O16: 8.5 GiB after 1e6 entries),
+    // more than an 8G (GiB) Slurm limit allows. With it, the process peaks at
+    // about 270 MiB for any chunk size. The Set*(0) calls are
     // NeutVect's own cleanup (its destructor makes the same calls): each deletes
     // the owned array and its contents and resets the pointer to NULL, so the
     // streamer's fresh allocation is the only copy.

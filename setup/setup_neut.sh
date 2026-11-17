@@ -60,10 +60,10 @@ require_command docker
 nf_default_paths
 META_DIR="$NF_SOFTWARE_ROOT/neut/metadata"
 
-# The source image is multi-arch. Pin linux/amd64 like every other project image
-# (containers.docker_wrap always passes --platform linux/amd64), so an Apple
-# Silicon machine that would otherwise get the arm64 variant stays consistent and
-# runs it under Rosetta 2.
+# The catalogued digest is the linux/amd64 manifest. Pass --platform linux/amd64
+# like every other project image (containers.docker_wrap always does), so Docker
+# on an Apple Silicon machine accepts the amd64 manifest and runs it under
+# Rosetta 2.
 echo "Pulling ${SOURCE_IMAGE} for linux/amd64 (~5 GB, this takes a while)..."
 docker pull --platform linux/amd64 "$SOURCE_IMAGE"
 docker tag "$SOURCE_IMAGE" "$IMAGE_NAME"

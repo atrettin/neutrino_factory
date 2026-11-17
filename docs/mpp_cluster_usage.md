@@ -129,7 +129,7 @@ normalization:
 | --- | --- | --- |
 | GENIE, Ar40 | 1e6 | 0.9–1.1 GB |
 | NuWro, W184 | 1e6 | 1.1 GB |
-| NEUT, Ar40 | 1e6 | 0.3–2.8 GB (flatten step: 11.6 GB, see below) |
+| NEUT, Ar40 | 1e6 | 0.3–2.8 GB (flatten step with a leaking payload: 11.1 GiB, see below) |
 | GiBUU, C12 (`qes_oversampling: 8`) | 4e5 requested, 1.3M stored | 1.9 GB |
 | GiBUU, W184 (`qes_oversampling: 8`) | 3e5 requested, 1.0M stored | 1.6 GB |
 
@@ -140,18 +140,40 @@ so v3-pilot H1 chunks of 1e6 stalled at 8G. A 2.5e5 chunk ran (4 min) at 12G.
 MaxRSS is sampled, so short tasks can report nonsense: that H1 task reported
 1.25 MB.
 
-The NEUT row is such a case. Its flatten step lasts 1–2 min, and in a NEUT
-payload whose `nf_flatten.C` lacks the per-entry array cleanup, that step's ROOT
-process grows by 7.6–14 kB per event: peaks measured from `/proc` on 1e6-event chunks
-are 7.8 GB for C12, 8.9 GB for O16 and 11.6 GB for Ar40 (2.3 GB for Fe56 at
-1.5e5). At `slurm.mem: 8G`, the C12 chunks finished, while every 1e6 O16, Ar40
-and Fe56 chunk stalled in that step until the time limit instead of being
-killed; Ar40 finished at 12G. The current macro stays at about 0.28 GB for any
-chunk size ([generators/neut.md](generators/neut.md#flattener)), and so needs
-no more than the 8G of the other generators once the NEUT payload and
-`nf-base.sif` are rebuilt. It prints `nf_flatten: read <i>/<n> entries, RSS
-<MB> MB` every 1e5 events, so the `.out` log shows the memory of a stalled
-flatten.
+The NEUT row is such a case: its flatten step (`nf_flatten.C`) lasts 1–2 min.
+The repo's macro peaks there at about 270 MiB for any chunk size, so with it NEUT
+fits in the same 8G (8 GiB, Slurm's unit) as the other generators. It prints
+`nf_flatten: read <i>/<n> entries, RSS <r> MiB` to the task's `.out` log every
+1e5 events.
+
+**The macro that runs is the copy baked into the NEUT payload, not the repo's.**
+A payload with an older copy leaks: its flatten step grows by 7.6–14 KiB per
+event, to 7.4 GiB for a 1e6-event C12 chunk, 8.5 GiB for O16 and 11.1 GiB for
+Ar40, and a chunk over the limit stalls in that step until the time limit
+rather than being killed. Check which copy a payload has before running NEUT
+chunks of more than ~5e5 events at 8G:
+
+```bash
+apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" \
+  grep -c 'SetNpart(0)' /opt/nf/generators/neut/5.7.0-nuint2024/share/nf_flatten.C
+```
+
+`0` means the payload leaks: rebuild it as below first. A task that reached the
+flatten step but whose log has no `nf_flatten: read` lines also ran a leaking
+payload. Measurements
+and the run outcomes behind them:
+[generators/neut.md](generators/neut.md#flattener).
+
+The macro is baked into the NEUT payload. To update it, rebuild the payload and
+recompose `nf-base.sif` from a host shell:
+
+```bash
+bash setup/build_apptainer_images.sh --only neut --force
+```
+
+`nf-dev.sif` is built on `nf-base.sif` and keeps the old macro until it is
+rebuilt with `--dev-tools --force`; adding `--dev-tools` to the command above
+rebuilds all three.
 
 ## First-time setup
 

@@ -101,7 +101,7 @@ class CatalogTests(unittest.TestCase):
         # code version — there is no source ref to build.
         self.assertEqual(
             catalog.build_arg("neut", "5.7.0-nuint2024"),
-            {"name": "NEUT_SOURCE_IMAGE", "value": "nuisancemc/tutorial:nuint2024"},
+            {"name": "NEUT_SOURCE_IMAGE", "value": "nuisancemc/tutorial@sha256:24239bd216fed290eb60057addbe6df91605eb3bb6f3dd99b023bafb6d766ead"},
         )
 
     def test_build_arg_none_for_unknown_code_version(self) -> None:

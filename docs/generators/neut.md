@@ -14,7 +14,7 @@ normalized onto are in [../physics.md](../physics.md); the run pipeline is in
 
 | | |
 |---|---|
-| Code versions | `5.7.0-nuint2024` (NEUT 5.7.0 from the `nuisancemc/tutorial:nuint2024` image) |
+| Code versions | `5.7.0-nuint2024` (NEUT 5.7.0 from the `nuisancemc/tutorial:nuint2024` image, pinned by digest) |
 | `config_version` | `default` only: `NEUT-MDLQE 2002`, `NEUT-MAQE 1.05` |
 | Sampling | unweighted (rejection-sampled) |
 | Raw σ → per nucleon | already 1e-38 cm² per nucleon, no conversion |
@@ -25,7 +25,8 @@ normalized onto are in [../physics.md](../physics.md); the run pipeline is in
 
 ## Setup
 
-`setup/setup_neut.sh` pulls `nuisancemc/tutorial:nuint2024` (~5 GB) and retags it
+`setup/setup_neut.sh` pulls the source image, `nuisancemc/tutorial:nuint2024`
+pinned by digest ([Container build](#container-build)), ~5 GB, and retags it
 as `neut:<code_version>` for Docker (`--platform linux/amd64`). For Apptainer,
 `build_apptainer_images.sh` builds the NEUT payload SIF from the same image like
 any other generator ([Container build](#container-build)). There is no data
@@ -317,18 +318,19 @@ converted from MeV to GeV in the macro.
   `GetEntry` the macro therefore calls `SetNpart(0)`, `SetNfsiPart(0)`,
   `SetNfsiVert(0)`, `SetNnucFsiVert(0)` and `SetNnucFsiStep(0)`, the calls
   `~NeutVect` makes, which delete the arrays. It also disables `vertexbranch`
-  (`NeutVtx`, unused here, same leak). Resident memory then stays at about
-  270 MB for any chunk size; without the calls it grows by 7.6–14 kB per entry
-  ([Validation](#flattener)).
+  (`NeutVtx`, unused here, same leak). Resident memory then peaks at about
+  270 MiB for any chunk size; without the calls it grows by 7.6–14 KiB per entry,
+  to 7.4–11.1 GiB for 1e6 entries ([Validation](#flattener)).
 - **Progress lines.** Every 100 000 entries, and once after the last, the macro
-  prints `nf_flatten: read <i>/<n> entries, RSS <MB> MB`, so a flatten that
+  prints `nf_flatten: read <i>/<n> entries, RSS <r> MiB`, so a flatten that
   slows down or stops shows in the task's `.out` log, and how far it got.
-- **A new attempt starts without event files.** `build_run_command` deletes
-  `events.flat.root` and `events.neut.root` left in the work dir before
-  generating, and logs a warning for each. `run_task` reuses the work dir on
-  retry, so otherwise a keyless flat file from a killed flatten would crash the
-  retry, and a complete one would be paired with the new events of a
-  `--new-seed` retry.
+- **A new attempt starts without event files.** `build_run_command`, and
+  `run_stub` in stub mode, delete `events.flat.root` and `events.neut.root` left
+  in the work dir, and log a warning for each. `run_task` reuses the work dir on
+  retry, and `normalize_output` prefers those files to the stub's JSON, so
+  otherwise a keyless flat file from a killed flatten would crash the retry, a
+  complete one would be paired with the new events of a `--new-seed` retry, and
+  a stub run would normalize an earlier real run's events.
 - **Stale flat files are re-flattened.** `normalize_output` reuses an existing
   `events.flat.root`, so a file from an older macro would serve a stale schema.
   The normalizer raises `FlatSchemaError` naming the missing branches, and the
@@ -351,6 +353,11 @@ needed because the flattener compiles through Cling) plus the ROOT 6.30/04 build
 NEUT links against: ~1.5 GB of the ~5 GB image. The def's `CODE_VERSION` must stay
 in sync with `NeutAdapter.CODE_VERSIONS`.
 
+- **The source image is pinned by digest.** `NeutAdapter.CODE_VERSIONS` and the
+  def's defaults name `nuisancemc/tutorial@sha256:24239bd216fed290eb60057addbe6df91605eb3bb6f3dd99b023bafb6d766ead`,
+  the linux/amd64 manifest that the tag `nuint2024` resolved to when the
+  production payload was built ([Validation](#source-image)). A rebuild that
+  only ships a new flattener therefore keeps the NEUT and ROOT binaries.
 - **Catalog integration.** `NeutAdapter` overrides `is_buildable` to treat a
   `source_image` catalog entry as a source (the base class recognizes only
   `git_ref`), so `build_apptainer_images.sh` picks NEUT up with no
@@ -359,8 +366,12 @@ in sync with `NeutAdapter.CODE_VERSIONS`.
 - **Built from the repo root.** `build_apptainer_images.sh` runs `apptainer build`
   from the repo root so `neut.def`'s `%files` can stage the flattener by
   repo-relative path. No other def has a host `%files` block. Changing the macro
-  therefore means rebuilding the NEUT payload SIF; under local Docker the macro is
-  bind-mounted and takes effect immediately.
+  therefore means rebuilding the NEUT payload SIF and recomposing `nf-base.sif`,
+  from a host shell: `bash setup/build_apptainer_images.sh --only neut --force`.
+  `nf-dev.sif` is built on `nf-base.sif` and keeps the old macro until it is
+  rebuilt with `--dev-tools --force` (adding `--dev-tools` to that command does
+  all three). Under local Docker the macro is bind-mounted and takes effect
+  immediately.
 
 Three relocation fixes in `%post`, each of which caused a real failure:
 
@@ -389,8 +400,10 @@ passes `NF_NEUT_INCDIR`.
 ### A payload extracted from a published image
 
 `code_version` is the NEUT release plus the image tag it came from. Since the
-build is not reproducible from source, the image tag is the real pin, and a
-re-push of that tag would otherwise be invisible.
+build is not reproducible from source, the source image is the real pin. It is
+pinned by digest, not by the tag, because a re-push of the tag would be invisible
+and would change NEUT in any rebuild of the payload, including one meant only to
+ship a new flattener.
 
 ### Histograms are found by prefix
 
@@ -505,25 +518,59 @@ tree: 50/50 events agree; 49 of 50 had the lepton at index 2. On a 20k-event run
 `n_nuc` is 2 for all 1531 mode-2 events
 ([physics.md](../physics.md#the-two-w-columns-2026-08-05)).
 
-**Memory.** Resident memory of the flattener's ROOT process, measured
-(2026-11) from `/proc` and `gSystem->GetProcInfo` on numu inclusive chunk000 files
-of `keystone_prod_v3_rejection` and `keystone_prod_v3_smoke`:
+**Memory.** Peak resident memory of the flattener's ROOT process on numu
+inclusive chunk000 files (2026-11): C12, O16 and Fe56 from
+`keystone_prod_v3_rejection`, Ar40 from `keystone_prod_v3_smoke`. Peaks are
+`VmHWM` from `/proc`, sampled every second; Fe56, whose 17 s run ended between
+samples with the leaking macro, is read from `gSystem->GetProcInfo` at the end of
+the read loop.
 
-| Target | Entries | Peak RSS, macro without the array cleanup | Peak RSS, current macro |
+| Target | Entries | Macro without the array cleanup | Current macro |
 |---|---|---|---|
-| C12 | 1e6 | 7.8 GB (7.4 GiB) | 0.28 GB |
-| O16 | 1e6 | 8.9 GB (8.5 GiB) | 0.27 GB |
-| Ar40 | 1e6 | 11.6 GB (11.1 GiB) | 0.28 GB |
-| Fe56 | 1.5e5 | 2.3 GB | 0.26 GB |
+| C12 | 1e6 | 7.43 GiB | 269 MiB |
+| O16 | 1e6 | 8.45 GiB | 268 MiB |
+| Ar40 | 1e6 | 11.08 GiB | 270 MiB |
+| Fe56 | 153 847 | 2.19 GiB | 258 MiB |
 
-Without the cleanup, RSS grew linearly with the entry index (O16: 0.64 GB at
-50k, 4.6 GB at 500k, 8.9 GB at 1e6), and a variant that reads without calling
-`Fill` grew the same, so the growth was in reading `NeutVect`. The `SetN*(0)`
-calls removed all but 0.3 kB per entry; disabling `vertexbranch` removed the
-rest. Under `slurm.mem: 8G` these peaks match the outcomes on the cluster: C12
-1e6 chunks finished, O16 and Ar40 1e6 chunks stalled in the flatten step, and
-Ar40 1e6 finished at 12G. The current macro's C12 and Ar40 outputs are identical
+Without the cleanup, RSS grows linearly with the entry index, by 7.6 (C12), 8.7
+(O16), 11.4 (Ar40) and 13.8 (Fe56) KiB per entry, the slope of `GetProcInfo`
+between entry 5e4 and the last progress line (O16: 0.61 GiB at 5e4, 4.37 GiB at
+5e5, 8.47 GiB at 1e6). A variant that reads without calling `Fill` grows the
+same (O16: 8.6 KiB per entry), so the growth is in reading `NeutVect`. The
+`SetN*(0)` calls alone leave 0.4 KiB per entry; disabling `vertexbranch` as well
+leaves under 0.1 KiB. The current macro's C12 and Ar40 outputs are identical
 branch by branch and histogram by histogram to the files the leaking macro wrote.
+
+These peaks match `keystone_prod_v3_rejection` on the cluster, which ran the
+leaking macro at `slurm.mem: 8G` (8 GiB); outcomes from `check-status`. Its
+1e6-event C12 chunks finished, except three that crashed in `neutroot2`. Every 1e6-event O16 and Ar40 chunk
+that did not crash earlier in `neutroot2` hit the time limit in the flatten step,
+where the process stalls at the limit instead of being killed. NEUT Fe56 had
+1e6-event chunks in three jobs, numubar, nue and nuebar (10 chunks each), and
+none of the 30 finished: 26 hit the time limit (those inspected after
+`neutroot2` had written all 1e6 events, with a partial `events.flat.root`), 3
+crashed earlier in `neutroot2` (SIGFPE) and 1 lost its node. The numu Fe56 job,
+65 chunks of 153 847 events, finished. In `keystone_prod_v3_smoke`, Ar40 chunks
+of 1e6 events finished at 12G.
+
+### Source image
+
+The pinned digest, `sha256:24239bd2…` (linux/amd64 manifest of
+`nuisancemc/tutorial:nuint2024`), is the image the production payload
+`neut_5.7.0-nuint2024.sif` (built 2026-10-09) was built from, established
+2026-11-17:
+
+- The SIF does not record it: its labels name only the tag
+  (`org.neutrino-factory.source`) and the final stage's
+  `python:3.13-slim-bookworm` digest, and its embedded def names the tag.
+- The build's Apptainer cache (the `APPTAINER_CACHEDIR` that `.env` sets; its
+  index was last written by the 2026-10-23 build) holds exactly one
+  `nuisancemc/tutorial` manifest, `sha256:24239bd2…`, image config
+  `sha256:d1bc8f56…`, created 2024-04-11.
+- All 1715 regular files under that image's `/opt/neut` are byte-identical to
+  the deployed payload's `neut/` tree, except `NEUT.pc`, which `%post` edits.
+- Docker Hub still served it for the tag that day, as the amd64 entry of the
+  multi-arch index `sha256:9c779bec…`.
 
 ### Seed reproducibility
 

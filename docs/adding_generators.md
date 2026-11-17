@@ -126,12 +126,13 @@ another generator in that situation, follow `setup/apptainer/neut.def` and
   the base class treats only `git_ref` as a source, so without the override the
   catalog-driven build script skips the generator entirely.
 - Override `build_arg()` to pass the image (e.g.
-  `NEUT_SOURCE_IMAGE=nuisancemc/tutorial:nuint2024`) instead of the code version.
+  `NEUT_SOURCE_IMAGE=nuisancemc/tutorial@sha256:24239bd2…`) instead of the code version.
   The def's `CODE_VERSION` argument then has to *default* to the catalog key,
   because the build script passes only the catalog's single build arg.
 - Make `code_version` name both the release and the image tag
-  (`5.7.0-nuint2024`). The image tag is the real pin when the build cannot be
-  reproduced from source.
+  (`5.7.0-nuint2024`), and pin `source_image` by digest (`repo@sha256:…`), not by
+  tag: a tag can move, and a rebuild would then silently change the generator.
+  The digest is the real pin when the build cannot be reproduced from source.
 - Bootstrap stage 1 of the def from the image (`Bootstrap: docker` /
   `From: {{ SOURCE_IMAGE }}`) and `%files from` only the subtrees you need — a
   published image is usually far larger than the payload.
