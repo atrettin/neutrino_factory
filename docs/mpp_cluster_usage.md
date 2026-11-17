@@ -129,7 +129,7 @@ normalization:
 | --- | --- | --- |
 | GENIE, Ar40 | 1e6 | 0.9–1.1 GB |
 | NuWro, W184 | 1e6 | 1.1 GB |
-| NEUT, Ar40 | 1e6 | 0.3–2.8 GB |
+| NEUT, Ar40 | 1e6 | 0.3–2.8 GB (flatten step: 11.6 GB, see below) |
 | GiBUU, C12 (`qes_oversampling: 8`) | 4e5 requested, 1.3M stored | 1.9 GB |
 | GiBUU, W184 (`qes_oversampling: 8`) | 3e5 requested, 1.0M stored | 1.6 GB |
 
@@ -139,6 +139,19 @@ A = 1, and GiBUU's particle arrays then take ~8.5 GB per 1e6 requested events,
 so v3-pilot H1 chunks of 1e6 stalled at 8G. A 2.5e5 chunk ran (4 min) at 12G.
 MaxRSS is sampled, so short tasks can report nonsense: that H1 task reported
 1.25 MB.
+
+The NEUT row is such a case. Its flatten step lasts 1–2 min, and in a NEUT
+payload whose `nf_flatten.C` lacks the per-entry array cleanup, that step's ROOT
+process grows by 7.6–14 kB per event: peaks measured from `/proc` on 1e6-event chunks
+are 7.8 GB for C12, 8.9 GB for O16 and 11.6 GB for Ar40 (2.3 GB for Fe56 at
+1.5e5). At `slurm.mem: 8G`, the C12 chunks finished, while every 1e6 O16, Ar40
+and Fe56 chunk stalled in that step until the time limit instead of being
+killed; Ar40 finished at 12G. The current macro stays at about 0.28 GB for any
+chunk size ([generators/neut.md](generators/neut.md#flattener)), and so needs
+no more than the 8G of the other generators once the NEUT payload and
+`nf-base.sif` are rebuilt. It prints `nf_flatten: read <i>/<n> entries, RSS
+<MB> MB` every 1e5 events, so the `.out` log shows the memory of a stalled
+flatten.
 
 ## First-time setup
 
