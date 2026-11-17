@@ -309,6 +309,26 @@ converted from MeV to GeV in the macro.
   card pins `NEUT-NEFF 0` (pion FSI; `necard.h` calls it "nuclear effect in O16",
   but it is the general switch) and `NUCRES-RESCAT 1` (nucleon rescattering),
   both NEUT's defaults.
+- **The macro frees each entry's particle arrays itself.** NEUT's dictionary
+  gives `NeutVect` an old-style generated `Streamer` (its LinkDef has no `+`),
+  which reads every `TObjArray` member with `R__b >> fPartInfo`: a new array per
+  entry, with the pointer overwritten and the old array and its particles never
+  deleted, although `neutvect.h` marks the members `//->`. Before each
+  `GetEntry` the macro therefore calls `SetNpart(0)`, `SetNfsiPart(0)`,
+  `SetNfsiVert(0)`, `SetNnucFsiVert(0)` and `SetNnucFsiStep(0)`, the calls
+  `~NeutVect` makes, which delete the arrays. It also disables `vertexbranch`
+  (`NeutVtx`, unused here, same leak). Resident memory then stays at about
+  270 MB for any chunk size; without the calls it grows by 7.6–14 kB per entry
+  ([Validation](#flattener)).
+- **Progress lines.** Every 100 000 entries, and once after the last, the macro
+  prints `nf_flatten: read <i>/<n> entries, RSS <MB> MB`, so a flatten that
+  slows down or stops shows in the task's `.out` log, and how far it got.
+- **A new attempt starts without event files.** `build_run_command` deletes
+  `events.flat.root` and `events.neut.root` left in the work dir before
+  generating, and logs a warning for each. `run_task` reuses the work dir on
+  retry, so otherwise a keyless flat file from a killed flatten would crash the
+  retry, and a complete one would be paired with the new events of a
+  `--new-seed` retry.
 - **Stale flat files are re-flattened.** `normalize_output` reuses an existing
   `events.flat.root`, so a file from an older macro would serve a stale schema.
   The normalizer raises `FlatSchemaError` naming the missing branches, and the
@@ -485,6 +505,26 @@ tree: 50/50 events agree; 49 of 50 had the lepton at index 2. On a 20k-event run
 `n_nuc` is 2 for all 1531 mode-2 events
 ([physics.md](../physics.md#the-two-w-columns-2026-08-05)).
 
+**Memory.** Resident memory of the flattener's ROOT process, measured
+(2026-11) from `/proc` and `gSystem->GetProcInfo` on numu inclusive chunk000 files
+of `keystone_prod_v3_rejection` and `keystone_prod_v3_smoke`:
+
+| Target | Entries | Peak RSS, macro without the array cleanup | Peak RSS, current macro |
+|---|---|---|---|
+| C12 | 1e6 | 7.8 GB (7.4 GiB) | 0.28 GB |
+| O16 | 1e6 | 8.9 GB (8.5 GiB) | 0.27 GB |
+| Ar40 | 1e6 | 11.6 GB (11.1 GiB) | 0.28 GB |
+| Fe56 | 1.5e5 | 2.3 GB | 0.26 GB |
+
+Without the cleanup, RSS grew linearly with the entry index (O16: 0.64 GB at
+50k, 4.6 GB at 500k, 8.9 GB at 1e6), and a variant that reads without calling
+`Fill` grew the same, so the growth was in reading `NeutVect`. The `SetN*(0)`
+calls removed all but 0.3 kB per entry; disabling `vertexbranch` removed the
+rest. Under `slurm.mem: 8G` these peaks match the outcomes on the cluster: C12
+1e6 chunks finished, O16 and Ar40 1e6 chunks stalled in the flatten step, and
+Ar40 1e6 finished at 12G. The current macro's C12 and Ar40 outputs are identical
+branch by branch and histogram by histogram to the files the leaking macro wrote.
+
 ### Seed reproducibility
 
 The log confirms `RANLUX INITIALIZED BY RLUXGO FROM SEEDS <seed> 0 0`, different
@@ -547,3 +587,10 @@ Issues 1–3 are not reported, and their causes are unconfirmed.
    `RFCOSTH < -0.999`; it is the only change to `nejet.F` after 5.7.0. First
    released in 5.9.0, not in 5.8.0. The framework needs a newer NEUT, built from
    source, to pick it up.
+5. **Reading `NeutVect` or `NeutVtx` from a tree leaks every entry's particle
+   arrays.** The LinkDef declares both classes without `+`
+   (`src/neutclass/neutclassLinkDef.h` in 5.7.0, still so in
+   `src/output/ROOT/NEUTROOTClassLinkDef.h` on `develop`, 2026-11), so the
+   generated `Streamer` reads each `TObjArray*` with `operator>>` (seen in the
+   disassembly of `libNEUTClass.so`) instead of in place. `nf_flatten.C` works
+   around it ([Flattening](#flattening-nf_flattenc)). Not reported.

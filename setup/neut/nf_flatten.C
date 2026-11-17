@@ -28,6 +28,18 @@
 // understate the multiplicities the normalizer derives from it.
 const Int_t kMaxFinalState = 200;
 
+// Entries between progress lines. Each line carries the resident memory, so a
+// task that slows down against its Slurm memory limit shows it in the .out log.
+const Long64_t kProgressEvery = 100000;
+
+static void PrintProgress(const char* stage, Long64_t done, Long64_t total) {
+  ProcInfo_t info;
+  gSystem->GetProcInfo(&info);
+  printf("nf_flatten: %s %lld/%lld entries, RSS %.0f MB\n", stage, done, total,
+         info.fMemResident / 1024.0);
+  fflush(stdout);
+}
+
 void nf_flatten(const char* in_path, const char* out_path) {
   gSystem->Load("libNEUTClass");
 
@@ -42,6 +54,10 @@ void nf_flatten(const char* in_path, const char* out_path) {
     gSystem->Exit(1);
   }
 
+  // Read only the NeutVect branch. The other branch, "vertexbranch" (NeutVtx),
+  // is unused here and leaks on every read, like NeutVect (see below).
+  in_tree->SetBranchStatus("*", 0);
+  in_tree->SetBranchStatus("vectorbranch", 1);
   NeutVect* nv = new NeutVect();
   in_tree->SetBranchAddress("vectorbranch", &nv);
 
@@ -99,6 +115,24 @@ void nf_flatten(const char* in_path, const char* out_path) {
 
   const Long64_t n_entries = in_tree->GetEntries();
   for (Long64_t i = 0; i < n_entries; ++i) {
+    if (i % kProgressEvery == 0) PrintProgress("read", i, n_entries);
+    // Free the previous entry's particle arrays before reading the next one.
+    // NEUT 5.7.0's LinkDef declares NeutVect without "+", so its dictionary
+    // carries an old-style Streamer that reads each TObjArray member with
+    // `R__b >> fPartInfo` (likewise fFsiPartInfo, fFsiVertInfo,
+    // fNucFsiVertInfo, fNucFsiStepInfo). That allocates a new array per entry
+    // and overwrites the pointer without deleting the old array or its
+    // particles, despite the "->" comment in neutvect.h. Without this, resident
+    // memory grows by 8-14 kB per entry (O16: 8.9 GB after 1e6 entries), which
+    // stalled 1e6-event chunks under an 8G Slurm limit. The Set*(0) calls are
+    // NeutVect's own cleanup (its destructor makes the same calls): each deletes
+    // the owned array and its contents and resets the pointer to NULL, so the
+    // streamer's fresh allocation is the only copy.
+    nv->SetNpart(0);
+    nv->SetNfsiPart(0);
+    nv->SetNfsiVert(0);
+    nv->SetNnucFsiVert(0);
+    nv->SetNnucFsiStep(0);
     in_tree->GetEntry(i);
     mode = nv->Mode;
     totcrs = nv->Totcrs;
@@ -193,6 +227,8 @@ void nf_flatten(const char* in_path, const char* out_path) {
     }
     out_tree->Fill();
   }
+
+  PrintProgress("read", n_entries, n_entries);
 
   fout.cd();
   out_tree->Write();

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -20,6 +21,8 @@ from ..translators.neut import (
     FLUX_SPACING,
     NeutTranslator,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 # Fixed artifact names inside the task work directory.
 CARD_FILE = "neut.card"
@@ -169,9 +172,27 @@ class NeutAdapter(GeneratorAdapter):
             raise RuntimeError(f"{FLATTEN_BINARY} not found under {source_dir}")
         return source_dir
 
+    @staticmethod
+    def _remove_stale_outputs(work_dir: Path) -> None:
+        """Delete event files left in the work dir by an earlier attempt.
+
+        ``run_task`` reuses a task's work directory on retry, and
+        ``normalize_output`` reuses any ``events.flat.root`` it finds. A flat file
+        left by a flattener that hung or was killed has no keys and would crash
+        the retry; one from a completed earlier attempt would silently be paired
+        with the new events of a ``--new-seed`` retry. The native file goes too,
+        so that only this attempt's ``neutroot2`` output can be flattened.
+        """
+        for name in (FLAT_OUTPUT, RAW_OUTPUT):
+            path = work_dir / name
+            if path.exists():
+                LOGGER.warning("Removing %s from an earlier attempt before generating", path)
+                path.unlink()
+
     def build_run_command(self, translated_config: dict, work_dir: Path) -> list[str]:
         code_version = translated_config.get("code_version")
         work_dir.mkdir(parents=True, exist_ok=True)
+        self._remove_stale_outputs(work_dir)
 
         self._write_flux_file(work_dir)
         self._write_seed_file(work_dir, int(translated_config["seed"]))

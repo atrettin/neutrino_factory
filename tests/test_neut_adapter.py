@@ -72,6 +72,26 @@ class NeutAdapterArtifactTests(unittest.TestCase):
             self.assertTrue(card.startswith("C "))
             self.assertTrue(card.isascii())
 
+    def test_removes_event_files_from_an_earlier_attempt(self) -> None:
+        """A retry must not reuse a keyless or stale flat file, nor old events."""
+        config = _config()
+        adapter = NeutAdapter(config)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            (work_dir / "events.flat.root").write_bytes(b"keyless flat file")
+            (work_dir / "events.neut.root").write_bytes(b"old native output")
+            (work_dir / "unrelated.txt").write_text("kept", encoding="utf-8")
+            with patch.object(NeutAdapter, "container_available", return_value=False):
+                with self.assertLogs("neutrino_factory.generators.neut", "WARNING") as logs:
+                    adapter.build_run_command(_translated(config), work_dir)
+
+            self.assertFalse((work_dir / "events.flat.root").exists())
+            self.assertFalse((work_dir / "events.neut.root").exists())
+            self.assertTrue((work_dir / "unrelated.txt").is_file())
+            self.assertTrue((work_dir / "neut.card").is_file())
+            self.assertEqual(len(logs.records), 2)
+            self.assertTrue(any("events.flat.root" in r.getMessage() for r in logs.records))
+
     def test_seed_file_is_25_integers_in_fortran_layout(self) -> None:
         """NEUT reads $RANFILE with a (5X,5I12) format and uses the first value.
 
