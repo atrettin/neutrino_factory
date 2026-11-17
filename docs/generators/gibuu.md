@@ -79,6 +79,11 @@ pass's:
   sum `xsec_weight`, not `weight`, in an oversampled run.
 - **Only QE.** Δ, the higher resonances, the 1π/2π background and 2p2h already
   reach ≤ 1% relative error where they contribute, and DIS 0.2–0.5%.
+- **H1 with a neutrino gets NC QE passes only.** Neutrino CC QE needs a neutron
+  (νn → ℓ⁻p), so on a target without neutrons the `cc_qeNN` passes are not
+  generated; the `nc_qeNN` passes (νp → νp) are. Antineutrinos keep both
+  (ν̄p → ℓ⁺n). The full CC pass has no QE events there either, so CC is
+  unaffected.
 - **Not part of the job label.** Two jobs that differ only in it need distinct
   `name:`s.
 
@@ -210,6 +215,10 @@ output into the **current working directory** under a fixed name,
 pass**, named after it (`cc`, `nc`, `cc_qe01`, …) and created uniformly however
 many passes the run has, each with its own copy of the flux table (the
 jobcard's `FileNameFlux` is CWD-relative). The passes are chained with `set -e`.
+A retried task reuses its raw directory, so before staging the adapter deletes
+(and logs as a warning) any pass-like subdirectory (`cc`, `nc`, `cc_qeNN`,
+`nc_qeNN`) that is not among the translated passes; the normalizer would
+otherwise reject it as a stray pass.
 
 `path_to_input` is written as the placeholder `@NF_GIBUU_INPUT@` and resolved by
 the adapter: `/opt/GiBUU/buuinput` under Docker,
@@ -323,13 +332,18 @@ weights already sum to that current's cross section, so the union sums to
 
 `qes_oversampling = K` appends K QE-only passes per current, `cc_qe01` …
 `cc_qeK`, then `nc_qe01` …, each with `includeQE` alone and the same
-`numEnsembles` as its current's full pass. Every pass is described in the
+`numEnsembles` as its current's full pass. For a neutrino on a target with no
+neutrons (H1) the `cc_qeNN` passes are left out: they cannot produce an event,
+and GiBUU then writes a `RootTuple` with only the particle branches
+(`E`, `P{x,y,z}`, `x`/`y`/`z`, `weight`, `barcode`; seen in
+`keystone_prod_v3_gibuu`, numu/nue H1, every chunk). Every pass is described in the
 translated config by `name`, `current` and `channels` (`all` or `qe`). The
 normalizer:
 
 - refuses a run whose pass directories differ from the translated passes, in
   either direction: a missing QE pass would leave the others carrying 1/(K+1) of
   a σ only K passes estimated;
+- refuses a pass with no events (0 entries or no `lepIn_E`), naming the pass;
 - refuses a QE pass containing any `evType` other than 1 (`evType` is written once
   at the vertex and never changed by transport);
 - multiplies each event's raw weight by 1/n before `compute_xsec_weight`, where n
@@ -341,8 +355,9 @@ normalizer:
 `xsec_norm_count` stays `num_runs`: the combination happens inside the chunk, so
 each chunk file is one σ estimate and merging is unchanged.
 
-Pass *i* (in the order above) draws seed `task seed + i · PASS_SEED_OFFSET`
-(`1_000_000`). The full passes come first, so their seeds and jobcards do not
+Pass *i* (in the order above, counting any left-out `cc_qeNN` passes) draws seed
+`task seed + i · PASS_SEED_OFFSET` (`1_000_000`), so leaving passes out shifts no
+other pass's seed. The full passes come first, so their seeds and jobcards do not
 depend on K. The cap of K = 50 keeps the last seed inside int32: task seeds reach
 2·10⁹, which leaves room for 148 passes.
 

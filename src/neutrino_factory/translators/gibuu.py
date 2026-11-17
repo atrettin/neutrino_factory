@@ -199,6 +199,20 @@ class GiBUUTranslator(ConfigTranslator):
             for k in range(1, qes_oversampling + 1)
         ]
         last_seed = seed + (len(pass_specs) - 1) * PASS_SEED_OFFSET
+        # A pass that cannot produce a single event is left out. Neutrino CC QE
+        # needs a neutron (nu n -> l- p), so on a target without neutrons (H1)
+        # a neutrino's CC QE-only passes are physically empty: GiBUU then writes
+        # a RootTuple without the neutrinoProdInfo branches, which the
+        # normalizer rejects. The full CC pass stays (resonance, DIS, ... on the
+        # proton), as do NC QE (nu p -> nu p) and antineutrino CC QE
+        # (nubar p -> l+ n). Seeds keep their index in the full list, so
+        # dropping passes shifts no other pass's seed.
+        skip_cc_qe = neutrons == 0 and not is_antineutrino(particle, "GiBUU")
+        indexed_specs = [
+            (index, spec)
+            for index, spec in enumerate(pass_specs)
+            if not (skip_cc_qe and spec[1] == "cc" and spec[2] == "qe")
+        ]
         if last_seed > INT32_MAX:
             raise ValueError(
                 f"GiBUU pass seed {last_seed} exceeds the int32 range: task seed "
@@ -207,7 +221,7 @@ class GiBUUTranslator(ConfigTranslator):
 
         # One rendered jobcard per pass.
         gibuu_passes = []
-        for index, (pass_name, pass_current, channels) in enumerate(pass_specs):
+        for index, (pass_name, pass_current, channels) in indexed_specs:
             process_id = PROCESS_ID[pass_current]
             # The beam sign comes from the probe's PDG code, not from the "bar"
             # suffix of its name: the name is a framework label, the sign is the

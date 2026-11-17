@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
 import shutil
 from pathlib import Path
 
@@ -8,6 +10,12 @@ from .base import GeneratorAdapter
 from .. import catalog, containers
 from ..normalizers.gibuu import GiBUUNormalizer, pass_name, pass_output_dirs
 from ..translators.gibuu import GiBUUTranslator
+
+LOGGER = logging.getLogger(__name__)
+
+# Names of the directories GiBUU passes run in: the full pass of a current
+# (cc, nc) and its QE-only passes (cc_qe01, ...). See translators.gibuu.
+PASS_DIR_PATTERN = re.compile(r"^(cc|nc)(_qe\d{2})?$")
 
 
 class GiBUUAdapter(GeneratorAdapter):
@@ -70,10 +78,42 @@ class GiBUUAdapter(GeneratorAdapter):
         if flux_table:
             (pass_dir / "flux.dat").write_text(flux_table, encoding="utf-8")
 
+    @staticmethod
+    def _remove_stale_pass_dirs(work_dir: Path, pass_names: set[str]) -> list[str]:
+        """Delete pass directories of ``work_dir`` the current passes do not use.
+
+        ``run_task`` reuses a task's raw directory on retry, so passes of an
+        earlier translation (e.g. the cc_qeNN passes a neutrino run on H1 no
+        longer generates) would otherwise be found by the normalizer, which
+        rejects any pass directory it was not told about.
+        """
+        removed = []
+        for path in sorted(work_dir.iterdir()):
+            if (
+                path.is_dir()
+                and PASS_DIR_PATTERN.match(path.name)
+                and path.name not in pass_names
+            ):
+                shutil.rmtree(path)
+                removed.append(path.name)
+        if removed:
+            LOGGER.warning(
+                "Removed stale GiBUU pass director%s %s from %s: not among the "
+                "translated passes %s",
+                "y" if len(removed) == 1 else "ies",
+                ", ".join(removed),
+                work_dir,
+                sorted(pass_names),
+            )
+        return removed
+
     def build_run_command(self, translated_config: dict, work_dir: Path) -> list[str]:
         code_version = translated_config.get("code_version")
         work_dir.mkdir(parents=True, exist_ok=True)
         flux_table = translated_config.get("gibuu_flux_table")
+        self._remove_stale_pass_dirs(
+            work_dir, {pass_name(p) for p in translated_config["gibuu_passes"]}
+        )
 
         # One subdirectory per pass, named after it: one per weak current (one
         # for a cc/nc run, two for an inclusive one, since GiBUU's process_ID
