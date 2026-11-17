@@ -232,11 +232,11 @@ waiting in the queue puts every queued task in it as `no_output`:
 
 | mode | meaning | evidence |
 |---|---|---|
-| `crash` | the generator or normalization raised | sidecar `failed`; reason = last Python exception in stderr plus the last error-like line of generator stdout |
+| `crash` | the generator or normalization raised | sidecar `failed`; reason = last Python exception in stderr (a traceback's last line, or the CLI's own `Error: ...` line) plus the last line of generator stdout containing a whole word such as `error`, `abort` or `fatal` |
 | `oom` | killed for exceeding `slurm.mem` | Slurm's `oom_kill event` line in stderr |
 | `timeout` | killed at the Slurm time limit | Slurm's `CANCELLED ... DUE TO TIME LIMIT` line, or still `running` past the limit |
 | `cancelled` | `scancel`led | Slurm's `CANCELLED AT ...` line with no `DUE TO` |
-| `node_failure` | its node died while it ran | Slurm's `DUE TO NODE FAILURE` line |
+| `node_failure` | its node died while it ran | Slurm's `DUE TO NODE FAILURE` line (followed by `, SEE SLURMCTLD LOG FOR DETAILS`) |
 | `hung` | still running, but silent | no log or raw-output activity for `--hung-after` hours (default 4) |
 | `invalid` | finished, but the output failed validation | sidecar |
 | `no_output` | no sidecar and no log | still queued, **or** never started because its node failed |

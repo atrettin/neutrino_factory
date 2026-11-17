@@ -154,6 +154,31 @@ class DiagnoseRunTests(unittest.TestCase):
         self.assertIn(f"500_{no_output}", full)
         self.assertNotIn("Rerun with --list-failures", full)
 
+    def test_real_cluster_messages(self) -> None:
+        # Slurm appends advice after the reason for a node failure.
+        node_failure = self._add(
+            self._running(2),
+            err="Results was:\nslurmstepd: error: *** JOB 235778 ON et07 CANCELLED AT "
+                "2026-11-03T20:32:21 DUE TO NODE FAILURE, SEE SLURMCTLD LOG FOR DETAILS ***\n",
+        )
+        # The CLI's own final "Error: ..." line, with GiBUU's banner in stdout.
+        crash = self._add(
+            {"status": "failed", "start_utc": NOW.isoformat(), "node": "et29"},
+            out="**      !!                 hh    !!       of errors and use common sense    **\n",
+            err="Error: Cannot read branch 'lepIn_E' from EventOutput.Pert.00000001.root: "
+                "not found: 'lepIn_E'\n    Available keys: 'E', 'Px'\n\nin object /RootTuple;1\n",
+        )
+
+        diagnoses = diagnose_run(self.config, self.tasks, now=NOW, hung_after_hours=4)
+
+        self.assertEqual(diagnoses[node_failure]["mode"], "node_failure")
+        self.assertEqual(diagnoses[crash]["mode"], "crash")
+        self.assertEqual(
+            diagnoses[crash]["reason"],
+            "Error: Cannot read branch 'lepIn_E' from EventOutput.Pert.00000001.root: "
+            "not found: 'lepIn_E'",
+        )
+
     def test_newest_submission_wins(self) -> None:
         index = self._add(self._running(1), err="old crash\n", array=500)
         (self.logs / f"nf_{RUN}_retry_501_{index}.out").write_text("retry\n", encoding="utf-8")

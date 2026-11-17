@@ -68,14 +68,23 @@ _TAIL_BYTES = 256 * 1024
 
 _LOG_NAME = re.compile(r"^(?P<name>.+)_(?P<array>\d+)_(?P<index>\d+)\.(?P<ext>out|err)$")
 # "slurmstepd: error: *** JOB 176457_217 ON et38 CANCELLED AT 2026-10-28T17:05:00
-# DUE TO TIME LIMIT ***" (also "STEP ..." for the batch step).
+# DUE TO TIME LIMIT ***" (also "STEP ..." for the batch step). Some reasons carry
+# trailing advice: "... DUE TO NODE FAILURE, SEE SLURMCTLD LOG FOR DETAILS ***".
 _SLURM_KILL = re.compile(
     r"\*\*\* (?:JOB|STEP) (?P<job>\S+) ON (?P<node>\S+) CANCELLED AT (?P<at>\S+)"
-    r"(?: DUE TO (?P<due>[A-Z][A-Z ]*?))? \*\*\*"
+    r"(?: DUE TO (?P<due>[A-Z][A-Z ]*?))?(?:,[^*]*)? \*\*\*"
 )
 _OOM = re.compile(r"oom[-_]kill event", re.IGNORECASE)
-_PY_EXCEPTION = re.compile(r"^(?:[A-Za-z_][\w]*\.)*[A-Za-z_]\w*(?:Error|Exception|Exit|Interrupt)(?::|$)")
-_GENERATOR_ERROR = re.compile(r"error|abort|fatal|exception|signal|segmentation", re.IGNORECASE)
+# A traceback's last line ("uproot.exceptions.KeyInFileError: ...") or the CLI's
+# own final line for a handled error ("Error: ...", see ``cli.main``).
+_PY_EXCEPTION = re.compile(
+    r"^(?:(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*(?:Error|Exception|Exit|Interrupt)(?::|$)|Error: )"
+)
+# Whole words only, so that prose such as GiBUU's banner "of errors and use
+# common sense" is not taken for an error.
+_GENERATOR_ERROR = re.compile(
+    r"\b(?:error|abort(?:ed|ing)?|fatal|exception|signal|segmentation)\b", re.IGNORECASE
+)
 
 
 def parse_slurm_time(value: Any) -> timedelta | None:
