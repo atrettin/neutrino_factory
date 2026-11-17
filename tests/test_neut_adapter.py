@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 import unittest
@@ -47,6 +48,11 @@ def _translated(config: dict) -> dict:
     )
 
 
+def _removal_messages(records: list[logging.LogRecord]) -> list[str]:
+    """The messages of the records that report removing a stale event file."""
+    return [r.getMessage() for r in records if r.getMessage().startswith("Removing ")]
+
+
 class NeutAdapterArtifactTests(unittest.TestCase):
     def test_writes_card_flux_seed_and_sidecar(self) -> None:
         config = _config()
@@ -89,8 +95,44 @@ class NeutAdapterArtifactTests(unittest.TestCase):
             self.assertFalse((work_dir / "events.neut.root").exists())
             self.assertTrue((work_dir / "unrelated.txt").is_file())
             self.assertTrue((work_dir / "neut.card").is_file())
-            self.assertEqual(len(logs.records), 2)
-            self.assertTrue(any("events.flat.root" in r.getMessage() for r in logs.records))
+            removals = _removal_messages(logs.records)
+            self.assertEqual(len(removals), 2)
+            self.assertTrue(any("events.flat.root" in m for m in removals))
+            self.assertTrue(any("events.neut.root" in m for m in removals))
+
+    def test_clean_work_dir_logs_no_removal(self) -> None:
+        """A first attempt has nothing to remove and must not warn about it."""
+        config = _config()
+        adapter = NeutAdapter(config)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            with patch.object(NeutAdapter, "container_available", return_value=False):
+                with self.assertNoLogs("neutrino_factory.generators.neut", "WARNING"):
+                    adapter.build_run_command(_translated(config), work_dir)
+            self.assertTrue((work_dir / "neut.card").is_file())
+
+    def test_stub_run_removes_event_files_from_an_earlier_attempt(self) -> None:
+        """normalize_output prefers events.flat.root to the stub's JSON payload.
+
+        A flat file left by an earlier real run would otherwise be normalized in
+        place of the stub's events.
+        """
+        config = _config()
+        adapter = NeutAdapter(config)
+        task = {"seed": 4242, "event_count": 5, "start_event": 0}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            (work_dir / "events.flat.root").write_bytes(b"flat file of a real run")
+            (work_dir / "events.neut.root").write_bytes(b"native file of a real run")
+            raw_path = work_dir / "task.json"
+            with self.assertLogs("neutrino_factory.generators.neut", "WARNING") as logs:
+                written = adapter.run_stub(_translated(config), raw_path, task)
+
+            self.assertEqual(Path(written), raw_path)
+            self.assertTrue(raw_path.is_file())
+            self.assertFalse((work_dir / "events.flat.root").exists())
+            self.assertFalse((work_dir / "events.neut.root").exists())
+            self.assertEqual(len(_removal_messages(logs.records)), 2)
 
     def test_seed_file_is_25_integers_in_fortran_layout(self) -> None:
         """NEUT reads $RANFILE with a (5X,5I12) format and uses the first value.

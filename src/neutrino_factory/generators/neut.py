@@ -55,12 +55,17 @@ class NeutAdapter(GeneratorAdapter):
     # instead from the NUISANCE collaboration's published tutorial image, which
     # ships a working NEUT build (`neut-config --version` -> 5.7.0). The code
     # version therefore names both the NEUT release and the image tag it came
-    # from: the image tag is the real pin, since we cannot reproduce the build.
+    # from. The tag is mutable, so the source image is pinned by the digest of
+    # its linux/amd64 manifest: the one tag `nuint2024` resolved to when the
+    # production payload was built (docs/generators/neut.md, "Source image").
     CODE_VERSIONS = {
         "5.7.0-nuint2024": {
             "repo": None,
             "git_ref": None,
-            "source_image": "nuisancemc/tutorial:nuint2024",
+            "source_image": (
+                "nuisancemc/tutorial@sha256:"
+                "24239bd216fed290eb60057addbe6df91605eb3bb6f3dd99b023bafb6d766ead"
+            ),
             "config_versions": ["default"],
         },
     }
@@ -188,6 +193,22 @@ class NeutAdapter(GeneratorAdapter):
             if path.exists():
                 LOGGER.warning("Removing %s from an earlier attempt before generating", path)
                 path.unlink()
+
+    def run_stub(
+        self,
+        translated_config: dict[str, Any],
+        raw_output_path: str | Path,
+        task: dict[str, Any],
+    ) -> str:
+        """Write stub events, after removing event files of an earlier attempt.
+
+        The stub writes only its JSON payload at ``raw_output_path``, but
+        ``normalize_output`` prefers an ``events.flat.root`` (or flattens an
+        ``events.neut.root``) in the same directory, so a file left by an earlier
+        real run would replace the stub's events.
+        """
+        self._remove_stale_outputs(Path(raw_output_path).parent)
+        return super().run_stub(translated_config, raw_output_path, task)
 
     def build_run_command(self, translated_config: dict, work_dir: Path) -> list[str]:
         code_version = translated_config.get("code_version")

@@ -10,10 +10,17 @@
 # The source image is a ~5 GB kitchen sink (GENIE, NuWro, NUISANCE, GEANT4);
 # only NEUT and the ROOT build it links against are staged into the payload.
 #
+# The source image is pinned by digest, not by its tag `nuint2024`: the tag is
+# mutable, and a rebuild meant to ship a new nf_flatten.C must not also swap the
+# NEUT binary. The digest is that of the tag's linux/amd64 manifest, the image
+# the production payload was built from (docs/generators/neut.md, "Source
+# image"). NeutAdapter.CODE_VERSIONS carries the same reference; the build
+# script passes it, so the defaults below only serve a manual build.
+#
 # Build (on odslserv01/02, NOT the Slurm head node), FROM THE REPO ROOT — the
 # %files block below stages project files by repo-relative path:
 #   apptainer build \
-#     --build-arg NEUT_SOURCE_IMAGE=nuisancemc/tutorial:nuint2024 \
+#     --build-arg NEUT_SOURCE_IMAGE=nuisancemc/tutorial@sha256:24239bd216fed290eb60057addbe6df91605eb3bb6f3dd99b023bafb6d766ead \
 #     "$NF_IMAGE_ROOT/neut_5.7.0-nuint2024.sif" setup/apptainer/neut.def
 # (setup/build_apptainer_images.sh does this for you.)
 #
@@ -32,7 +39,7 @@ From: {{ NEUT_SOURCE_IMAGE }}
 Stage: source
 
 %arguments
-    NEUT_SOURCE_IMAGE=nuisancemc/tutorial:nuint2024
+    NEUT_SOURCE_IMAGE=nuisancemc/tutorial@sha256:24239bd216fed290eb60057addbe6df91605eb3bb6f3dd99b023bafb6d766ead
     CODE_VERSION=5.7.0-nuint2024
 
 # ── Stage 2: Runtime ─────────────────────────────────────────────────────────
@@ -42,7 +49,7 @@ Stage: final
 
 # Defaults must be redeclared per stage; {{ }} placeholders below need them.
 %arguments
-    NEUT_SOURCE_IMAGE=nuisancemc/tutorial:nuint2024
+    NEUT_SOURCE_IMAGE=nuisancemc/tutorial@sha256:24239bd216fed290eb60057addbe6df91605eb3bb6f3dd99b023bafb6d766ead
     CODE_VERSION=5.7.0-nuint2024
 
 # Version-namespaced, self-contained payload root, so nf-base composition is a
