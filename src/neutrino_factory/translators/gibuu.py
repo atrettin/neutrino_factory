@@ -198,7 +198,10 @@ class GiBUUTranslator(ConfigTranslator):
             for pass_current in pass_currents
             for k in range(1, qes_oversampling + 1)
         ]
-        last_seed = seed + (len(pass_specs) - 1) * PASS_SEED_OFFSET
+        # The guard covers the highest index of the full list, including passes
+        # left out below, so whether a seed fits does not depend on the target.
+        last_index = len(pass_specs) - 1
+        last_seed = seed + last_index * PASS_SEED_OFFSET
         # A pass that cannot produce a single event is left out. Neutrino CC QE
         # needs a neutron (nu n -> l- p), so on a target without neutrons (H1)
         # a neutrino's CC QE-only passes are physically empty: GiBUU then writes
@@ -216,7 +219,9 @@ class GiBUUTranslator(ConfigTranslator):
         if last_seed > INT32_MAX:
             raise ValueError(
                 f"GiBUU pass seed {last_seed} exceeds the int32 range: task seed "
-                f"{seed} with {len(pass_specs)} passes. Lower gibuu.qes_oversampling."
+                f"{seed} + pass index {last_index} * {PASS_SEED_OFFSET} (pass indices "
+                f"run 0..{last_index}, counting passes left out for this target). "
+                "Lower gibuu.qes_oversampling."
             )
 
         # One rendered jobcard per pass.

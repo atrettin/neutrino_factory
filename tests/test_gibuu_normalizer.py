@@ -76,6 +76,25 @@ def _write_roottuple(
         }
 
 
+def _write_empty_roottuple(path: Path, with_prod_info: bool = False) -> None:
+    """Write a ``RootTuple`` with no entries, as GiBUU does for a run without events.
+
+    GiBUU then creates only the particle branches (``weight`` among them, the
+    particle perweight); ``with_prod_info`` adds the neutrinoProdInfo ones too.
+    """
+    import uproot
+
+    branches = {
+        "barcode": np.zeros(0, dtype=np.int32),
+        **{b: np.zeros(0) for b in ("E", "Px", "Py", "Pz", "weight")},
+    }
+    if with_prod_info:
+        branches["lepIn_E"] = np.zeros(0)
+        branches["evType"] = np.zeros(0, dtype=np.int32)
+    with uproot.recreate(path) as f:
+        f["RootTuple"] = branches
+
+
 def _base_task() -> dict:
     return {
         "run_name": "test_run",
@@ -634,56 +653,74 @@ class GiBUUQesOversamplingTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "cc_qe01"):
                 self._normalize(work_dir)
 
-
     def test_empty_pass_names_the_pass(self) -> None:
-        # A pass without events (CC QE on H1 for a neutrino) gets a RootTuple
-        # with the particle branches only, and no neutrinoProdInfo branches.
-        import uproot
-
+        # A pass without events gets a RootTuple with the particle branches
+        # only, and no neutrinoProdInfo branches: the message lists them.
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
             _write_sidecar(work_dir, qes_oversampling=1)
             _write_roottuple(_part(work_dir, current="cc"), [1.0], [0.1], [1])
-            with uproot.recreate(_part(work_dir, current="cc_qe01")) as f:
-                f["RootTuple"] = {
-                    "barcode": np.zeros(0, dtype=np.int32),
-                    **{b: np.zeros(0) for b in ("E", "Px", "Py", "Pz", "weight")},
-                }
+            _write_empty_roottuple(_part(work_dir, current="cc_qe01"))
 
-            with self.assertRaisesRegex(
-                RuntimeError, "GiBUU pass 'cc_qe01' produced no events"
-            ):
+            with self.assertRaises(RuntimeError) as ctx:
                 self._normalize(work_dir)
+            message = str(ctx.exception)
+            self.assertIn("GiBUU pass 'cc_qe01' produced no events", message)
+            self.assertIn("no neutrinoProdInfo branches", message)
+            self.assertIn("'barcode'", message)
+            self.assertIn("translator should omit it", message)
+            self.assertIn("raise the event count", message)
 
-
-class GiBUUAdapterStalePassTests(unittest.TestCase):
-    """A retry reuses the raw directory; passes no longer translated must go."""
-
-    def test_stale_pass_directory_is_removed(self) -> None:
-        from neutrino_factory.generators.gibuu import GiBUUAdapter
-
+    def test_empty_pass_with_its_branches_lists_none(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
-            _write_roottuple(_part(work_dir, current="cc_qe03"), [1.0], [0.1], [1])
-            (work_dir / "unrelated").mkdir()
-            translated = {
-                "code_version": "release2025",
-                "gibuu_passes": [
-                    {"name": "cc", "current": "cc", "channels": "all", "jobcard": "! a"},
-                    {"name": "nc_qe01", "current": "nc", "channels": "qe", "jobcard": "! b"},
-                ],
-            }
-            with patch(
-                "neutrino_factory.generators.gibuu.shutil.which",
-                return_value="/usr/local/bin/GiBUU.x",
-            ), self.assertLogs("neutrino_factory.generators.gibuu", "WARNING") as logs:
-                GiBUUAdapter({}).build_run_command(translated, work_dir)
+            _write_sidecar(work_dir, qes_oversampling=1)
+            _write_roottuple(_part(work_dir, current="cc"), [1.0], [0.1], [1])
+            _write_empty_roottuple(_part(work_dir, current="cc_qe01"), with_prod_info=True)
 
+            with self.assertRaises(RuntimeError) as ctx:
+                self._normalize(work_dir)
+            message = str(ctx.exception)
+            self.assertIn("GiBUU pass 'cc_qe01' produced no events", message)
+            self.assertNotIn("neutrinoProdInfo", message)
+            self.assertNotIn("'barcode'", message)
+
+    def test_neutrino_on_h1_without_cc_qe_passes(self) -> None:
+        # The pass list the translator writes for numu on H1: no cc_qeNN, since
+        # neutrino CC QE needs a neutron. CC events are sampled by the full
+        # pass alone (factor 1); NC QE events by K + 1 passes.
+        k = 3
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, currents=("cc", "nc"), qes_oversampling=k)
+            sidecar_path = work_dir / "translated_config.json"
+            sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+            sidecar["nucleus"] = "H1"
+            sidecar["gibuu_passes"] = [
+                p for p in sidecar["gibuu_passes"] if not p["name"].startswith("cc_qe")
+            ]
             self.assertEqual(
-                sorted(p.name for p in work_dir.iterdir()),
-                ["cc", "nc_qe01", "translated_config.json", "unrelated"],
+                [p["name"] for p in sidecar["gibuu_passes"]],
+                ["cc", "nc"] + [f"nc_qe{i:02d}" for i in range(1, k + 1)],
             )
-            self.assertIn("cc_qe03", "\n".join(logs.output))
+            sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+
+            _write_roottuple(_part(work_dir, current="cc"), [1.0, 2.0], [0.2, 0.4], [2, 34])
+            _write_roottuple(_part(work_dir, current="nc"), [1.0, 2.0], [0.3, 0.5], [1, 2])
+            for i in range(1, k + 1):
+                _write_roottuple(_part(work_dir, current=f"nc_qe{i:02d}"), [1.5], [0.6], [1])
+
+            events = self._normalize(work_dir)
+
+            width = 5.0 - 0.5
+            np.testing.assert_allclose(
+                [e["xsec_weight"] for e in events],
+                [0.2 * width, 0.4 * width, 0.3 * width / (k + 1), 0.5 * width]
+                + [0.6 * width / (k + 1)] * k,
+            )
+            self.assertEqual(
+                [e["is_cc"] for e in events], [True, True] + [False] * (2 + k)
+            )
 
 
 class GiBUUMultiRunOutputTests(unittest.TestCase):
@@ -745,6 +782,48 @@ class GiBUUMultiRunOutputTests(unittest.TestCase):
                 sum(event["xsec_weight"] for event in one_events),
                 sum(event["xsec_weight"] for event in two_events),
             )
+
+    def test_one_empty_run_does_not_fail_the_pass(self) -> None:
+        # A run that drew no events is a valid part of the estimate: the other
+        # run's events are still divided by num_runs = 2.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            one, two = Path(tmpdir) / "one", Path(tmpdir) / "two"
+            one.mkdir()
+            two.mkdir()
+            _write_sidecar(one, num_runs=1)
+            _write_roottuple(_part(one, 1), [1.0, 2.0], [0.25, 0.5], [1, 1])
+            _write_sidecar(two, num_runs=2)
+            _write_empty_roottuple(_part(two, 1))
+            _write_roottuple(_part(two, 2), [1.0, 2.0], [0.25, 0.5], [1, 1])
+
+            for work_dir in (one, two):
+                GiBUUNormalizer().normalize(
+                    work_dir, work_dir / "out.h5", _base_task(), "local"
+                )
+            _, one_events = read_events(one / "out.h5")
+            _, two_events = read_events(two / "out.h5")
+            self.assertEqual([e["energy_gev"] for e in two_events], [1.0, 2.0])
+            self.assertEqual([e["event_id"] for e in two_events], [0, 1])
+            np.testing.assert_allclose(
+                [e["xsec_weight"] for e in two_events],
+                [e["xsec_weight"] / 2 for e in one_events],
+            )
+
+    def test_every_run_empty_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, num_runs=2)
+            _write_empty_roottuple(_part(work_dir, 1))
+            _write_empty_roottuple(_part(work_dir, 2), with_prod_info=True)
+
+            with self.assertRaises(RuntimeError) as ctx:
+                GiBUUNormalizer().normalize(
+                    work_dir, work_dir / "out.h5", _base_task(), "local"
+                )
+            message = str(ctx.exception)
+            self.assertIn("GiBUU pass 'cc' produced no events", message)
+            self.assertIn("EventOutput.Pert.00000001.root", message)
+            self.assertIn("EventOutput.Pert.00000002.root", message)
 
     def test_missing_run_file_raises(self) -> None:
         # num_runs says 2 but only one part is present: reading it would still

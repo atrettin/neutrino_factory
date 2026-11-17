@@ -14,8 +14,10 @@ from ..translators.gibuu import GiBUUTranslator
 LOGGER = logging.getLogger(__name__)
 
 # Names of the directories GiBUU passes run in: the full pass of a current
-# (cc, nc) and its QE-only passes (cc_qe01, ...). See translators.gibuu.
-PASS_DIR_PATTERN = re.compile(r"^(cc|nc)(_qe\d{2})?$")
+# (cc, nc) and its QE-only passes (cc_qe01, ...). The translator formats the QE
+# index as ``{k:02d}``: at least two digits, more for k >= 100. See
+# translators.gibuu.
+PASS_DIR_PATTERN = re.compile(r"^(cc|nc)(_qe\d{2,})?$")
 
 
 class GiBUUAdapter(GeneratorAdapter):
@@ -86,14 +88,24 @@ class GiBUUAdapter(GeneratorAdapter):
         earlier translation (e.g. the cc_qeNN passes a neutrino run on H1 no
         longer generates) would otherwise be found by the normalizer, which
         rejects any pass directory it was not told about.
+
+        A stale pass entry that is a symlink is unlinked, never followed: the
+        directory it points to may not belong to this task, so it is left as is.
         """
         removed = []
         for path in sorted(work_dir.iterdir()):
-            if (
-                path.is_dir()
-                and PASS_DIR_PATTERN.match(path.name)
-                and path.name not in pass_names
-            ):
+            if not PASS_DIR_PATTERN.match(path.name) or path.name in pass_names:
+                continue
+            if path.is_symlink():
+                LOGGER.warning(
+                    "Unlinking stale GiBUU pass symlink %s -> %s; its target is "
+                    "left untouched",
+                    path,
+                    path.readlink(),
+                )
+                path.unlink()
+                removed.append(path.name)
+            elif path.is_dir():
                 shutil.rmtree(path)
                 removed.append(path.name)
         if removed:

@@ -84,6 +84,9 @@ pass's:
   generated; the `nc_qeNN` passes (νp → νp) are. Antineutrinos keep both
   (ν̄p → ℓ⁺n). The full CC pass has no QE events there either, so CC is
   unaffected.
+- **Very small chunks can fail.** A pass in which every run drew zero events
+  fails normalization with "GiBUU pass '<name>' produced no events"; raise
+  `events` per chunk. A single empty run among several is fine.
 - **Not part of the job label.** Two jobs that differ only in it need distinct
   `name:`s.
 
@@ -217,8 +220,10 @@ many passes the run has, each with its own copy of the flux table (the
 jobcard's `FileNameFlux` is CWD-relative). The passes are chained with `set -e`.
 A retried task reuses its raw directory, so before staging the adapter deletes
 (and logs as a warning) any pass-like subdirectory (`cc`, `nc`, `cc_qeNN`,
-`nc_qeNN`) that is not among the translated passes; the normalizer would
-otherwise reject it as a stray pass.
+`nc_qeNN`, with two or more index digits) that is not among the translated
+passes; the normalizer would otherwise reject it as a stray pass. A stale entry
+that is a symlink is unlinked, not followed, so its target is left untouched.
+Directories of passes that are still translated are kept as they are.
 
 `path_to_input` is written as the placeholder `@NF_GIBUU_INPUT@` and resolved by
 the adapter: `/opt/GiBUU/buuinput` under Docker,
@@ -333,17 +338,19 @@ weights already sum to that current's cross section, so the union sums to
 `qes_oversampling = K` appends K QE-only passes per current, `cc_qe01` …
 `cc_qeK`, then `nc_qe01` …, each with `includeQE` alone and the same
 `numEnsembles` as its current's full pass. For a neutrino on a target with no
-neutrons (H1) the `cc_qeNN` passes are left out: they cannot produce an event,
-and GiBUU then writes a `RootTuple` with only the particle branches
-(`E`, `P{x,y,z}`, `x`/`y`/`z`, `weight`, `barcode`; seen in
-`keystone_prod_v3_gibuu`, numu/nue H1, every chunk). Every pass is described in the
-translated config by `name`, `current` and `channels` (`all` or `qe`). The
+neutrons (H1) the `cc_qeNN` passes are left out, since they cannot produce an
+event ([Validation: empty passes](#empty-passes)). Every pass is described in
+the translated config by `name`, `current` and `channels` (`all` or `qe`). The
 normalizer:
 
 - refuses a run whose pass directories differ from the translated passes, in
   either direction: a missing QE pass would leave the others carrying 1/(K+1) of
   a σ only K passes estimated;
-- refuses a pass with no events (0 entries or no `lepIn_E`), naming the pass;
+- skips a run file whose `RootTuple` has 0 entries: the run drew no events, and
+  the other runs' weights are still divided by the full `num_runs`. A pass whose
+  run files are *all* empty is refused, naming the pass and each file (with its
+  branch list when the neutrinoProdInfo branches are absent): either the
+  translator should omit the pass, or the run is too small;
 - refuses a QE pass containing any `evType` other than 1 (`evType` is written once
   at the vertex and never changed by transport);
 - multiplies each event's raw weight by 1/n before `compute_xsec_weight`, where n
@@ -359,7 +366,9 @@ Pass *i* (in the order above, counting any left-out `cc_qeNN` passes) draws seed
 `task seed + i · PASS_SEED_OFFSET` (`1_000_000`), so leaving passes out shifts no
 other pass's seed. The full passes come first, so their seeds and jobcards do not
 depend on K. The cap of K = 50 keeps the last seed inside int32: task seeds reach
-2·10⁹, which leaves room for 148 passes.
+2·10⁹, which leaves room for pass indices up to 147. The translator checks the
+highest index of the full list, left-out passes included, so whether a seed fits
+does not depend on the target.
 
 ### RootTuple branches
 
@@ -445,6 +454,15 @@ the top 1% (56% of σ at 0.5–1 GeV, numu C12 CC) sit at typical Q² and angles
 so the sampling mismatches dσ across the whole peak, and the source-level fix
 would be a patch to GiBUU's QE kinematics sampling. More samples help
 linearly: 10 chunks gave 9.6–9.96× the per-bin QE `n_eff` of one.
+
+### Impossible passes are omitted, empty runs are tolerated (2026-11)
+
+A pass that cannot produce an event (neutrino CC QE without neutrons) is left
+out by the translator rather than run and tolerated: an empty *pass* at the
+normalizer stays a hard error, since accepting it would report σ = 0 for the
+channels it samples. An empty *run* within a pass that has events is accepted,
+because a small run can draw zero events by chance and still be a valid part of
+the estimate (its share is already in the `num_runs` division).
 
 ### Path handling
 
@@ -589,6 +607,15 @@ events, K = 10) measured the cost and checked the QE-only jobcard:
   per CPU hour, on top of oversampling, ~2.5× below 1 GeV and ~1.5× at 1–2 GeV. GiBUU's user flux uses
   equidistant bins (`FLUX_NBINS` over 0.1–500 GeV, ~1 GeV wide), so γ shapes
   sampling only above ~1 GeV.
+
+### Empty passes
+
+On `keystone_prod_v3_gibuu` (release2025, numu and nue on H1, K = 8), every
+`cc_qeNN` pass wrote a `RootTuple` with 0 entries holding only the particle
+branches `barcode`, `E`, `Px`/`Py`/`Pz`, `x`/`y`/`z` and `weight` (the particle
+perweight); the neutrinoProdInfo branches (`lepIn_*`, `lepOut_*`, `evType`,
+`nuc_*`) were absent. This is what a run without events writes, and the reason
+neutrino `cc_qeNN` passes are not generated on targets without neutrons.
 
 ### Background mapping
 
