@@ -11,6 +11,7 @@ from neutrino_factory.translators.gibuu import (
     FLUX_NBINS,
     INT32_MAX,
     MAX_QES_OVERSAMPLING,
+    PASS_SEED_OFFSET,
     GiBUUTranslator,
 )
 
@@ -167,17 +168,20 @@ OTHER_CHANNELS = (
 
 
 class GiBUUQesOversamplingTests(unittest.TestCase):
-    def _config(self, current: str = "inclusive", **section) -> dict:
+    def _config(
+        self, current: str = "inclusive", particle: str = "numu", nucleus: str = "C12",
+        **section,
+    ) -> dict:
         job = {
             **GIBUU_JOB,
             "flux": {
                 "type": "power_law",
-                "particle": "numu",
+                "particle": particle,
                 "emin_gev": 0.1,
                 "emax_gev": 500.0,
                 "gamma": -1.0,
             },
-            "target": {"nucleus": "C12"},
+            "target": {"nucleus": nucleus},
             "physics": {"mode": "inclusive", "current": current},
         }
         if section:
@@ -250,6 +254,48 @@ class GiBUUQesOversamplingTests(unittest.TestCase):
         )
         self.assertEqual(
             [p["name"] for p in translated["gibuu_passes"]], ["nc", "nc_qe01", "nc_qe02"]
+        )
+
+    def _passes_on(self, nucleus: str, particle: str) -> list[dict]:
+        config = self._config(particle=particle, nucleus=nucleus, qes_oversampling=2)
+        return GiBUUTranslator().translate(config, _task())["gibuu_passes"]
+
+    @staticmethod
+    def _seeds(passes: list[dict]) -> dict[str, int]:
+        return {p["name"]: int(re.findall(r"SEED = (\d+)", p["jobcard"])[0]) for p in passes}
+
+    def test_neutrino_on_hydrogen_has_no_cc_qe_passes(self) -> None:
+        # nu n -> l- p needs a neutron; nu p -> nu p does not.
+        for particle in ("numu", "nue"):
+            with self.subTest(particle=particle):
+                passes = self._passes_on("H1", particle)
+                self.assertEqual(
+                    [p["name"] for p in passes], ["cc", "nc", "nc_qe01", "nc_qe02"]
+                )
+
+    def test_antineutrino_on_hydrogen_keeps_cc_qe_passes(self) -> None:
+        # nubar p -> l+ n.
+        passes = self._passes_on("H1", "numubar")
+        self.assertEqual(
+            [p["name"] for p in passes],
+            ["cc", "nc", "cc_qe01", "cc_qe02", "nc_qe01", "nc_qe02"],
+        )
+
+    def test_dropped_passes_shift_no_other_seed(self) -> None:
+        full = self._seeds(self._passes_on("H1", "numubar"))
+        hydrogen = self._seeds(self._passes_on("H1", "numu"))
+        self.assertEqual(hydrogen, {name: full[name] for name in hydrogen})
+
+    def test_carbon_keeps_every_pass_and_seed(self) -> None:
+        passes = self._passes_on("C12", "numu")
+        self.assertEqual(
+            [p["name"] for p in passes],
+            ["cc", "nc", "cc_qe01", "cc_qe02", "nc_qe01", "nc_qe02"],
+        )
+        seed = _task()["seed"]
+        self.assertEqual(
+            list(self._seeds(passes).values()),
+            [seed + index * PASS_SEED_OFFSET for index in range(6)],
         )
 
     def test_translate_rejects_an_invalid_hand_built_section(self) -> None:

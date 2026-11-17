@@ -221,8 +221,10 @@ class GiBUUNormalizer(OutputNormalizer):
     )
 
     @staticmethod
-    def _read_parts(parts: list[Path]) -> dict[str, np.ndarray]:
+    def _read_parts(parts: list[Path], name: str = "") -> dict[str, np.ndarray]:
         """Read and concatenate the ``RootTuple`` branches across run files.
+
+        ``name`` is the pass the parts belong to, for the error messages.
 
         Concatenation is the right combination here, unlike merging chunks: the
         runs are parts of *one* estimate whose weights are all divided by the
@@ -241,6 +243,18 @@ class GiBUUNormalizer(OutputNormalizer):
         for part in parts:
             with uproot.open(part) as f:
                 tree = f["RootTuple"]
+                # A pass with no events at all writes a RootTuple holding only
+                # the particle branches: the neutrinoProdInfo ones (lepIn_*,
+                # weight, evType, nuc_*) are never created. That is a pass the
+                # translator should not have generated, so name it as such
+                # rather than as an unreadable branch.
+                if tree.num_entries == 0 or "lepIn_E" not in tree.keys():
+                    raise RuntimeError(
+                        f"GiBUU pass '{name}' produced no events ({part.name}: "
+                        f"RootTuple has {tree.num_entries} entries and only the "
+                        f"branches {sorted(tree.keys())}). A pass that cannot "
+                        "produce events should not be generated."
+                    )
 
                 def branch(name: str, library: str = "np"):
                     try:
@@ -352,7 +366,7 @@ class GiBUUNormalizer(OutputNormalizer):
         # came from — GiBUU's RootTuple has no per-event current branch, and does
         # not need one: a pass generates a single process_ID by construction.
         per_pass = [
-            (str(gibuu_pass["current"]), self._read_parts(parts))
+            (str(gibuu_pass["current"]), self._read_parts(parts, pass_name(gibuu_pass)))
             for gibuu_pass, parts in parts_by_pass
         ]
         for (gibuu_pass, _), (_, columns) in zip(parts_by_pass, per_pass):

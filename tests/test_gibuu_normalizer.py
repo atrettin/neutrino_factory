@@ -635,6 +635,57 @@ class GiBUUQesOversamplingTests(unittest.TestCase):
                 self._normalize(work_dir)
 
 
+    def test_empty_pass_names_the_pass(self) -> None:
+        # A pass without events (CC QE on H1 for a neutrino) gets a RootTuple
+        # with the particle branches only, and no neutrinoProdInfo branches.
+        import uproot
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_sidecar(work_dir, qes_oversampling=1)
+            _write_roottuple(_part(work_dir, current="cc"), [1.0], [0.1], [1])
+            with uproot.recreate(_part(work_dir, current="cc_qe01")) as f:
+                f["RootTuple"] = {
+                    "barcode": np.zeros(0, dtype=np.int32),
+                    **{b: np.zeros(0) for b in ("E", "Px", "Py", "Pz", "weight")},
+                }
+
+            with self.assertRaisesRegex(
+                RuntimeError, "GiBUU pass 'cc_qe01' produced no events"
+            ):
+                self._normalize(work_dir)
+
+
+class GiBUUAdapterStalePassTests(unittest.TestCase):
+    """A retry reuses the raw directory; passes no longer translated must go."""
+
+    def test_stale_pass_directory_is_removed(self) -> None:
+        from neutrino_factory.generators.gibuu import GiBUUAdapter
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            _write_roottuple(_part(work_dir, current="cc_qe03"), [1.0], [0.1], [1])
+            (work_dir / "unrelated").mkdir()
+            translated = {
+                "code_version": "release2025",
+                "gibuu_passes": [
+                    {"name": "cc", "current": "cc", "channels": "all", "jobcard": "! a"},
+                    {"name": "nc_qe01", "current": "nc", "channels": "qe", "jobcard": "! b"},
+                ],
+            }
+            with patch(
+                "neutrino_factory.generators.gibuu.shutil.which",
+                return_value="/usr/local/bin/GiBUU.x",
+            ), self.assertLogs("neutrino_factory.generators.gibuu", "WARNING") as logs:
+                GiBUUAdapter({}).build_run_command(translated, work_dir)
+
+            self.assertEqual(
+                sorted(p.name for p in work_dir.iterdir()),
+                ["cc", "nc_qe01", "translated_config.json", "unrelated"],
+            )
+            self.assertIn("cc_qe03", "\n".join(logs.output))
+
+
 class GiBUUMultiRunOutputTests(unittest.TestCase):
     """GiBUU writes one file per run; every part must be read.
 
