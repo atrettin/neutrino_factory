@@ -23,9 +23,10 @@ import re
 import statistics
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import layout
 from .status import read_sidecar
@@ -80,11 +81,41 @@ _OOM = re.compile(r"oom[-_]kill event", re.IGNORECASE)
 _PY_EXCEPTION = re.compile(
     r"^(?:(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*(?:Error|Exception|Exit|Interrupt)(?::|$)|Error: )"
 )
-# Whole words only, so that prose such as GiBUU's banner "of errors and use
-# common sense" is not taken for an error.
+# A generator's own error or crash message. Words are delimited by non-letters,
+# so that "FATAL_ERROR" matches but prose such as GiBUU's banner "of errors and
+# use common sense" does not. Signal names are listed one by one and
+# case-sensitive, since NEUT logs "SIGMAX =" routinely; "Killed" is matched as
+# the shell prints it.
 _GENERATOR_ERROR = re.compile(
-    r"\b(?:error|abort(?:ed|ing)?|fatal|exception|signal|segmentation)\b", re.IGNORECASE
+    r"(?<![A-Za-z])(?:error|abort(?:ed|ing)?|fatal|exception|signal|segmentation)(?![A-Za-z])"
+    r"|(?-i:(?<![A-Za-z])(?:SIG(?:SEGV|ABRT|FPE|BUS|ILL|KILL|TERM|TRAP|SYS|XCPU)|Killed)"
+    r"(?![A-Za-z]))"
+    r"|\*\*\* Break \*\*\*"  # ROOT, e.g. "*** Break *** illegal instruction"
+    r"|terminate called after throwing"  # uncaught C++ exception
+    r"|(?-i:Assertion .{1,300}? failed)"  # bounded: no backtracking on long lines
+    r"|buffer overflow detected"  # e.g. NuWro with a too long work path
+    r"|core dumped",
+    re.IGNORECASE,
 )
+# Generators log routine warnings that contain "error" ("*** WARNING ***
+# KINEMATICAL ERROR AT NECOHVCT ..." from NEUT, thousands of times per chunk).
+# A non-warning error line is preferred over a final warning only if it lies at
+# most this many lines before it: a crash message is printed just before the
+# crash (GENIE's "ERROR ..." line comes right before its abort), while one from
+# hundreds of lines earlier is a routine, recovered message (NEUT's "Error in
+# neapivct", also logged by chunks that finished).
+_WARNING = re.compile(r"(?<![A-Za-z])warning(?![A-Za-z])", re.IGNORECASE)
+_ERROR_OVER_WARNING_LINES = 30
+# Slurm writes its "CANCELLED AT" times in the cluster's local time, without a
+# zone; sidecars use UTC.
+try:
+    _SLURM_TIME_ZONE: tzinfo | None = ZoneInfo("Europe/Berlin")
+except ZoneInfoNotFoundError:  # no time zone database: kill times are not compared
+    _SLURM_TIME_ZONE = None
+# A kill line may predate the sidecar's start by this much without coming from
+# an earlier attempt: Slurm's times are truncated to seconds, and node clocks
+# differ slightly.
+_KILL_CLOCK_SLACK = timedelta(minutes=1)
 
 
 def parse_slurm_time(value: Any) -> timedelta | None:
@@ -130,14 +161,27 @@ def collapse_carriage_returns(text: str) -> list[str]:
 
 
 def read_tail(path: Path | None, max_bytes: int = _TAIL_BYTES) -> str:
-    """The last ``max_bytes`` of a text file, or ``""`` if it is absent."""
+    """The last ``max_bytes`` of a text file, or ``""`` if it is absent.
+
+    A line cut off at the start of the tail is dropped, so that a fragment such
+    as "ING *** ..." of a warning line is not mistaken for a line of its own. A
+    tail without any line break is kept whole.
+    """
     if path is None or not path.is_file():
         return ""
     with path.open("rb") as handle:
         handle.seek(0, 2)
         size = handle.tell()
-        handle.seek(max(0, size - max_bytes))
-        return handle.read().decode("utf-8", errors="replace")
+        offset = max(0, size - max_bytes)
+        handle.seek(max(0, offset - 1))
+        before = handle.read(1) if offset > 0 else b"\n"
+        data = handle.read()
+    if before not in (b"\n", b"\r"):
+        # The first "\n" or "\r" ends the fragment; "\r" for progress counters.
+        match = re.search(rb"[\r\n]", data)
+        if match:
+            data = data[match.end():]
+    return data.decode("utf-8", errors="replace")
 
 
 def tail_lines(path: Path | None, count: int) -> list[str]:
@@ -237,6 +281,9 @@ def _shorten_exception(line: str) -> str:
 def _failure_reason(err_text: str, out_text: str) -> str:
     """The last Python exception in stderr plus the last error-like generator line.
 
+    A generator line that contains "warning" loses to a non-warning error line
+    at most ``_ERROR_OVER_WARNING_LINES`` lines before it.
+
     Both are needed: when a generator aborts without a non-zero exit code, the
     Python traceback only shows the follow-on error (e.g. an empty ROOT file),
     while the real cause is the generator's own message in stdout.
@@ -246,19 +293,29 @@ def _failure_reason(err_text: str, out_text: str) -> str:
          if _PY_EXCEPTION.match(line.strip())),
         "",
     )
-    generator = next(
-        (line.strip() for line in reversed(collapse_carriage_returns(out_text))
-         if _GENERATOR_ERROR.search(line)),
-        "",
-    )
+    out_lines = collapse_carriage_returns(out_text)
+    hits = [i for i, line in enumerate(out_lines) if _GENERATOR_ERROR.search(line)]
+    generator = ""
+    if hits:
+        last = hits[-1]
+        recent = [i for i in hits if i >= last - _ERROR_OVER_WARNING_LINES]
+        preferred = [i for i in recent if not _WARNING.search(out_lines[i])]
+        generator = out_lines[(preferred or recent)[-1]].strip()
     parts = [_shorten_exception(exception)]
     if generator:
         parts.append(f"out: {generator}")
     return " | ".join(part for part in parts if part)
 
 
-def _slurm_kill(err_text: str) -> dict[str, str] | None:
+def _slurm_kill(err_text: str, start: datetime | None = None) -> dict[str, str] | None:
+    """Slurm's last kill line in stderr, ignoring lines from before ``start``.
+
+    A requeued task appends to the same ``.err``, which can therefore still hold
+    the kill line of an earlier attempt.
+    """
     matches = list(_SLURM_KILL.finditer(err_text))
+    if start is not None and _SLURM_TIME_ZONE is not None:
+        matches = [m for m in matches if not _killed_before(m["at"], start)]
     if not matches:
         return None
     last = matches[-1]
@@ -268,6 +325,19 @@ def _slurm_kill(err_text: str) -> dict[str, str] | None:
         "at": last["at"],
         "due": (last["due"] or "").strip(),
     }
+
+
+def _killed_before(at: str, start: datetime) -> bool:
+    """Whether Slurm's local kill time ``at`` lies before ``start``."""
+    try:
+        killed = datetime.fromisoformat(at)
+    except ValueError:
+        return False
+    if killed.tzinfo is None:
+        # In the autumn fold a local time occurs twice; fold=1 is the later
+        # instant, so a kill is dropped only if it predates the start either way.
+        killed = killed.replace(tzinfo=_SLURM_TIME_ZONE, fold=1)
+    return killed < start - _KILL_CLOCK_SLACK
 
 
 def diagnose_task(
@@ -288,7 +358,7 @@ def diagnose_task(
 
     status = sidecar.get("status")
     start = _parse_utc(sidecar.get("start_utc"))
-    kill = _slurm_kill(err_text)
+    kill = _slurm_kill(err_text, start)
     node = sidecar.get("node") or (kill["node"] if kill else None)
 
     diagnosis: dict[str, Any] = {
