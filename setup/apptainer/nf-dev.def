@@ -13,7 +13,9 @@ From: {{ CORE_IMAGE }}
 %post
     export DEBIAN_FRONTEND=noninteractive
     
-    # VSCode remote development and general utilities
+    # VSCode remote development and general utilities.
+    # gh: GitHub CLI, so agents can open pull requests.
+    # ghostscript: converts PDF/PS/EPS figures (e.g. from papers in literature/).
     apt-get update && apt-get install -y --no-install-recommends \
         curl \
         git \
@@ -42,6 +44,8 @@ From: {{ CORE_IMAGE }}
         bzip2 \
         xz-utils \
         ripgrep \
+        gh \
+        ghostscript \
         && rm -rf /var/lib/apt/lists/* \
         || { echo "nf-dev: apt install failed" >&2; exit 1; }
 
@@ -85,6 +89,12 @@ python3 --version
 echo -n "Git version: "
 git --version
 
+echo -n "GitHub CLI version: "
+gh --version | head -n 1
+
+echo -n "Ghostscript version: "
+gs --version
+
 echo -n "Pyright version: "
 pyright --version 2>&1 || echo "not installed"
 
@@ -104,6 +114,8 @@ EOF
     command -v vim
     command -v pytest
     command -v opencode
+    command -v gh
+    command -v gs
     command -v grep
     command -v sed
     command -v awk
@@ -118,7 +130,8 @@ EOF
     Built on top of nf-base.sif with additional development utilities.
     
     Key tools:
-      - Git, curl, vim, htop, strace, gdb
+      - Git, GitHub CLI (gh), curl, vim, htop, strace, gdb
+      - Ghostscript (gs): convert PDF/PS/EPS figures
       - Python: pytest, pyright, black, isort, flake8, mypy
       - nf-dev-check: verify dev environment
     

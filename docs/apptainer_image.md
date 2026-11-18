@@ -64,6 +64,10 @@ top of `nf-base.sif`:
 - **System utilities**: vim, nano, htop, strace, gdb, telnet, netcat, wget
 - **Build tools**: make, autoconf, automake, libtool
 - **Documentation**: pandoc, graphviz
+- **GitHub**: gh, the GitHub CLI, for opening pull requests from the container
+  (it needs a `gh auth login` or a `GH_TOKEN` in the environment)
+- **Figures**: ghostscript (`gs`), to convert PDF/PS/EPS figures, for example
+  from papers in `literature/`
 
 VSCode Remote Development Setup:
 
