@@ -267,14 +267,16 @@ waiting in the queue puts every queued task in it as `no_output`:
 
 | mode | meaning | evidence |
 |---|---|---|
-| `crash` | the generator or normalization raised | sidecar `failed`; reason = last Python exception in stderr (a traceback's last line, or the CLI's own `Error: ...` line) plus the last line of generator stdout containing a whole word such as `error`, `abort` or `fatal` |
+| `crash` | the generator or normalization raised | sidecar `failed`; reason = last Python exception in stderr (a traceback's last line, or the CLI's own `Error: ...` line) plus the last error-like line of generator stdout: one containing a word such as `error`, `abort` or `fatal` (also inside `FATAL_ERROR`, but not `errors`), or a crash marker such as `SIGSEGV`, `*** Break ***`, `terminate called after throwing`, `Killed`, `Assertion ... failed`, `buffer overflow detected` or `core dumped`. A line containing `WARNING`, such as NEUT's `*** WARNING *** KINEMATICAL ERROR AT NECOHVCT`, gives way to a non-warning error line at most 30 lines before it |
 | `oom` | killed for exceeding `slurm.mem` | Slurm's `oom_kill event` line in stderr |
 | `timeout` | killed at the Slurm time limit | Slurm's `CANCELLED ... DUE TO TIME LIMIT` line, or still `running` past the limit |
-| `cancelled` | `scancel`led | Slurm's `CANCELLED AT ...` line with no `DUE TO` |
-| `node_failure` | its node died while it ran | Slurm's `DUE TO NODE FAILURE` line (followed by `, SEE SLURMCTLD LOG FOR DETAILS`) |
+| `cancelled` | `scancel`led | Slurm's `CANCELLED AT ...` line with no `DUE TO`, or another reason such as `PREEMPTION` |
+| `node_failure` | its node died while it ran | Slurm's `DUE TO NODE FAILURE` line (on this cluster followed by `, SEE SLURMCTLD LOG FOR DETAILS`) |
 | `hung` | still running, but silent | no log or raw-output activity for `--hung-after` hours (default 4) |
 | `invalid` | finished, but the output failed validation | sidecar |
 | `no_output` | no sidecar and no log | still queued, **or** never started because its node failed |
+
+A Slurm kill line dated more than 1 minute before the sidecar's `start_utc` is ignored as belonging to an earlier attempt of a requeued task (Slurm's times are read as Europe/Berlin local time).
 
 Inside the container, `check-status` cannot ask Slurm, so a `no_output` task is
 exactly that: one that left nothing behind. With `--list-failures` it prints the

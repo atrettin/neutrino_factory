@@ -20,6 +20,7 @@ from neutrino_factory.diagnosis import (
     format_diagnosis_report,
     node_summary,
     parse_slurm_time,
+    read_tail,
     sacct_commands,
     scancel_commands,
 )
@@ -179,6 +180,121 @@ class DiagnoseRunTests(unittest.TestCase):
             "not found: 'lepIn_E'",
         )
 
+    def test_failure_reason_lines(self) -> None:
+        failed = {"status": "failed", "start_utc": NOW.isoformat(), "node": "et29"}
+        died = (
+            "subprocess.CalledProcessError: Command '['nf-run', 'neut', '5.7.0', 'neutroot2', "
+            "'card']' died with <Signals.SIGFPE: 8>.\n"
+        )
+        signal = "nf-run neut 5.7.0 neutroot2 ... died with <Signals.SIGFPE: 8>"
+        warning = "*** WARNING *** KINEMATICAL ERROR AT NECOHVCT (MODE,E)  16   59.36272"
+        filler = "".join(f"event {i}\n" for i in range(100))
+        # name: (stdout, stderr, expected reason)
+        cases = {
+            # A real error after GiBUU's banner is the generator line.
+            "banner": (
+                "**      !!                 hh    !!       of errors and use common sense    **\n"
+                "Error in readInput: namelist not found\n",
+                died,
+                f"{signal} | out: Error in readInput: namelist not found",
+            ),
+            # An unrelated "ERROR ..." line in stderr is not a Python exception.
+            "stray_stderr_error": (
+                None,
+                "ERROR PDG : Requested missing particle\nTraceback (most recent call last):\n"
+                "ValueError: empty file\nERROR something else afterwards\n",
+                "ValueError: empty file",
+            ),
+            # A routine warning loses to a real error just before it ...
+            "error_before_warning": (
+                f"FATAL_ERROR in nemkcrsc\n{warning}\n", died, f"{signal} | out: FATAL_ERROR in nemkcrsc"
+            ),
+            # ... but not to a recovered one far back (NEUT's "Error in neapivct").
+            "stale_error": (
+                f"Error in neapivct, Mode= -46\n{filler}{warning}\n", died, f"{signal} | out: {warning}"
+            ),
+            "only_warning": (f"{warning}\n", died, f"{signal} | out: {warning}"),
+            # Crash markers without the word "error"; "SIGMAX =" is not a signal.
+            "root_break": (
+                "Run real events\n*** Break *** illegal instruction\nevent 12\n",
+                died,
+                f"{signal} | out: *** Break *** illegal instruction",
+            ),
+            "buffer_overflow": (
+                "*** buffer overflow detected ***: terminated\n",
+                None,
+                "out: *** buffer overflow detected ***: terminated",
+            ),
+            "sigsegv": ("caught SIGSEGV\nx-sec = 14.9  SIGMAX = 14.0\n", None, "out: caught SIGSEGV"),
+            "killed": ("/bin/sh: line 1:  4242 Killed  GiBUU.x\n", None,
+                       "out: /bin/sh: line 1:  4242 Killed  GiBUU.x"),
+            "cxx_exception": (
+                "terminate called after throwing an instance of 'std::bad_alloc'\n", None,
+                "out: terminate called after throwing an instance of 'std::bad_alloc'",
+            ),
+            "assertion": (
+                "gevgen: Foo.cxx:12: void f(): Assertion `x > 0' failed.\n", None,
+                "out: gevgen: Foo.cxx:12: void f(): Assertion `x > 0' failed.",
+            ),
+            "core_dumped": ("Floating point exception (core dumped)\n", None,
+                            "out: Floating point exception (core dumped)"),
+            "no_marker": ("x-sec = 14.9  SIGMAX = 14.0\nsigma = 3\n", None, ""),
+        }
+        indices = {name: self._add(failed, out=out, err=err) for name, (out, err, _) in cases.items()}
+
+        diagnoses = diagnose_run(self.config, self.tasks, now=NOW, hung_after_hours=4)
+
+        for name, (_, _, expected) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(diagnoses[indices[name]]["reason"], expected)
+    def test_slurm_kill_lines(self) -> None:
+        # Slurm writes local time (CET here): 11:30 local is 10:30 UTC.
+        kill = "slurmstepd: error: *** {kind} 500_{i} ON et38 CANCELLED AT 2026-10-28T11:30:00{due} ***\n"
+        preempted = self._add(self._running(2), err=kill.format(kind="JOB", i=0, due=" DUE TO PREEMPTION"))
+        step = self._add(self._running(9), err=kill.format(kind="STEP", i=1, due=" DUE TO TIME LIMIT"))
+        # A requeued task appends to the same .err: a kill from before the
+        # sidecar's start (11:00 UTC) belongs to the earlier attempt and is
+        # ignored. Read as UTC, the kill (11:30) would wrongly count.
+        requeued = self._add(
+            self._running(1),
+            out="Run real events\n",
+            err=kill.format(kind="JOB", i=2, due=" DUE TO NODE FAILURE, SEE SLURMCTLD LOG FOR DETAILS"),
+        )
+        # Started 10:20 UTC, killed 10:30 UTC: a kill after the start counts.
+        just_started = self._add(
+            {"status": "running", "start_utc": "2026-10-28T10:20:00+00:00", "node": "et01"},
+            err=kill.format(kind="JOB", i=3, due=""),
+        )
+        # The kill may predate the start by up to a minute (clock slack).
+        in_slack = self._add(
+            {"status": "running", "start_utc": "2026-10-28T10:31:00+00:00", "node": "et01"},
+            err=kill.format(kind="JOB", i=4, due=""),
+        )
+        past_slack = self._add(
+            {"status": "running", "start_utc": "2026-10-28T10:31:01+00:00", "node": "et01"},
+            out="x\n",
+            err=kill.format(kind="JOB", i=5, due=""),
+        )
+        # 02:30 on 2026-10-25 occurs twice in Berlin: 00:30 UTC (CEST) and
+        # 01:30 UTC (CET). A start at 01:00 UTC is before the later reading.
+        fold = self._add(
+            {"status": "running", "start_utc": "2026-10-25T01:00:00+00:00", "node": "et01"},
+            err="slurmstepd: error: *** JOB 500_6 ON et38 CANCELLED AT 2026-10-25T02:30:00 ***\n",
+        )
+
+        diagnoses = diagnose_run(self.config, self.tasks, now=NOW, hung_after_hours=4)
+
+        self.assertEqual(diagnoses[preempted]["mode"], "cancelled")
+        self.assertEqual(
+            diagnoses[preempted]["reason"], "Slurm: cancelled at 2026-10-28T11:30:00 due to preemption"
+        )
+        self.assertEqual(diagnoses[step]["mode"], "timeout")
+        self.assertEqual(diagnoses[requeued]["mode"], "running")
+        self.assertEqual(diagnoses[just_started]["mode"], "cancelled")
+        self.assertEqual(diagnoses[in_slack]["mode"], "cancelled")
+        self.assertEqual(diagnoses[past_slack]["mode"], "running")
+        self.assertEqual(diagnoses[fold]["mode"], "cancelled")
+
     def test_newest_submission_wins(self) -> None:
         index = self._add(self._running(1), err="old crash\n", array=500)
         (self.logs / f"nf_{RUN}_retry_501_{index}.out").write_text("retry\n", encoding="utf-8")
@@ -197,6 +313,19 @@ class HelperTests(unittest.TestCase):
 
     def test_carriage_returns_keep_the_final_state(self) -> None:
         self.assertEqual(collapse_carriage_returns("a 1%\ra 50%\ra 100%\nnext"), ["a 100%", "next"])
+
+    def test_read_tail_drops_the_cut_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "x.out"
+            path.write_text("*** WARNING *** first\nsecond\nthird\n", encoding="utf-8")
+            self.assertEqual(read_tail(path, max_bytes=16), "second\nthird\n")
+            self.assertEqual(read_tail(path), "*** WARNING *** first\nsecond\nthird\n")
+            # A cut exactly at a line start drops nothing.
+            path.write_bytes(b"AAAAAAAAAA\nlast\n")
+            self.assertEqual(read_tail(path, max_bytes=5), "last\n")
+            # A tail without any line break is kept.
+            path.write_bytes(b"x" * 20)
+            self.assertEqual(read_tail(path, max_bytes=5), "xxxxx")
 
 
 class ReseedTests(unittest.TestCase):
