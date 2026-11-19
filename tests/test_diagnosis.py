@@ -402,6 +402,55 @@ class CliTests(unittest.TestCase):
                     self._run(["retry", "--config", config_path, "--time", "01:00:00", "--executor", "slurm",
                                "--modes", "hung", "--dry-run"])
 
+    def test_retry_refuses_tasks_an_earlier_retry_has_not_started(self) -> None:
+        """Two retry scripts must never cover the same task, nor overwrite each other."""
+        repo_root = Path(__file__).resolve().parents[1]
+        config_path = str(repo_root / "configs" / "examples" / "power_law_numu_Ar.yaml")
+        argv = ["retry", "--config", config_path, "--time", "01:00:00", "--executor", "slurm"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = {"NF_OUTPUT_ROOT": f"{tmpdir}/output", "NF_WORK_ROOT": f"{tmpdir}/work"}
+            with patch.dict(os.environ, env, clear=False), patch(
+                "neutrino_factory.cli.shutil.which", return_value=None
+            ):
+                config = load_config(config_path)
+                write_manifest(config)
+                task = build_task_manifest(config)["tasks"][0]
+                path = layout.chunk_sidecar_path(config, task)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    json.dumps({"status": "failed", "start_utc": "2020-01-01T00:00:00+00:00"}),
+                    encoding="utf-8",
+                )
+
+                _, text = self._run(argv + ["--dry-run"])
+                self.assertIn("dry-run", text)
+                self.assertEqual(list((Path(tmpdir) / "work").rglob("*.sbatch")), [])
+
+                _, text = self._run(argv)
+                first = json.loads(text[text.rindex("\n{"):])["sbatch_path"]
+                self.assertTrue(Path(first).is_file())
+
+                # The task has not started since the script was issued: refuse.
+                with self.assertRaisesRegex(RuntimeError, "already covered by"):
+                    self._run(argv)
+
+                # --force overrides, and writes a script of its own.
+                _, text = self._run(argv + ["--force"])
+                second = json.loads(text[text.rindex("\n{"):])["sbatch_path"]
+                self.assertNotEqual(first, second)
+                self.assertTrue(Path(first).is_file())
+
+                # Once the task has started after the last script, a failure is new.
+                path.write_text(
+                    json.dumps({"status": "failed", "start_utc": datetime.now(timezone.utc).isoformat()}),
+                    encoding="utf-8",
+                )
+                _, text = self._run(argv + ["--modes", "crash"])
+                self.assertEqual(
+                    json.loads(text[text.rindex("\n{"):])["missing_task_indices"],
+                    [task["task_index"]],
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

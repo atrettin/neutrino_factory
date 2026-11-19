@@ -298,6 +298,19 @@ work directory with their times — enough to see where a generator stopped.
 modes). Running and hung tasks are never retried: they still hold their Slurm
 slot and write to the chunk's paths.
 
+Each `retry` writes its own script, `<run>_retry_<modes>_<timestamp>.sbatch`
+under `$NF_WORK_ROOT/<run>/slurm/`, so a later retry never overwrites an earlier
+one before it is submitted. The script's path is printed (and, when `sbatch` is
+not available, is the one to submit from the host shell). `retry` also records
+the tasks of every script it renders or submits in
+`<run>_retry_ledger.json` next to it. The diagnosis reads files only, so a task
+that a retry has queued but not started still looks failed; the ledger keeps a
+second `retry` from selecting it again, which would run two array tasks in one
+chunk directory and truncate each other's files. Such a task counts as pending
+until its sidecar shows a start after the script was issued, and `retry` refuses
+a selection that contains pending tasks. `--force` overrides this, for a script
+that was never submitted or whose array has been cancelled.
+
 ```bash
 # Node failures, once sacct has confirmed nothing is still queued
 neutrino-factory retry --config <cfg> --time 23:59:00 --modes no_output

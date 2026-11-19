@@ -4,6 +4,7 @@ import argparse
 import json
 import shutil
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from .kinematics_report import (
 from .local import run_local, run_task_from_manifest
 from .merge import merge_outputs
 from .plots import DEFAULT_BINS, make_config_plots, make_plots
+from .retry_ledger import new_script_path, pending_retries, record_retry
 from .slurm import (
     build_task_manifest,
     default_manifest_path,
@@ -289,6 +291,24 @@ def cmd_retry(args: argparse.Namespace) -> int:
         "not_retried": busy,
     }
 
+    pending = pending_retries(config, selected)
+    if pending and not args.force:
+        by_script: dict[str, list[int]] = {}
+        for index, entry in sorted(pending.items()):
+            by_script.setdefault(entry["script"], []).append(index)
+        lines = [
+            f"  {len(indices)} task(s), e.g. {indices[0]}, already covered by {script}"
+            for script, indices in by_script.items()
+        ]
+        raise RuntimeError(
+            "Some selected tasks are already covered by an earlier retry script that "
+            "has not started them yet (still queued, or rendered but never submitted):\n"
+            + "\n".join(lines)
+            + "\nSubmitting them again would run two array tasks in one chunk directory "
+            "and corrupt its files. Wait until they have started, cancel that array "
+            "and pass --force, or pass --force if the script was never submitted."
+        )
+
     if busy:
         print("Not retried (still holding a Slurm slot): "
               + ", ".join(f"{mode} {n}" for mode, n in busy.items()))
@@ -328,11 +348,13 @@ def cmd_retry(args: argparse.Namespace) -> int:
         config, manifest_path, selected_indices, args.time
     )
 
-    work_root = Path(config["storage"]["work_root"])
-    slurm_dir = work_root / "slurm"
-    slurm_dir.mkdir(parents=True, exist_ok=True)
-    retry_script_path = slurm_dir / f"{config['run']['name']}_retry.sbatch"
-    retry_script_path.write_text(retry_script, encoding="utf-8")
+    # One script per invocation: a shared name let a later retry overwrite the
+    # script of an earlier one before it was submitted.
+    issued = datetime.now(timezone.utc)
+    retry_script_path = new_script_path(config, modes, issued)
+    if not args.dry_run:
+        retry_script_path.parent.mkdir(parents=True, exist_ok=True)
+        retry_script_path.write_text(retry_script, encoding="utf-8")
 
     payload = {
         **base_payload,
@@ -349,6 +371,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
         return 0
 
     if shutil.which("sbatch") is None:
+        record_retry(config, selected_indices, retry_script_path, modes, False, issued)
         print(
             "sbatch is not available in this environment. "
             "The retry Slurm script has been rendered; submit it from a host shell "
@@ -364,6 +387,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
     if completed.returncode != 0:
         raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "sbatch failed")
 
+    record_retry(config, selected_indices, retry_script_path, modes, True, issued)
     print(f"Submitted retry job: {completed.stdout.strip()}")
     _print_json(
         {**payload, "submitted": True, "scheduler_output": completed.stdout.strip()}
@@ -908,6 +932,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Give the retried tasks new seeds, for failures that would otherwise "
             "recur with the same seed (generator crashes, hangs)"
+        ),
+    )
+    retry_parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Retry tasks even when an earlier retry script covers them and has not "
+            "started them yet (use only after cancelling that array, or if the "
+            "script was never submitted)"
         ),
     )
     retry_parser.add_argument(

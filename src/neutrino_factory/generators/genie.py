@@ -208,12 +208,47 @@ class GenieAdapter(GeneratorAdapter):
     def translate_config(self, task: dict) -> dict:
         return GenieTranslator().translate(self.config, task)
 
+    @staticmethod
+    def _remove_stale_outputs(work_dir: Path) -> None:
+        """Delete event files left in the work dir by an earlier attempt.
+
+        ``run_task`` reuses a task's work directory on retry, and
+        ``normalize_output`` reuses any ``events.gst.root`` it finds instead of
+        running gntpc. A gst file left by a gntpc that was killed has no keys and
+        would crash the retry; one from a completed earlier attempt would silently
+        be paired with the new events of a ``--new-seed`` retry. The GHEP file and
+        the universe-weight batches go too, so that only this attempt's gevgen
+        output is converted and reweighted.
+        """
+        stale = [work_dir / "events.ghep.root", work_dir / "events.gst.root"]
+        stale += sorted(work_dir.glob("universe_weights.batch*.root"))
+        for path in stale:
+            if path.exists():
+                LOGGER.warning("Removing %s from an earlier attempt before generating", path)
+                path.unlink()
+
+    def run_stub(
+        self,
+        translated_config: dict,
+        raw_output_path: str | Path,
+        task: dict,
+    ) -> str:
+        """Write stub events, after removing event files of an earlier attempt.
+
+        ``normalize_output`` prefers an ``events.gst.root`` (or converts an
+        ``events.ghep.root``) in the same directory, so a file left by an earlier
+        real run would replace the stub's events.
+        """
+        self._remove_stale_outputs(Path(raw_output_path).parent)
+        return super().run_stub(translated_config, raw_output_path, task)
+
     def build_run_command(self, translated_config: dict, work_dir: Path) -> list[str]:
         energy_min, energy_max = translated_config["energy_range_gev"]
         xml_path = self._resolve_xml_path(translated_config)
         code_version = translated_config.get("code_version")
 
         work_dir.mkdir(parents=True, exist_ok=True)
+        self._remove_stale_outputs(work_dir)
         sidecar = dict(translated_config)
         sidecar["image"] = self.container_image(code_version)
         (work_dir / "translated_config.json").write_text(
