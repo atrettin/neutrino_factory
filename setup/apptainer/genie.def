@@ -62,6 +62,7 @@ Stage: builder
         https://github.com/GENIE-MC/Generator.git /opt/genie
 
     # ── Pythia6 (GENIE's own upstream build script) ───────────────────────────
+    # Always R-3_06_00's copy of the script: R-2_12_8's older one fails to link.
     # pythia.org now 302-redirects the Fortran source to pythia8.web.cern.ch,
     # but the script fetches with `curl -f -O` (no -L) and silently saves the
     # 85-byte redirect page — libPythia6.so then lacks pyevnt_ etc. and the
@@ -75,8 +76,11 @@ Stage: builder
     curl -fsSL \
         "https://pythia.org/download/pythia6/pythia${PY6_MAJ}${PY6_MIN}${PY6_TINY}.f" \
         -o "${PY6_DL}/pythia${PY6_MAJ}${PY6_MIN}${PY6_TINY}.f_with_dummies"
+    curl -fsSL "https://raw.githubusercontent.com/GENIE-MC/Generator/R-3_06_00/src/scripts/build/ext/build_pythia6.sh" \
+        -o /tmp/build_pythia6.sh
     cd /opt/pythia6
-    bash /opt/genie/src/scripts/build/ext/build_pythia6.sh "{{ PYTHIA6_VERSION }}"
+    bash /tmp/build_pythia6.sh "{{ PYTHIA6_VERSION }}"
+    rm -f /tmp/build_pythia6.sh
     test -s "$(find /opt/pythia6 -maxdepth 4 -name 'libPythia6.so' | head -1)"
 
     # ── LHAPDF ────────────────────────────────────────────────────────────────
@@ -158,19 +162,26 @@ Stage: builder
     export LD_LIBRARY_PATH="/opt/root/lib:/opt/lhapdf6/lib:${PYTHIA6_LIBDIR}"
     export GENIE=/opt/genie
     cd /opt/genie
+    # GENIE 2's configure predates the LHAPDF6/Pythia8 options; its DIS PDF
+    # (GRV98 LO) is built in, so it needs no LHAPDF at all.
+    # GENIE 2 also needs `string` declared in Utils/AppInit.h for ROOT 6's
+    # dictionary generation, and a rerun of make, whose top level is not -j
+    # safe (see setup/Dockerfile.genie).
+    case "{{ GENIE_TAG }}" in
+        R-2_*) PDF_OPTS="--disable-lhapdf"
+               sed -i 's|^#define _APP_INIT_UTILS_H_|#define _APP_INIT_UTILS_H_\n#include <string>\nusing std::string;|' \
+                   src/Utils/AppInit.h ;;
+        *) PDF_OPTS="--disable-lhapdf5 --enable-lhapdf6 --enable-pythia6 --disable-pythia8
+               --with-lhapdf6-inc=/opt/lhapdf6/include --with-lhapdf6-lib=/opt/lhapdf6/lib" ;;
+    esac
     ./configure \
-        --disable-lhapdf5 \
-        --enable-lhapdf6 \
-        --enable-pythia6 \
-        --disable-pythia8 \
-        --with-lhapdf6-inc=/opt/lhapdf6/include \
-        --with-lhapdf6-lib=/opt/lhapdf6/lib \
+        ${PDF_OPTS} \
         --with-libxml2-inc=/usr/include/libxml2 \
         --with-libxml2-lib=/usr/lib/x86_64-linux-gnu \
         --with-log4cpp-inc=/usr/include \
         --with-log4cpp-lib=/usr/lib/x86_64-linux-gnu \
         --with-pythia6-lib="${PYTHIA6_LIBDIR}"
-    make -j"{{ JOBS }}"
+    make -j"{{ JOBS }}" || make -j"{{ JOBS }}"
     test -d /opt/genie/config && test -d /opt/genie/data
     test -x /opt/genie/bin/gevgen
 

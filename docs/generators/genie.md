@@ -2,7 +2,9 @@
 
 GENIE is built from source off the GENIE-MC/Generator GitHub tags and run in two
 stages, `gevgen` → `gntpc`. It is the only generator whose `config_version` is a
-real physics parameter set (the **tune**), and the one with the broadest reweight
+real physics parameter set (the **tune**) — except GENIE 2 (`R-2_12_8`), which
+predates tunes and runs its default physics without MEC
+([GENIE 2](#genie-2-r-2_12_8)) — and the one with the broadest reweight
 support, through GENIE Reweight. The conventions its output is normalized onto
 are in [../physics.md](../physics.md); the run pipeline is in
 [../architecture.md](../architecture.md).
@@ -11,8 +13,8 @@ are in [../physics.md](../physics.md); the run pipeline is in
 
 | | |
 |---|---|
-| Code versions | `R-3_06_00` (verified), `R-3_04_00` |
-| `config_version` | a GENIE tune, e.g. `G18_10a_02_11a`; available iff its splines are staged ([Tunes](#tunes-config_version)) |
+| Code versions | `R-3_06_00` (verified), `R-3_04_00`, `R-2_12_8` (verified, Docker) |
+| `config_version` | a GENIE tune, e.g. `G18_10a_02_11a`; available iff its splines are staged ([Tunes](#tunes-config_version)). `default` for `R-2_12_8` |
 | Sampling | unweighted (rejection-sampled) |
 | Raw σ → per nucleon | splines in natural units, whole nucleus → `× 1e38 / GENIE_UNITS_CM2`, `÷ A` |
 | `physics.current` | `--event-generator-list CC`/`NC` ([Weak current](#weak-current)) |
@@ -29,6 +31,9 @@ setup/setup_genie.sh --code-version R-3_06_00 --download-xsec   # …and stage s
 
 # stage splines on their own
 setup/download_genie_xsec.sh --code-version R-3_06_00 --tune G18_10a_02_11a
+
+# GENIE 2: one spline set, staged as config_version "default"
+setup/setup_genie.sh --code-version R-2_12_8 --download-xsec
 ```
 
 - `setup_genie.sh` takes the code version positionally or as
@@ -39,7 +44,9 @@ setup/download_genie_xsec.sh --code-version R-3_06_00 --tune G18_10a_02_11a
   published for the code version), `--software-root`, and `--force` to re-stage
   over an existing file. It downloads the FNAL SciSoft tarball (~428 MB per
   tune) and stages only `gxspl-NUsmall.xml` (~543 MB). Tunes SciSoft does not
-  publish for a code version are warned about and skipped.
+  publish for a code version are warned about and skipped. For `R-2_*` it
+  stages only `default` (~520 MB tarball, ~830 MB spline; see
+  [GENIE 2](#genie-2-r-2_12_8)).
 
 Splines land in `<software_root>/genie/genie_xsec/<tag-safe-code-version>/<tune>/xsecs.xml`.
 
@@ -73,6 +80,25 @@ Each tune also fixes physics a user might expect to be a framework setting:
 - **The RES/DIS boundary `Wcut`** differs by up to 0.6 GeV between tunes
   ([Model notes](#the-resdis-boundary-is-the-tunes-wcut)).
 - **Which reweight dials work** ([Which dials a tune allows](#which-dials-a-tune-allows)).
+
+### GENIE 2 (`R-2_12_8`)
+
+GENIE 2 has no tunes: its physics is whatever `$GENIE/config/UserPhysicsOptions.xml`
+selects, used here unmodified, and `gevgen` has no `--tune` option. The adapter
+omits `--tune` for every `R-2_*` code version, and `config_version` is the
+placeholder `default`, which only names the staged spline directory.
+
+**No MEC, by construction.** None of 2.12.8's `Default`, `CC` and `NC` lists in
+`config/EventGeneratorListAssembler.xml` contains a MEC generator, so
+`gevgen` produces no 2p2h events whichever `physics.current` is set. FNAL
+publishes 2.12.8 splines only bundled with a MEC model; `download_genie_xsec.sh`
+takes the `DefaultPlusValenciaMEC` bundle's `gxspl-FNALsmall.xml` (six flavours,
+43 isotopes, 0.01–400 GeV, 500 knots) and drops its 240 `…,MEC;` spline blocks,
+so the [spline sum](#cross-section-weight) covers exactly what `gevgen` generates.
+The remaining splines are default physics: the bundle's `UserPhysicsOptions.xml`
+differs from the 2.12.8 source tree's only in the MEC model choice, the
+charm/τ `DecayParticleWithCode` flags and `SetDiNucleonCode`, none of which
+enters a non-MEC cross section.
 
 ### Probes
 
@@ -392,7 +418,8 @@ including startup ([Validation](#per-dial-checks)).
   set that includes it.
 - **A tune can pass validation and still fail at run start** if the code payload
   lacks its configuration directory ([Tunes](#tunes-config_version)).
-- **Reweight universes require R-3_06_00.** The R-3_04_00 image has no
+- **`R-2_12_8` has no MEC** ([GENIE 2](#genie-2-r-2_12_8)).
+- **Reweight universes require R-3_06_00.** The R-3_04_00 and R-2_12_8 images have no
   `nf_genie_reweight` ([Container build](#container-build)), and the tune-model
   snapshot covers R-3_06_00 only, so `validate-config` refuses `genie.universes`
   and `genie.variations` on any other code version.
@@ -456,6 +483,12 @@ the flux *density* (~0.27%/bin over 0.1–50 GeV), passed as
 `-f nf_flux.root,nf_flux,WIDTH`. Contents are float64 so uproot emits a TH1D,
 which is what `gevgen` casts to. A user-supplied ROOT flux is passed through
 *without* `WIDTH`, since its content convention is unknown.
+
+GENIE 2's `TH1FluxDriver` asserts exactly two fields in `-f` (a third makes it
+segfault) and never multiplies by bin width. For `R-2_*` the adapter therefore
+writes the density already multiplied by the bin widths and passes
+`-f nf_flux.root,nf_flux`: `gevgen` samples, and writes to `input-flux.root`,
+the same per-bin integrals as GENIE 3 does after `WIDTH`.
 
 **Normalization reads `input-flux.root`**, which `gevgen` writes into its working
 directory on every run, on its native binning (`translators/genie._flux_grid`).
@@ -622,6 +655,17 @@ test compares it with the payload wherever the payload is present.
   cling "Missing FileEntry" errors for every Reweight class. The Apptainer
   payload exposes the driver as `bin/nf_genie_reweight` through the same wrapper
   body as `gevgen`.
+- **Pythia6, LHAPDF and ROOT come before the GENIE clone** and do not depend on
+  `GENIE_TAG`, so every GENIE version shares those (slow) Docker layers. Pythia6
+  is built with R-3_06_00's `build_pythia6.sh`, fetched by URL: R-2_12_8's older
+  copy fails to link.
+- **GENIE 2 builds** with `--disable-lhapdf` (its DIS PDF, GRV98 LO, is built
+  in; its configure predates the LHAPDF6/Pythia8 options) and two fixes:
+  `Utils/AppInit.h` gets `#include <string>` / `using std::string;`, because
+  ROOT 6's dictionary generation fails on its unqualified `string`; and a failed
+  `make -j` is rerun, because its top-level Makefile links the apps before their
+  libraries exist under `-j`. The second pass finds the libraries built and
+  finishes; a real compile error fails both.
 - **Reweight is built only for `GENIE_TAG` R-3_06_00.** Reweight R-1_04_02 goes
   with Generator R-3_06_00 and fails to compile against R-3_04_00, so the
   R-3_04_00 image is built without it. The Apptainer runtime stage adds
@@ -779,6 +823,22 @@ z-expansion fit correlates them. `CoulombCCQE` lowers the numubar weight where
 it raises numu, as the Coulomb potential's sign follows the lepton charge.
 A closure of `ZExpA1CCQE` against a directly generated sample, as for `MaCCQE`,
 has not been done.
+
+### GENIE 2.12.8 against R-3_06_00
+
+R-2_12_8 (Docker, MEC-stripped `default` spline), ν_μ CC on C12, E^-2 over
+0.5–5 GeV, 2000 events, against the 20k-event R-3_06_00 `G18_10a_02_11a` run on
+the same config. No event is labelled `mec` (labels: `qel` 40.4%, `res` 36.3%,
+`dis` 22.6%, `coh` 0.8%). σ per nucleon from the `xsec_weight` sum, in
+1e-38 cm²:
+
+| E (GeV) | 0.5–1 | 1–2 | 2–3 | 3–5 |
+|---|---|---|---|---|
+| R-2_12_8 | 0.637 | 1.317 | 1.926 | 3.182 |
+| R-3_06_00 `G18_10a_02_11a` | 0.605 | 1.273 | 2.037 | 3.109 |
+
+The inclusive totals agree within the 2000-event statistics; the channel mix
+differs as the models do (G18_10a_02_11a has 8.1% `mec`).
 
 ### MaCCQE closure
 

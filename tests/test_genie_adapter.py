@@ -105,6 +105,27 @@ class GenieAdapterTests(unittest.TestCase):
         self.assertIn("--event-generator-list", command)
         self.assertEqual(command[command.index("--event-generator-list") + 1], "CCQE")
 
+    def test_build_command_adapts_to_genie2_gevgen(self) -> None:
+        import uproot
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = GenieAdapter(self._base_config(tmpdir))
+            genie3 = adapter.build_run_command(self._translated_config("G18_10a_02_11a"), Path(tmpdir))
+            genie2 = adapter.build_run_command(
+                self._translated_config("default", code_version="R-2_12_8"), Path(tmpdir)
+            )
+            with uproot.open(Path(tmpdir) / GENIE_FLUX_FILE) as handle:
+                contents, edges = handle[GENIE_FLUX_HIST].to_numpy()
+
+        self.assertEqual(genie3[genie3.index("--tune") + 1], "G18_10a_02_11a")
+        # GENIE 2's gevgen has no --tune option and asserts a two-field -f ...
+        self.assertNotIn("--tune", genie2)
+        self.assertEqual(genie2[genie2.index("-f") + 1], f"{GENIE_FLUX_FILE},{GENIE_FLUX_HIST}")
+        # ... so the histogram carries per-bin integrals, the product GENIE 3's
+        # WIDTH field forms from the density.
+        centers = 0.5 * (edges[:-1] + edges[1:])
+        self.assertTrue(np.allclose(contents, centers ** -2.0 * np.diff(edges)))
+
     def test_build_command_histogram_flux_uses_file_and_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             flux_file = Path(tmpdir) / "flux.root"

@@ -1,11 +1,15 @@
 # Apptainer definition for the NEUT neutrino event generator on Linux x86_64.
 #
-# UNLIKE EVERY OTHER GENERATOR, THIS DEF HAS NO Dockerfile COUNTERPART TO MIRROR.
-# NEUT's source code is not publicly available, so there is nothing to build from
-# a git ref. The NUISANCE collaboration publishes a tutorial image carrying a
-# working NEUT 5.7.0 build, and both container pathways extract from it:
-# setup/setup_neut.sh pulls and retags it for Docker, and stage 1 below
-# bootstraps from it for Apptainer. See docs/generators/neut.md.
+# Both NEUT code versions start from the NUISANCE collaboration's tutorial
+# image (see docs/generators/neut.md):
+#   - 5.7.0-nuint2024: the NEUT build the image carries is used as is.
+#     setup/setup_neut.sh pulls and retags the image for Docker.
+#   - 5.4.2: built from source in stage 1, with the image supplying CERNLIB, ROOT
+#     and gfortran, by the same setup/neut/build_neut.sh that
+#     setup/Dockerfile.neut runs. NEUT's source is access-restricted, so the
+#     tarball must already be at setup/neut/src/neut-5.4.2.tar.gz (copy it there
+#     by hand on the cluster; setup_neut.sh downloads it on a machine with `gh`).
+#     A source build is triggered by that tarball existing for CODE_VERSION.
 #
 # The source image is a ~5 GB kitchen sink (GENIE, NuWro, NUISANCE, GEANT4);
 # only NEUT and the ROOT build it links against are staged into the payload.
@@ -17,10 +21,8 @@
 #     "$NF_IMAGE_ROOT/neut_5.7.0-nuint2024.sif" setup/apptainer/neut.def
 # (setup/build_apptainer_images.sh does this for you.)
 #
-# CODE_VERSION below must stay in sync with the key in
-# NeutAdapter.CODE_VERSIONS: the build script passes only the catalog's build
-# arg (the source image), so the default here is what names the payload
-# directory. Adding a second NEUT version means passing CODE_VERSION explicitly.
+# CODE_VERSION names the payload directory and selects the source tarball;
+# setup/build_apptainer_images.sh passes it along with the source image.
 #
 # Runtime system libraries: neutroot2 and ROOT need only libgfortran5, libpcre3,
 # liblzma5, libz and libstdc++ — all already in nf-base.def's fixed baseline, so
@@ -34,6 +36,20 @@ Stage: source
 %arguments
     NEUT_SOURCE_IMAGE=nuisancemc/tutorial:nuint2024
     CODE_VERSION=5.7.0-nuint2024
+    JOBS=4
+
+# The whole directory, so the copy succeeds whether or not src/ holds a tarball.
+%files
+    setup/neut  /nf_neut_host
+
+%post
+    tarball="/nf_neut_host/src/neut-{{ CODE_VERSION }}.tar.gz"
+    if [ -f "$tarball" ]; then
+        bash /nf_neut_host/build_neut.sh "$tarball" "{{ JOBS }}"
+    else
+        echo "No $tarball: using the image's own NEUT build"
+    fi
+    rm -rf /nf_neut_host
 
 # ── Stage 2: Runtime ─────────────────────────────────────────────────────────
 Bootstrap: docker
@@ -95,14 +111,19 @@ Stage: final
     relocate_links /opt/root/v6-30-04 "$PREFIX/root"
     relocate_links /opt/neut "$PREFIX/neut"
 
-    # NEUT.pc bakes in the original install prefix, and neut-config refuses to
-    # run when that disagrees with its own location. Repoint it so neut-config
-    # keeps working inside the relocated payload (the flattener does not depend
-    # on this — it is given NF_NEUT_INCDIR — but humans debugging in the image do).
-    sed -i \
-        -e "s|^prefix=.*|prefix=$PREFIX/neut|" \
-        -e "s|/opt/root/v6-30-04|$PREFIX/root|g" \
-        "$PREFIX/neut/NEUT.pc"
+    # neut-config bakes in the original install prefix: 5.7.0 through NEUT.pc
+    # (and refuses to run when that disagrees with its own location), 5.4.2
+    # through INSTALL_ROOT in the script itself. Repoint it so neut-config keeps
+    # working inside the relocated payload (the flattener does not depend on
+    # this — it is given NF_NEUT_INCDIR — but humans debugging in the image do).
+    if [ -f "$PREFIX/neut/NEUT.pc" ]; then
+        sed -i \
+            -e "s|^prefix=.*|prefix=$PREFIX/neut|" \
+            -e "s|/opt/root/v6-30-04|$PREFIX/root|g" \
+            "$PREFIX/neut/NEUT.pc"
+    fi
+    sed -i "s|^INSTALL_ROOT=\"/opt/neut\"|INSTALL_ROOT=\"$PREFIX/neut\"|" \
+        "$PREFIX/neut/bin/neut-config"
 
     # Single source of truth for NEUT's runtime environment. Self-locating, so
     # version-agnostic. NEUT resolves its cross-section tables from
@@ -182,6 +203,6 @@ EOF
 
 %help
     NEUT {{ CODE_VERSION }} payload image for unified runtime composition.
-    Extracted from the published image {{ NEUT_SOURCE_IMAGE }} (NEUT is not
-    buildable from source). Runtime payload root:
+    Taken from, or built from source on top of, {{ NEUT_SOURCE_IMAGE }}.
+    Runtime payload root:
     /opt/nf/generators/neut/{{ CODE_VERSION }}.
