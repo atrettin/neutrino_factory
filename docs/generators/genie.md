@@ -424,6 +424,15 @@ The command is assembled in `GenieAdapter.build_run_command`:
   (`ensure_compatible(require_available=not stub_mode)`); the adapter's
   `_resolve_xml_path` only logs a warning and omits the flag if it is missing,
   so a run that bypassed validation fails inside `gevgen`.
+- **Event files of an earlier attempt are deleted first.** A retry reuses the
+  task's work directory, and `normalize_output` takes an existing
+  `events.gst.root` as is, without running `gntpc`. A keyless gst file (a
+  `gntpc` that was killed, or a second task writing to the same chunk
+  directory) would therefore crash the retry with `KeyInFileError: 'gst'`, and a
+  complete one would be paired with the new events of a `--new-seed` retry.
+  `build_run_command` and `run_stub` remove `events.ghep.root`,
+  `events.gst.root` and `universe_weights.batch*.root` and log a warning for
+  each (NEUT does the same for its event files).
 - **The `-e` range is padded by a relative `1e-12`.** `gevgen` zeroes every
   flux bin not strictly inside `[emin, emax]` and reconstructs the upper bound
   in floating point; without padding, round-off can silently drop the first or

@@ -297,6 +297,27 @@ class GenieAdapterTests(unittest.TestCase):
 
         self.assertNotIn("--message-thresholds", run.call_args.args[0])
 
+    def test_removes_event_files_from_an_earlier_attempt(self) -> None:
+        """A retry must not reuse a keyless gst file (gntpc is skipped if one exists)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            for name in (
+                "events.gst.root",
+                "events.ghep.root",
+                "universe_weights.batch000.root",
+                "unrelated.txt",
+            ):
+                (work_dir / name).write_bytes(b"left by an earlier attempt")
+            adapter = GenieAdapter(self._base_config(tmpdir))
+            with self.assertLogs("neutrino_factory.generators.genie", "WARNING") as logs:
+                adapter.build_run_command(self._translated_config("G18_10a_02_11a"), work_dir)
+
+            self.assertFalse((work_dir / "events.gst.root").exists())
+            self.assertFalse((work_dir / "events.ghep.root").exists())
+            self.assertFalse((work_dir / "universe_weights.batch000.root").exists())
+            self.assertTrue((work_dir / "unrelated.txt").is_file())
+            self.assertEqual(sum("earlier attempt" in r.getMessage() for r in logs.records), 3)
+
     def test_build_command_warns_when_tune_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             adapter = GenieAdapter(self._base_config(tmpdir))
