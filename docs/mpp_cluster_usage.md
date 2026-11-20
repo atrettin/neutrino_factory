@@ -334,8 +334,14 @@ neutrino-factory retry --config <cfg> --time 23:59:00 --modes cancelled --new-se
 manifest, together with `original_seed` and a `seed_attempt` counter; the
 sidecar records the seed actually used. If a generator's crashes correlated with
 the kinematics of the event it was generating, replacing those chunks would bias
-the sample slightly; at the per-mille crash rates seen so far this is
-negligible, and the manifest keeps it auditable.
+the sample: it would lack the events that make the generator crash. The size of
+that bias is set by the crash rate per generated event, not per task, since a
+chunk of up to 1e6 events fails when any one of its events crashes. In
+`keystone_prod_v3` that rate was about 1e-8 per requested event for GENIE (18 of
+2143 tasks), NuWro (2 of 194) and GiBUU (6 of 4800, not counting the H1
+normalization failures), and 9e-8 for NEUT (14 of 215 tasks, 6.5%). The bias is
+therefore negligible even where several percent of tasks crash, and the manifest
+keeps it auditable.
 
 The `hung` cutoff is a heuristic. Healthy GiBUU chunks were measured to write
 nothing for up to ~80 minutes, hence the 4 h default; raise `--hung-after` for
