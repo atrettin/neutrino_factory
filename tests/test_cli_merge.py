@@ -143,3 +143,50 @@ class MergeCliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+    def test_config_mode_skips_up_to_date_targets_unless_forced(self) -> None:
+        chunk = Path("output/chunks/job/chunk_000.h5")
+        entry = {
+            "job_index": 0,
+            "job_label": "job",
+            "generator": "genie",
+            "version_id": "v1",
+            "particle": "numu",
+            "nucleus": "C12",
+            "current": "cc",
+        }
+        outputs = {
+            "chunks": [{**entry, "path": chunk}],
+            "merged": [{**entry, "path": Path("output/merged/job.h5")}],
+        }
+
+        def run(*extra: str) -> tuple[dict, object]:
+            args = build_parser().parse_args(
+                ["merge", "--config", "configs/examples/power_law_numu_Ar.yaml", *extra]
+            )
+            with patch("neutrino_factory.cli.load_config", return_value={"run": {"name": "run"}}):
+                with patch("neutrino_factory.cli.expected_outputs", return_value=outputs):
+                    with patch(
+                        "neutrino_factory.cli.validate_file",
+                        return_value={"valid": True, "errors": []},
+                    ):
+                        with patch(
+                            "neutrino_factory.cli.merged_output_is_current", return_value=True
+                        ):
+                            with patch(
+                                "neutrino_factory.cli.merge_outputs",
+                                side_effect=lambda inputs, output: str(output),
+                            ) as merge_outputs:
+                                with patch("neutrino_factory.cli._print_json") as print_json:
+                                    with redirect_stdout(io.StringIO()):
+                                        args.func(args)
+            return print_json.call_args.args[0], merge_outputs
+
+        payload, merge_outputs = run()
+        merge_outputs.assert_not_called()
+        self.assertEqual(payload["targets"][0]["status"], "up_to_date")
+        self.assertEqual(payload["up_to_date_target_count"], 1)
+        self.assertEqual(payload["merged_target_count"], 0)
+
+        payload, merge_outputs = run("--force")
+        merge_outputs.assert_called_once()
+        self.assertEqual(payload["targets"][0]["status"], "merged")

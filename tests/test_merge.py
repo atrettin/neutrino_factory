@@ -827,3 +827,40 @@ class StreamingMergeTests(unittest.TestCase):
             with self.assertRaises(MergeError) as ctx:
                 merge_hdf5_files([a, b], d / "merged.h5")
             self.assertIn("columns", str(ctx.exception))
+
+
+class MergedOutputIsCurrentTests(unittest.TestCase):
+    """What lets an interrupted ``merge --config`` resume instead of redoing every target."""
+
+    def test_current_only_for_the_same_unchanged_inputs(self) -> None:
+        import os
+
+        from neutrino_factory.merge import merged_output_is_current
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            a = _write_chunk(d / "a.h5", "neut", "5.7.0", "default", 3)
+            b = _write_chunk(d / "b.h5", "neut", "5.7.0", "default", 3)
+            out = d / "merged.h5"
+            self.assertFalse(merged_output_is_current(out, [a, b]))  # not written yet
+
+            merge_hdf5_files([a, b], out)
+            self.assertTrue(merged_output_is_current(out, [a, b]))
+            self.assertTrue(merged_output_is_current(out, [b, a]))
+            self.assertFalse(merged_output_is_current(out, [a]))  # a chunk disappeared
+            c = _write_chunk(d / "c.h5", "neut", "5.7.0", "default", 3)
+            self.assertFalse(merged_output_is_current(out, [a, b, c]))  # a retry added one
+
+            later = out.stat().st_mtime + 10
+            os.utime(b, (later, later))  # a chunk rewritten after the merge
+            self.assertFalse(merged_output_is_current(out, [a, b]))
+
+    def test_partial_file_and_unreadable_output_are_not_current(self) -> None:
+        from neutrino_factory.merge import merged_output_is_current
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            a = _write_chunk(d / "a.h5", "neut", "5.7.0", "default", 3)
+            out = d / "merged.h5"
+            out.write_bytes(b"not hdf5")
+            self.assertFalse(merged_output_is_current(out, [a]))

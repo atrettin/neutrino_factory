@@ -108,7 +108,8 @@ neutrino-factory merge --config configs/examples/power_law_numu_Ar.yaml
 In this mode, the CLI discovers expected chunk and merged outputs from the
 config, validates each chunk for required metadata/columns, warns about
 missing or invalid chunks, and merges the valid subset per expected merged
-output.
+output. Outputs that already cover exactly those chunks are skipped, so an
+interrupted merge resumes; `--force` re-merges everything.
 
 ### Quickstart B — HPC cluster (Apptainer, MPP cluster)
 
