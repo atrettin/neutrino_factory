@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,6 +12,8 @@ from .base import GeneratorAdapter
 from .. import containers, universes
 from ..normalizers.nuwro import NuWroNormalizer
 from ..translators.nuwro import NuWroTranslator
+
+LOGGER = logging.getLogger(__name__)
 
 
 # The single-pass universe reweighter built into the NuWro tree from
@@ -77,9 +80,41 @@ class NuWroAdapter(GeneratorAdapter):
         params_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return params_path
 
+    @staticmethod
+    def _remove_stale_outputs(work_dir: Path) -> None:
+        """Delete event files left in the work dir by an earlier attempt.
+
+        ``run_task`` reuses a task's work directory on retry. NuWro writes one
+        ``events.root.<dyn>.part`` per dynamics channel and merges them into
+        ``events.root``; a run that ends early rewrites only the channels it
+        reached, so parts of an earlier attempt (another seed, or a second task
+        in the same chunk directory) would sit beside the new ones.
+        ``normalize_output`` also takes an existing ``events.root`` as is.
+        """
+        stale = [work_dir / "events.root", *sorted(work_dir.glob("events.root.*.part"))]
+        for path in stale:
+            if path.exists():
+                LOGGER.warning("Removing %s from an earlier attempt before generating", path)
+                path.unlink()
+
+    def run_stub(
+        self,
+        translated_config: dict,
+        raw_output_path: str | Path,
+        task: dict,
+    ) -> str:
+        """Write stub events, after removing event files of an earlier attempt.
+
+        ``normalize_output`` prefers an ``events.root`` in the same directory, so
+        a file left by an earlier real run would replace the stub's events.
+        """
+        self._remove_stale_outputs(Path(raw_output_path).parent)
+        return super().run_stub(translated_config, raw_output_path, task)
+
     def build_run_command(self, translated_config: dict, work_dir: Path) -> list[str]:
         code_version = translated_config.get("code_version")
         work_dir.mkdir(parents=True, exist_ok=True)
+        self._remove_stale_outputs(work_dir)
         self._write_params_file(work_dir, translated_config["nuwro_params"])
         (work_dir / "translated_config.json").write_text(
             json.dumps(translated_config), encoding="utf-8"

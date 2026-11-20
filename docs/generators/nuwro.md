@@ -270,6 +270,15 @@ a 20k-event chunk take seconds.
   every event count ≥ 3k (2k passes). Other flavours on W184 and `numubar` on
   Fe56 are unaffected. The cause is not diagnosed (probably unrelated to the path
   limit), and the production grid drops `nuwro/W184/numubar`.
+- **Some seeds make NuWro stall during event generation.** The process stays
+  alive and prints nothing more. In `keystone_prod_v3_rejection` (nuwro 25.11
+  `sf`, 2026-11) tasks 695, 1317 and 2500 (numu Ar40, numubar O16, nuebar Ar40)
+  each stopped at the same progress line in three retry arrays on different
+  nodes, with the same seed: 21.2 %, 25.5 % and 47.9 % of QELcc. Their MaxRSS
+  was 0.5 GB (finished siblings: 1.4 GB, limit 8 GB), so it is not a memory
+  slowdown. `retry --new-seed` is the way out; tasks 697 and 2479 stalled again
+  at ~64 % of QELcc with their new seeds, so it is not guaranteed. The cause is
+  not diagnosed.
 - **The spectral function covers four nuclei.** NuWro 25.11's `sf_method = 1`
   has spectral functions for C12, O16, Ar40 and Fe56 only, hence the nucleus
   restriction of `sf` ([Config versions](#config-versions)).
@@ -300,6 +309,18 @@ runs with workdir `/opt/nuwro` and is given `/work/params.txt` and
 `/work/events.root` explicitly. The Apptainer payload wrapper absolutizes
 relative `-i`/`-o` arguments, then `cd`s into the install tree; this is the one
 generator wrapper that must `cd`.
+
+**Event files of an earlier attempt are deleted first.** A retry reuses the
+task's work directory. NuWro writes one `events.root.<dyn>.part` per dynamics
+channel (`dyn` 0–10) and merges them into `events.root`, and `normalize_output`
+takes an existing `events.root` as is. A run that ends early rewrites only the
+channels it reached: in `keystone_prod_v3_rejection` task 2475 (nuebar C12),
+NuWro stopped at 59.5 % of DISnc (`dyn` 5) with an empty `events.root` of 6 KB,
+while `events.root.{6,7,8,10}.part` still held channels of two overlapping
+earlier attempts. `build_run_command` and `run_stub` therefore remove
+`events.root` and `events.root.*.part` and log a warning for each (GENIE and
+NEUT do the same for their event files). Whether NuWro's merge would pick up
+such leftover parts was not checked.
 
 Like every adapter, `build_run_command` runs a binary found on `$PATH` before considering a container, since a cluster task already runs inside the Apptainer image, which cannot nest ([../apptainer_image.md](../apptainer_image.md)).
 
