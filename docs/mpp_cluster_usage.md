@@ -255,7 +255,10 @@ exactly the current valid chunks, none modified since it was written, is
 reported as `up_to_date` and skipped, and every other job is merged afresh. The
 same check makes a re-merge after a retry touch only the jobs whose chunks
 changed. Progress within one job's file is not kept, so an interruption costs at
-most that one job. `--force` re-merges every job.
+most that one job. `--force` re-merges every job. `--unweight-events N`
+rejection-samples every job's file to about N events
+([physics.md](physics.md#unweighted-merges)); a file merged with a different N,
+or without it, is not `up_to_date`.
 
 `check-status` also prints a per-job status table read from the per-chunk
 sidecars (`$NF_OUTPUT_ROOT/chunks/<job>/<chunk>.sidecar.json`): how many of a

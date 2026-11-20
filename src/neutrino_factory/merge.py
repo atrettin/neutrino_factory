@@ -11,11 +11,18 @@ def merge_outputs(
     input_files: Iterable[str | Path],
     output_file: str | Path,
     run_metadata: dict[str, Any] | None = None,
+    unweight_events: int | None = None,
 ) -> str:
-    return merge_hdf5_files(input_files, output_file, run_metadata=run_metadata)
+    return merge_hdf5_files(
+        input_files, output_file, run_metadata=run_metadata, unweight_events=unweight_events
+    )
 
 
-def merged_output_is_current(output_file: str | Path, input_files: Iterable[str | Path]) -> bool:
+def merged_output_is_current(
+    output_file: str | Path,
+    input_files: Iterable[str | Path],
+    unweight_events: int | None = None,
+) -> bool:
     """Whether ``output_file`` is a finished merge of exactly ``input_files``.
 
     ``merge_hdf5_files`` renames its output into place only when complete, so an
@@ -23,7 +30,9 @@ def merged_output_is_current(output_file: str | Path, input_files: Iterable[str 
     accounts for (merged, plus the ones it skipped as unreadable) are the given
     ones and none of them was modified after it was written, which makes an
     interrupted ``merge --config`` resumable and a re-merge after retries
-    replace only the targets whose chunks changed.
+    replace only the targets whose chunks changed. A file unweighted to a
+    different event count (or weighted when unweighting is asked, or vice
+    versa) is not current either.
     """
     import h5py
 
@@ -34,6 +43,9 @@ def merged_output_is_current(output_file: str | Path, input_files: Iterable[str 
             attrs = handle["metadata"].attrs
             merged = json.loads(attrs["merged_inputs"])
             skipped = json.loads(attrs["skipped_inputs"]) if "skipped_inputs" in attrs else []
+            unweighted = int(attrs["unweight_events"]) if "unweight_events" in attrs else None
+        if unweighted != unweight_events:
+            return False
         written = output.stat().st_mtime
         return {str(p) for p in inputs} == {*merged, *skipped} and all(
             p.stat().st_mtime <= written for p in inputs

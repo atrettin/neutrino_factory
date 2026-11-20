@@ -22,6 +22,7 @@ class MergeCliTests(unittest.TestCase):
         merge_outputs.assert_called_once_with(
             ["output/chunk_000.h5", "output/chunk_001.h5"],
             "output/merged.h5",
+            unweight_events=None,
         )
         print_json.assert_called_once_with({"merged_output": "output/merged.h5", "input_count": 2})
 
@@ -104,7 +105,7 @@ class MergeCliTests(unittest.TestCase):
                 with patch("neutrino_factory.cli.validate_file", side_effect=_validate):
                     with patch(
                         "neutrino_factory.cli.merge_outputs",
-                        side_effect=lambda inputs, output: str(output),
+                        side_effect=lambda inputs, output, **_: str(output),
                     ) as merge_outputs:
                         with patch("neutrino_factory.cli._print_json") as print_json:
                             with redirect_stdout(stdout):
@@ -115,6 +116,7 @@ class MergeCliTests(unittest.TestCase):
         merge_outputs.assert_called_once_with(
             [Path("output/chunks/genie_v1_numu_C12_cc/chunk_000.h5")],
             Path("output/merged/run_genie_v1_numu_C12_cc.h5"),
+            unweight_events=None,
         )
         self.assertEqual(
             validate_calls,
@@ -174,7 +176,7 @@ if __name__ == "__main__":
                         ):
                             with patch(
                                 "neutrino_factory.cli.merge_outputs",
-                                side_effect=lambda inputs, output: str(output),
+                                side_effect=lambda inputs, output, **_: str(output),
                             ) as merge_outputs:
                                 with patch("neutrino_factory.cli._print_json") as print_json:
                                     with redirect_stdout(io.StringIO()):

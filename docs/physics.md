@@ -95,6 +95,34 @@ of `Σ D` events would have produced.
 
 Validated on NEUT, GiBUU and NuWro: see [Validation](#chunk-merging).
 
+### Unweighted merges
+
+`merge --unweight-events N` rejection-samples each merged file down to about N
+events, for weighted generators (GiBUU) whose files are otherwise dominated by
+many low-weight events. On the averaged weights `w`, a threshold `c` is solved
+so that `Σ min(1, |w|/c) = N`; event *i* is kept with probability
+`min(1, |w_i|/c)` and gets weight `sign(w_i) · max(|w_i|, c)`.
+
+- Every kept event has `|xsec_weight| = c`, except the few heavier than `c`,
+  which keep their own weight. Negative weights stay negative.
+- Every weighted sum, σ(E) in any bin included, is preserved in expectation, so
+  the recorded `Σ D` stays valid and an unweighted file can be merged again.
+- Sampling adds variance and never adds information: the effective sample size
+  cannot exceed that of the weighted merge, so N well above its Kish size buys
+  little. Regions of small σ keep few events: they are sampled in proportion
+  to σ, not to the original event density.
+- Measured on 20 GiBUU release2025 numu C12 inclusive chunks of
+  `keystone_prod_v3` (26.0M events, Kish size 138k): N = 100k gave 100,398
+  events, 10 MB instead of 1.9 GB, Kish size 89k, and `Σ xsec_weight` within
+  0.4% of the weighted merge. The 0.1–0.3 GeV bin, which holds 0.00002% of σ,
+  kept no events.
+- `weight` (the generator's native weight) and the universe and variation
+  matrices are copied unchanged for the kept events.
+- The file records `unweight_events`, `unweight_threshold` (`c`) and
+  `unweighted_from_event_count`. Sampling is reproducible: the generator is
+  seeded from the output file name.
+- N not below the number of nonzero-weight events is refused.
+
 ## Flux
 
 A flux is a callable returning a number proportional to the flux **density**

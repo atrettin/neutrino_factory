@@ -864,3 +864,97 @@ class MergedOutputIsCurrentTests(unittest.TestCase):
             out = d / "merged.h5"
             out.write_bytes(b"not hdf5")
             self.assertFalse(merged_output_is_current(out, [a]))
+
+
+class UnweightedMergeTests(unittest.TestCase):
+    """``merge_hdf5_files(unweight_events=N)``: rejection sampling to ~N equal weights."""
+
+    def test_threshold_solves_the_expected_count(self) -> None:
+        a = np.array([10.0, 1.0, 1.0, 1.0, 1.0, 0.0])
+        # The 10 is kept fully; the four 1s share the remaining 2 expected events.
+        c = common_output._unweight_threshold(a, 3)
+        self.assertAlmostEqual(c, 2.0)
+        self.assertAlmostEqual(float(np.minimum(1.0, a / c).sum()), 3.0)
+        with self.assertRaises(MergeError):
+            common_output._unweight_threshold(a, 5)  # only 5 nonzero weights
+
+    def test_unweighted_merge_preserves_sums_and_signs(self) -> None:
+        rng = np.random.default_rng(1)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            n = 20000
+            paths = []
+            for chunk_id in (0, 1):
+                # Heavy-tailed, partly negative weights, like GiBUU's.
+                w = rng.pareto(3.0, n) * np.where(rng.random(n) < 0.1, -1.0, 1.0)
+                paths.append(
+                    _write_normalized_chunk(
+                        d / f"c{chunk_id}.h5",
+                        energies=list(1.0 + rng.random(n)),
+                        xsec_weights=list(w),
+                        norm_count=float(n),
+                        chunk_id=chunk_id,
+                    )
+                )
+            weighted = d / "weighted.h5"
+            merge_hdf5_files(paths, weighted)
+            out = merge_hdf5_files(paths, d / "unweighted.h5", unweight_events=2000)
+
+            with h5py.File(weighted) as handle:
+                w_all = handle["events"]["xsec_weight"][()]
+            with h5py.File(out) as handle:
+                w = handle["events"]["xsec_weight"][()]
+                attrs = handle["metadata"].attrs
+                c = float(attrs["unweight_threshold"])
+                self.assertEqual(int(attrs["unweight_events"]), 2000)
+                self.assertEqual(int(attrs["unweighted_from_event_count"]), 2 * n)
+                self.assertEqual(int(attrs["merged_event_count"]), len(w))
+                self.assertEqual(int(handle["run"].attrs["event_count"]), len(w))
+
+            self.assertLess(abs(len(w) - 2000), 5 * np.sqrt(2000))
+            light = np.abs(w) <= c * (1 + 1e-12)
+            np.testing.assert_allclose(np.abs(w[light]), c)
+            self.assertTrue(np.all(np.abs(w[~light]) > c))
+            self.assertGreater((w < 0).sum(), 0)
+            # Sum preserved within the sampling error (variance sum |w|(c - |w|) over light events).
+            a = np.abs(w_all)
+            sigma = np.sqrt(np.sum(np.where(a < c, a * (c - a), 0.0)))
+            self.assertLess(abs(w.sum() - w_all.sum()), 5 * sigma)
+
+    def test_is_current_tracks_the_unweighting(self) -> None:
+        from neutrino_factory.merge import merged_output_is_current
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            a = _write_normalized_chunk(
+                d / "a.h5", energies=[1.0] * 10, xsec_weights=[0.1] * 10, norm_count=10.0
+            )
+            out = d / "merged.h5"
+            merge_hdf5_files([a], out, unweight_events=4)
+            self.assertTrue(merged_output_is_current(out, [a], 4))
+            self.assertFalse(merged_output_is_current(out, [a], 5))
+            self.assertFalse(merged_output_is_current(out, [a]))
+
+    def test_kept_events_carry_their_own_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            paths = [
+                _rich_chunk(d / f"c{i}.h5", 40, offset=100 * i, matrix_columns=3)
+                for i in range(2)
+            ]
+            source: dict[int, tuple[float, np.ndarray]] = {}
+            for path in paths:
+                with h5py.File(path) as handle:
+                    events = handle["events"]
+                    for eid, energy, row in zip(
+                        events["event_id"][()], events["energy_gev"][()], events["universe_weights"][()]
+                    ):
+                        source[int(eid)] = (float(energy), row)
+            out = merge_hdf5_files(paths, d / "merged.h5", unweight_events=20)
+            with h5py.File(out) as handle:
+                events = handle["events"]
+                for eid, energy, row in zip(
+                    events["event_id"][()], events["energy_gev"][()], events["universe_weights"][()]
+                ):
+                    self.assertEqual(energy, source[int(eid)][0])
+                    np.testing.assert_array_equal(row, source[int(eid)][1])

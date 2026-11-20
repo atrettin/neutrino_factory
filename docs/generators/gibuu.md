@@ -106,6 +106,9 @@ carries no normalization. In practice:
   effective size of 35 events. Check `analyze-kinematics`'s weight-efficiency
   table and quote bootstrap intervals for channel statistics
   ([physics.md](../physics.md#weighted-statistics-and-weight-efficiency)).
+- **Merged files are large** for the information they carry. `merge
+  --unweight-events N` rejection-samples them to about N events of equal weight
+  ([physics.md](../physics.md#unweighted-merges)).
 
 ### Interaction labels and `is_cc`
 

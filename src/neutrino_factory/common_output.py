@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import zlib
 from pathlib import Path
 from typing import Any, Iterable, NamedTuple
 
@@ -644,10 +645,34 @@ def _merged_file_level_values(
     return values
 
 
+def _unweight_threshold(abs_weights: np.ndarray, n_target: int) -> float:
+    """Threshold ``c`` with ``sum(min(1, |w|/c)) == n_target`` (rejection sampling).
+
+    Events with ``|w| >= c`` are kept with certainty and keep their weight; the
+    rest survive with probability ``|w|/c`` and get weight ``±c``. Solved in
+    closed form on the sorted weights: with the k largest kept fully,
+    ``c_k = sum(remaining) / (n_target - k)``, valid once the (k+1)-th largest
+    weight is not above it.
+    """
+    a = np.sort(abs_weights[abs_weights > 0.0])[::-1]
+    if n_target >= len(a):
+        raise MergeError(
+            f"--unweight-events {n_target} is not smaller than the {len(a)} events with "
+            "nonzero weight; rejection sampling would keep everything."
+        )
+    k = np.arange(n_target)
+    # Sum of a[k:] for each k, i.e. everything but the k largest.
+    remaining = a.sum() - np.concatenate(([0.0], np.cumsum(a[: n_target - 1])))
+    candidates = remaining / (n_target - k)
+    first = int(np.argmax(a[:n_target] <= candidates))
+    return float(candidates[first])
+
+
 def merge_hdf5_files(
     input_files: Iterable[str | Path],
     output_path: str | Path,
     run_metadata: dict[str, Any] | None = None,
+    unweight_events: int | None = None,
 ) -> str:
     """Concatenate common-output files, averaging their cross-section weights.
 
@@ -681,7 +706,15 @@ def merge_hdf5_files(
     written under a temporary name and renamed into place only when complete; an
     input that passed the first pass but fails to read in the second is an
     error, not a skip, since half of it may already have been written.
+
+    With ``unweight_events`` the merged events are rejection-sampled down to
+    about that many (see ``_unweight_threshold``): most keep exactly the same
+    ``|xsec_weight|``, signs are kept, and every weighted sum is preserved in
+    expectation, so ``xsec_norm_count`` stays valid. The ``weight`` column and
+    the weight matrices (ratios) are copied unchanged for the kept events.
     """
+    if unweight_events is not None and unweight_events <= 0:
+        raise MergeError(f"unweight_events must be positive, got {unweight_events}")
     normalized_inputs = [str(Path(path)) for path in input_files]
     if not normalized_inputs:
         raise MergeError("No input files provided to merge")
@@ -791,6 +824,34 @@ def merge_hdf5_files(
     metadata = {**metadata, **_merged_file_level_values(metadata, inputs)}
 
     output = Path(output_path)
+
+    def share(entry: _MergeInput) -> float:
+        # Each chunk's fraction of the combined estimate; 1 without norm counts.
+        if not norm_count_total:
+            return 1.0
+        assert entry.norm_count is not None
+        return entry.norm_count / norm_count_total
+
+    keep_masks: list[np.ndarray] | None = None
+    threshold = 0.0
+    if unweight_events is not None:
+        # shortcut: holds every |xsec_weight| (8 B/event) in memory; stream a
+        # histogram for the threshold if merges ever exceed ~1e8 events.
+        weights = []
+        for entry in inputs:
+            with h5py.File(entry.path, "r") as source:
+                weights.append(np.asarray(source["events"]["xsec_weight"][()], np.float64) * share(entry))
+        abs_weights = np.abs(np.concatenate(weights)) if weights else np.zeros(0)
+        threshold = _unweight_threshold(abs_weights, unweight_events)
+        rng = np.random.default_rng(zlib.crc32(output.name.encode()))
+        keep = rng.random(len(abs_weights)) * threshold < abs_weights
+        keep_masks = np.split(keep, np.cumsum([entry.event_count for entry in inputs])[:-1])
+        metadata["unweight_events"] = unweight_events
+        metadata["unweight_threshold"] = threshold
+        metadata["unweighted_from_event_count"] = event_total
+        event_total = int(keep.sum())
+        metadata["merged_event_count"] = event_total
+
     output.parent.mkdir(parents=True, exist_ok=True)
     partial = output.with_name(output.name + ".partial")
     try:
@@ -798,7 +859,7 @@ def merge_hdf5_files(
             _write_header(handle, metadata, event_total)
             group = _create_event_datasets(handle, event_total, matrix_columns)
             row = 0
-            for entry in inputs:
+            for index, entry in enumerate(inputs):
                 with h5py.File(entry.path, "r") as source:
                     columns = _read_event_columns(source)
                 if len(columns["event_id"]) != entry.event_count:
@@ -806,14 +867,14 @@ def merge_hdf5_files(
                         f"{entry.path} holds {len(columns['event_id'])} events now, "
                         f"{entry.event_count} when the merge started"
                     )
-                if norm_count_total:
-                    # Rescale each chunk to its share of the combined estimate.
-                    # With a single input this is a no-op (share == 1), so
-                    # one-chunk runs are unaffected.
-                    assert entry.norm_count is not None
-                    columns["xsec_weight"] = columns["xsec_weight"] * (
-                        entry.norm_count / norm_count_total
-                    )
+                # Rescale each chunk to its share of the combined estimate.
+                # With a single input this is a no-op (share == 1), so
+                # one-chunk runs are unaffected.
+                columns["xsec_weight"] = columns["xsec_weight"] * share(entry)
+                if keep_masks is not None:
+                    columns = {key: values[keep_masks[index]] for key, values in columns.items()}
+                    w = columns["xsec_weight"]
+                    columns["xsec_weight"] = np.sign(w) * np.maximum(np.abs(w), threshold)
                 row = _write_event_slice(
                     group,
                     row,
