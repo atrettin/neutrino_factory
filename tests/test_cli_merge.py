@@ -4,7 +4,7 @@ import io
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from neutrino_factory.cli import build_parser
 
@@ -159,7 +159,7 @@ if __name__ == "__main__":
             "merged": [{**entry, "path": Path("output/merged/job.h5")}],
         }
 
-        def run(*extra: str) -> tuple[dict, object]:
+        def run(*extra: str) -> tuple[dict, MagicMock]:
             args = build_parser().parse_args(
                 ["merge", "--config", "configs/examples/power_law_numu_Ar.yaml", *extra]
             )
