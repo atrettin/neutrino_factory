@@ -471,7 +471,9 @@ def cmd_merge(args: argparse.Namespace) -> int:
                 )
                 continue
 
-            if not args.force and merged_output_is_current(merged["path"], valid_inputs):
+            if not args.force and merged_output_is_current(
+                merged["path"], valid_inputs, args.unweight_events
+            ):
                 print(f"Up to date, skipping {merged['path']} (--force overwrites)")
                 per_target.append(
                     {
@@ -490,7 +492,9 @@ def cmd_merge(args: argparse.Namespace) -> int:
                 continue
 
             print(f"Merging {len(valid_inputs)} files into {merged['path']}")
-            output = merge_outputs(valid_inputs, merged["path"])
+            output = merge_outputs(
+                valid_inputs, merged["path"], unweight_events=args.unweight_events
+            )
             merged_outputs_written.append(output)
             per_target.append(
                 {
@@ -529,7 +533,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
         raise RuntimeError("At least one input HDF5 file is required unless --config is provided")
 
     print(f"Merging {len(args.inputs)} files into {args.output}")
-    output = merge_outputs(args.inputs, args.output)
+    output = merge_outputs(args.inputs, args.output, unweight_events=args.unweight_events)
     _print_json({"merged_output": output, "input_count": len(args.inputs)})
     return 0
 
@@ -1037,6 +1041,18 @@ def build_parser() -> argparse.ArgumentParser:
             "Config mode: re-merge every target. By default a target whose merged file "
             "already covers exactly the current valid chunks, none modified since, is "
             "skipped, so an interrupted merge resumes with the next unfinished target."
+        ),
+    )
+    merge_parser.add_argument(
+        "--unweight-events",
+        type=int,
+        metavar="N",
+        help=(
+            "Rejection-sample each merged file down to about N events of equal "
+            "|xsec_weight| (events heavier than the threshold keep their own weight; "
+            "signs are kept). Weighted sums are preserved in expectation. Shrinks "
+            "weighted generators like GiBUU; fails if a target has no more than N "
+            "nonzero-weight events."
         ),
     )
     merge_parser.set_defaults(func=cmd_merge)
