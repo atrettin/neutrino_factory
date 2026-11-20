@@ -247,6 +247,16 @@ Per-generator merged HDF5 files appear under `$NF_OUTPUT_ROOT/merged/`. Chunk
 merging currently happens in the local pipeline; after a Slurm run, merge
 chunks explicitly with `neutrino-factory merge` if needed.
 
+`merge --config` writes one merged file per job, under a `.partial` name that is
+renamed into place only when the file is complete, so a merge that is killed
+leaves no truncated merged file (at most a stray `*.h5.partial`, which the next
+run overwrites). Re-running it resumes: a job whose merged file already covers
+exactly the current valid chunks, none modified since it was written, is
+reported as `up_to_date` and skipped, and every other job is merged afresh. The
+same check makes a re-merge after a retry touch only the jobs whose chunks
+changed. Progress within one job's file is not kept, so an interruption costs at
+most that one job. `--force` re-merges every job.
+
 `check-status` also prints a per-job status table read from the per-chunk
 sidecars (`$NF_OUTPUT_ROOT/chunks/<job>/<chunk>.sidecar.json`): how many of a
 job's chunks have started/finished/validated, the first chunk start, the last

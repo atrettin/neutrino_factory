@@ -24,7 +24,7 @@ from .kinematics_report import (
     format_reports,
 )
 from .local import run_local, run_task_from_manifest
-from .merge import merge_outputs
+from .merge import merge_outputs, merged_output_is_current
 from .plots import DEFAULT_BINS, make_config_plots, make_plots
 from .retry_ledger import new_script_path, pending_retries, record_retry
 from .slurm import (
@@ -471,6 +471,24 @@ def cmd_merge(args: argparse.Namespace) -> int:
                 )
                 continue
 
+            if not args.force and merged_output_is_current(merged["path"], valid_inputs):
+                print(f"Up to date, skipping {merged['path']} (--force overwrites)")
+                per_target.append(
+                    {
+                        "job_label": merged["job_label"],
+                        "generator": merged["generator"],
+                        "version_id": merged["version_id"],
+                        "particle": merged["particle"],
+                        "nucleus": merged["nucleus"],
+                        "merged_output": str(merged["path"]),
+                        "expected_chunk_count": len(candidate_chunks),
+                        "merged_input_count": len(valid_inputs),
+                        "skipped_chunks": skipped_chunks,
+                        "status": "up_to_date",
+                    }
+                )
+                continue
+
             print(f"Merging {len(valid_inputs)} files into {merged['path']}")
             output = merge_outputs(valid_inputs, merged["path"])
             merged_outputs_written.append(output)
@@ -495,6 +513,9 @@ def cmd_merge(args: argparse.Namespace) -> int:
                 "targets": per_target,
                 "merged_outputs": merged_outputs_written,
                 "merged_target_count": len(merged_outputs_written),
+                "up_to_date_target_count": sum(
+                    1 for target in per_target if target["status"] == "up_to_date"
+                ),
                 "skipped_target_count": sum(
                     1 for target in per_target if target["status"] == "skipped"
                 ),
@@ -993,7 +1014,8 @@ def build_parser() -> argparse.ArgumentParser:
             "output path plus an explicit list of input HDF5 files. Config mode takes "
             "--config, discovers the expected chunk files and merged outputs, validates each "
             "candidate chunk (without expected-event-count checks), and merges each expected "
-            "target from the available valid chunks while warning about missing/invalid chunks."
+            "target from the available valid chunks while warning about missing/invalid chunks. "
+            "Targets already merged from exactly those chunks are skipped unless --force is given."
         ),
         epilog=(
             "Examples:\n"
@@ -1008,6 +1030,15 @@ def build_parser() -> argparse.ArgumentParser:
     merge_parser.add_argument("--config", help="Path to the run configuration YAML")
     merge_parser.add_argument("--output", help="Path for the merged HDF5 file (explicit mode only)")
     merge_parser.add_argument("inputs", nargs="*", help="One or more HDF5 files to merge (explicit mode only)")
+    merge_parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Config mode: re-merge every target. By default a target whose merged file "
+            "already covers exactly the current valid chunks, none modified since, is "
+            "skipped, so an interrupted merge resumes with the next unfinished target."
+        ),
+    )
     merge_parser.set_defaults(func=cmd_merge)
 
     list_parser = subparsers.add_parser(
