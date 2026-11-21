@@ -99,29 +99,46 @@ Validated on NEUT, GiBUU and NuWro: see [Validation](#chunk-merging).
 
 `merge --unweight-events N` rejection-samples each merged file down to about N
 events, for weighted generators (GiBUU) whose files are otherwise dominated by
-many low-weight events. On the averaged weights `w`, a threshold `c` is solved
-so that `Σ min(1, |w|/c) = N`; event *i* is kept with probability
-`min(1, |w_i|/c)` and gets weight `sign(w_i) · max(|w_i|, c)`.
+many low-weight events. Events are sampled on `s_i = |w_i| · E_i^P`, with `w`
+the averaged weights and `P` set by `--unweight-energy-power` (default −2). A
+threshold `c` is solved so that `Σ min(1, s_i/c) = N`; event *i* is kept with
+probability `p_i = min(1, s_i/c)` and its weight becomes `w_i / p_i =
+sign(w_i) · max(|w_i|, c · E_i^−P)`.
 
-- Every kept event has `|xsec_weight| = c`, except the few heavier than `c`,
-  which keep their own weight. Negative weights stay negative.
-- Every weighted sum, σ(E) in any bin included, is preserved in expectation, so
-  the recorded `Σ D` stays valid and an unweighted file can be merged again.
-- Sampling adds variance and never adds information: the effective sample size
-  cannot exceed that of the weighted merge, so N well above its Kish size buys
-  little. Regions of small σ keep few events: they are sampled in proportion
-  to σ, not to the original event density.
-- Measured on 20 GiBUU release2025 numu C12 inclusive chunks of
-  `keystone_prod_v3` (26.0M events, Kish size 138k): N = 100k gave 100,398
-  events, 10 MB instead of 1.9 GB, Kish size 89k, and `Σ xsec_weight` within
-  0.4% of the weighted merge. The 0.1–0.3 GeV bin, which holds 0.00002% of σ,
-  kept no events.
+- Every weighted sum, σ(E) in any bin included, is preserved in expectation for
+  any `P`, so the recorded `Σ D` stays valid and an unweighted file can be
+  merged again. Negative weights stay negative.
+- Kept events share `|xsec_weight| · E^P = c`, except the few with `s > c`,
+  which keep their own weight. `P = 0` gives equal weights.
+- `xsec_weight` carries no flux: summed per GeV it is σ(E). The kept events
+  are therefore distributed like `σ(E) · E^P` per GeV, i.e. `σ(E) · E^(P+1)`
+  per log-energy interval. With σ roughly ∝ E, `P = −2` puts about the same
+  number of events in each log-energy bin; `P = 0` puts almost all of them at
+  the highest energies, which are DIS.
+- Sampling adds variance and never adds information: N well above the weighted
+  merge's Kish size buys little. With `P < 0` the kept weights grow as `E^−P`,
+  so the overall Kish size falls while each energy bin gets similar relative
+  precision.
 - `weight` (the generator's native weight) and the universe and variation
   matrices are copied unchanged for the kept events.
-- The file records `unweight_events`, `unweight_threshold` (`c`) and
-  `unweighted_from_event_count`. Sampling is reproducible: the generator is
-  seeded from the output file name.
+- The file records `unweight_events`, `unweight_energy_power`,
+  `unweight_threshold` (`c`) and `unweighted_from_event_count`. Sampling is
+  reproducible: the generator is seeded from the output file name.
 - N not below the number of nonzero-weight events is refused.
+
+Measured on 20 GiBUU release2025 numu C12 inclusive chunks of
+`keystone_prod_v3` (power-law flux E^−1.2, 0.1–500 GeV; 26.0M events, 1.9 GB,
+Kish size 138k) at N = 100k. Every sample is ~10 MB, and `Σ xsec_weight` is
+within 2% of the weighted merge in each case:
+
+| P | Events 0.1–0.32 GeV | Events 1–3.2 GeV | Events > 100 GeV | QE / RES / DIS / MEC events | Kish size |
+|---|---|---|---|---|---|
+| 0 | 0 | 9 | 95% | 0.2% / 0.5% / 99.2% / 0.1% | 89k |
+| −1 | 20 | 497 | 79% | 0.7% / 1.2% / 97.7% / 0.4% | 72k |
+| −2 | 5,577 | 16,786 | 18% | 21.6% / 12.4% / 57.4% / 8.6% | 11k |
+
+The weighted merge's σ split is 0.2% / 0.4% / 99.3% / 0.1%; the event fractions
+above differ from it because events are not kept in proportion to σ.
 
 ## Flux
 

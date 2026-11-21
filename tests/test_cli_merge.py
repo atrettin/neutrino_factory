@@ -23,6 +23,7 @@ class MergeCliTests(unittest.TestCase):
             ["output/chunk_000.h5", "output/chunk_001.h5"],
             "output/merged.h5",
             unweight_events=None,
+            unweight_energy_power=-2.0,
         )
         print_json.assert_called_once_with({"merged_output": "output/merged.h5", "input_count": 2})
 
@@ -117,6 +118,7 @@ class MergeCliTests(unittest.TestCase):
             [Path("output/chunks/genie_v1_numu_C12_cc/chunk_000.h5")],
             Path("output/merged/run_genie_v1_numu_C12_cc.h5"),
             unweight_events=None,
+            unweight_energy_power=-2.0,
         )
         self.assertEqual(
             validate_calls,

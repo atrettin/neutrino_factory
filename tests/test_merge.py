@@ -898,7 +898,9 @@ class UnweightedMergeTests(unittest.TestCase):
                 )
             weighted = d / "weighted.h5"
             merge_hdf5_files(paths, weighted)
-            out = merge_hdf5_files(paths, d / "unweighted.h5", unweight_events=2000)
+            out = merge_hdf5_files(
+                paths, d / "unweighted.h5", unweight_events=2000, unweight_energy_power=0.0
+            )
 
             with h5py.File(weighted) as handle:
                 w_all = handle["events"]["xsec_weight"][()]
@@ -933,6 +935,7 @@ class UnweightedMergeTests(unittest.TestCase):
             merge_hdf5_files([a], out, unweight_events=4)
             self.assertTrue(merged_output_is_current(out, [a], 4))
             self.assertFalse(merged_output_is_current(out, [a], 5))
+            self.assertFalse(merged_output_is_current(out, [a], 4, 0.0))
             self.assertFalse(merged_output_is_current(out, [a]))
 
     def test_kept_events_carry_their_own_columns(self) -> None:
@@ -958,3 +961,38 @@ class UnweightedMergeTests(unittest.TestCase):
                 ):
                     self.assertEqual(energy, source[int(eid)][0])
                     np.testing.assert_array_equal(row, source[int(eid)][1])
+
+    def test_energy_power_balances_the_sample_without_bias(self) -> None:
+        rng = np.random.default_rng(2)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            n = 40000
+            # Log-uniform energies with sigma ~ E, like a real inclusive run.
+            energies = np.exp(rng.uniform(np.log(0.5), np.log(50.0), n))
+            w = energies * rng.exponential(1.0, n) * 1e-3
+            path = _write_normalized_chunk(
+                d / "c.h5", energies=list(energies), xsec_weights=list(w), norm_count=float(n)
+            )
+            outs = {
+                p: merge_hdf5_files(
+                    [path], d / f"u{p}.h5", unweight_events=2000, unweight_energy_power=p
+                )
+                for p in (0.0, -1.0)
+            }
+            low_fraction = {}
+            for p, out in outs.items():
+                with h5py.File(out) as handle:
+                    kept_w = handle["events"]["xsec_weight"][()]
+                    kept_e = handle["events"]["energy_gev"][()]
+                    c = float(handle["metadata"].attrs["unweight_threshold"])
+                    self.assertEqual(float(handle["metadata"].attrs["unweight_energy_power"]), p)
+                low_fraction[p] = float(np.mean(kept_e < 5.0))
+                s = np.abs(w) * energies**p
+                sigma = np.sqrt(np.sum(np.where(s < c, np.abs(w) * (c / energies**p - np.abs(w)), 0.0)))
+                self.assertLess(abs(kept_w.sum() - w.sum()), 5 * sigma, msg=f"p={p}")
+                light = np.abs(kept_w) * kept_e**p <= c * (1 + 1e-12)
+                np.testing.assert_allclose(np.abs(kept_w[light]) * kept_e[light] ** p, c)
+            # Half the generated events lie below 5 GeV; with p = -1 about half are
+            # kept there, with p = 0 far fewer.
+            self.assertGreater(low_fraction[-1.0], 0.4)
+            self.assertLess(low_fraction[0.0], 0.2)
