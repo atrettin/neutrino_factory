@@ -646,10 +646,10 @@ def _merged_file_level_values(
 
 
 def _unweight_threshold(abs_weights: np.ndarray, n_target: int) -> float:
-    """Threshold ``c`` with ``sum(min(1, |w|/c)) == n_target`` (rejection sampling).
+    """Threshold ``c`` with ``sum(min(1, s/c)) == n_target`` (rejection sampling).
 
-    Events with ``|w| >= c`` are kept with certainty and keep their weight; the
-    rest survive with probability ``|w|/c`` and get weight ``±c``. Solved in
+    ``abs_weights`` are the non-negative sampling weights ``s``: events with
+    ``s >= c`` are kept with certainty, the rest with probability ``s/c``. Solved in
     closed form on the sorted weights: with the k largest kept fully,
     ``c_k = sum(remaining) / (n_target - k)``, valid once the (k+1)-th largest
     weight is not above it.
@@ -673,6 +673,7 @@ def merge_hdf5_files(
     output_path: str | Path,
     run_metadata: dict[str, Any] | None = None,
     unweight_events: int | None = None,
+    unweight_energy_power: float = -2.0,
 ) -> str:
     """Concatenate common-output files, averaging their cross-section weights.
 
@@ -708,9 +709,14 @@ def merge_hdf5_files(
     error, not a skip, since half of it may already have been written.
 
     With ``unweight_events`` the merged events are rejection-sampled down to
-    about that many (see ``_unweight_threshold``): most keep exactly the same
-    ``|xsec_weight|``, signs are kept, and every weighted sum is preserved in
-    expectation, so ``xsec_norm_count`` stays valid. The ``weight`` column and
+    about that many (see ``_unweight_threshold``), on the sampling weights
+    ``s = |xsec_weight| * energy_gev**unweight_energy_power``. A kept event's
+    weight is divided by its keep probability, so most kept events share the
+    same ``s``, signs are kept, and every weighted sum is preserved in
+    expectation, so ``xsec_norm_count`` stays valid. The kept events are
+    distributed like ``sigma(E) * E**p`` per GeV (the weights carry no flux),
+    so the default -2 gives about equal counts per log-energy bin where sigma
+    grows linearly with E; p = 0 leaves a sample of almost only high-energy DIS. The ``weight`` column and
     the weight matrices (ratios) are copied unchanged for the kept events.
     """
     if unweight_events is not None and unweight_events <= 0:
@@ -835,18 +841,22 @@ def merge_hdf5_files(
     keep_masks: list[np.ndarray] | None = None
     threshold = 0.0
     if unweight_events is not None:
-        # shortcut: holds every |xsec_weight| (8 B/event) in memory; stream a
-        # histogram for the threshold if merges ever exceed ~1e8 events.
-        weights = []
+        # shortcut: holds every weight and energy (16 B/event) in memory; stream
+        # a histogram for the threshold if merges ever exceed ~1e8 events.
+        sampling = []
         for entry in inputs:
             with h5py.File(entry.path, "r") as source:
-                weights.append(np.asarray(source["events"]["xsec_weight"][()], np.float64) * share(entry))
-        abs_weights = np.abs(np.concatenate(weights)) if weights else np.zeros(0)
-        threshold = _unweight_threshold(abs_weights, unweight_events)
+                events = source["events"]
+                w = np.asarray(events["xsec_weight"][()], np.float64) * share(entry)
+                energy = np.asarray(events["energy_gev"][()], np.float64)
+            sampling.append(np.abs(w) * energy**unweight_energy_power)
+        sampling_weights = np.concatenate(sampling) if sampling else np.zeros(0)
+        threshold = _unweight_threshold(sampling_weights, unweight_events)
         rng = np.random.default_rng(zlib.crc32(output.name.encode()))
-        keep = rng.random(len(abs_weights)) * threshold < abs_weights
+        keep = rng.random(len(sampling_weights)) * threshold < sampling_weights
         keep_masks = np.split(keep, np.cumsum([entry.event_count for entry in inputs])[:-1])
         metadata["unweight_events"] = unweight_events
+        metadata["unweight_energy_power"] = unweight_energy_power
         metadata["unweight_threshold"] = threshold
         metadata["unweighted_from_event_count"] = event_total
         event_total = int(keep.sum())
@@ -874,7 +884,9 @@ def merge_hdf5_files(
                 if keep_masks is not None:
                     columns = {key: values[keep_masks[index]] for key, values in columns.items()}
                     w = columns["xsec_weight"]
-                    columns["xsec_weight"] = np.sign(w) * np.maximum(np.abs(w), threshold)
+                    # w / P with P = min(1, |w| E^p / c).
+                    floor = threshold * columns["energy_gev"] ** -unweight_energy_power
+                    columns["xsec_weight"] = np.sign(w) * np.maximum(np.abs(w), floor)
                 row = _write_event_slice(
                     group,
                     row,
