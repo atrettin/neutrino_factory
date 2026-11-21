@@ -354,6 +354,7 @@ def _write_normalized_chunk(
         "run_name": "test_run",
         "chunk_id": chunk_id,
         "seed": 1,
+        "expected_events": len(energies),
     }
     if norm_count is not None:
         metadata["xsec_norm_count"] = norm_count
@@ -910,6 +911,8 @@ class UnweightedMergeTests(unittest.TestCase):
                 c = float(attrs["unweight_threshold"])
                 self.assertEqual(int(attrs["unweight_events"]), 2000)
                 self.assertEqual(int(attrs["unweighted_from_event_count"]), 2 * n)
+                self.assertEqual(int(attrs["expected_events"]), 2000)
+                self.assertEqual(int(attrs["unweighted_from_expected_events"]), 2 * n)
                 self.assertEqual(int(attrs["merged_event_count"]), len(w))
                 self.assertEqual(int(handle["run"].attrs["event_count"]), len(w))
 

@@ -122,8 +122,10 @@ sign(w_i) · max(|w_i|, c · E_i^−P)`.
 - `weight` (the generator's native weight) and the universe and variation
   matrices are copied unchanged for the kept events.
 - The file records `unweight_events`, `unweight_energy_power`,
-  `unweight_threshold` (`c`) and `unweighted_from_event_count`. Sampling is
-  reproducible: the generator is seeded from the output file name.
+  `unweight_threshold` (`c`) and `unweighted_from_event_count`.
+  `expected_events` is set to N, so plots and reports compare the kept count
+  with N; the requested count is kept as `unweighted_from_expected_events`.
+  Sampling is reproducible: the generator is seeded from the output file name.
 - N not below the number of nonzero-weight events is refused.
 
 Measured on 20 GiBUU release2025 numu C12 inclusive chunks of

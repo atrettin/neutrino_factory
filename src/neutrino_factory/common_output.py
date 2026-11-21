@@ -859,6 +859,9 @@ def merge_hdf5_files(
         metadata["unweight_energy_power"] = unweight_energy_power
         metadata["unweight_threshold"] = threshold
         metadata["unweighted_from_event_count"] = event_total
+        # Plots and reports compare the event count with expected_events.
+        metadata["unweighted_from_expected_events"] = metadata["expected_events"]
+        metadata["expected_events"] = unweight_events
         event_total = int(keep.sum())
         metadata["merged_event_count"] = event_total
 
