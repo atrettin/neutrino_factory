@@ -61,6 +61,9 @@ top of `nf-base.sif`:
 - **Remote development**: curl, git, bash, openssh-server for VSCode remote
   attachment
 - **Python tools**: pytest, pyright, black, isort, flake8, mypy, tox
+- **Node.js**: the current release (node, npm, npx in `/usr/local`), downloaded
+  from nodejs.org and checksum-verified at build time, so it tracks the newest
+  release on each rebuild
 - **System utilities**: vim, nano, htop, strace, gdb, telnet, netcat, wget
 - **Build tools**: make, autoconf, automake, libtool
 - **Documentation**: pandoc, graphviz

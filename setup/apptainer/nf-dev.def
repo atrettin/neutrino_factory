@@ -59,6 +59,24 @@ From: {{ CORE_IMAGE }}
     chmod 755 /usr/local/bin/opencode
     rm -f /tmp/opencode.tar.gz
 
+    # Node.js (current release, for Claude Code hooks): the latest tarball from
+    # nodejs.org, verified against the published SHASUMS256.txt, installed into
+    # /usr/local (node, npm, npx). Debian bookworm's own nodejs is v18.
+    node_url="https://nodejs.org/dist/latest"
+    curl -fsSL -o /tmp/SHASUMS256.txt "$node_url/SHASUMS256.txt" \
+        || { echo "nf-dev: node checksum list download failed" >&2; exit 1; }
+    node_tar="$(grep -o 'node-v[0-9.]*-linux-x64\.tar\.xz' /tmp/SHASUMS256.txt | head -n1)"
+    [ -n "$node_tar" ] || { echo "nf-dev: no linux-x64 node tarball listed" >&2; exit 1; }
+    curl -fsSL -o "/tmp/$node_tar" "$node_url/$node_tar" \
+        || { echo "nf-dev: node download failed" >&2; exit 1; }
+    (cd /tmp && grep " $node_tar\$" SHASUMS256.txt | sha256sum -c -) \
+        || { echo "nf-dev: node checksum mismatch" >&2; exit 1; }
+    tar -xJf "/tmp/$node_tar" -C /usr/local --strip-components=1 \
+        --exclude='*/CHANGELOG.md' --exclude='*/LICENSE' --exclude='*/README.md'
+    rm -f "/tmp/$node_tar" /tmp/SHASUMS256.txt
+    node --version && npm --version \
+        || { echo "nf-dev: node install failed its smoke test" >&2; exit 1; }
+
     # Python development tools
     # pyright needs the [nodejs] extra: the image has no system Node, and
     # pyright's runtime nodeenv download fails under Apptainer containment.
