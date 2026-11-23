@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +38,25 @@ DEFAULT_MAQE = 1.05
 CONFIG_VERSION_CARDS: dict[str, dict[str, Any]] = {
     "default": {"NEUT-MDLQE": DEFAULT_MDLQE, "NEUT-MAQE": DEFAULT_MAQE},
 }
+
+# NEUT 6 (TOML card) config versions -> overrides merged under the card's [neut]
+# table, on top of NEUT 6's shipped NEUT.Defaults.toml. Names follow the T2K
+# model sets of the NEUT 6.2 release slides (docs/generators/neut.md, "Model
+# sets"): B25 is the shipped defaults with hybrid FSI Pauli blocking, which
+# NEUT.Defaults.toml leaves "on". A25 / A25 without SPP Eb need ED-RMF tensors
+# from the private neut-data repo, so they are not offered.
+NEUT6_CONFIG_VERSIONS: dict[str, dict[str, Any]] = {
+    "b25": {"target": {"nuclear_effects": {"pauli_blocking_fsi": "hybrid"}}},
+}
+
+
+def _merge(base: dict[str, Any], overrides: dict[str, Any]) -> None:
+    """Recursively merge ``overrides`` into ``base`` in place."""
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge(base[key], value)
+        else:
+            base[key] = value
 
 # Which weak current each slot of NEUT's 30-element cross-section scale arrays
 # belongs to. ``NEUT-MODE -1`` ("input cross section by CRSNEUT") multiplies each
@@ -82,6 +103,69 @@ CRS_SLOT_CURRENTS: dict[str, tuple[str | None, ...]] = {
 }
 
 
+# NEUT 6 replaces the slot arrays above with a named ``mode_rescaling`` table,
+# read under ``mode_choice_type = "rescaled"`` into the same CRSNEUT/CRSNEUTB
+# arrays (and NEMODFLG -1) that NEUT-CRS/NEUT-CRSB fill in NEUT 5. NEUT reads every
+# one of these names and aborts on a missing one; the current is the name's
+# prefix. Copied from ModeNameMapping_nu/_nub in NEUT 6.2.4's
+# src/config/CardSwitchValues.cc (nu slot 22 has no name, as above).
+NEUT6_MODE_NAMES: tuple[str, ...] = (
+    "CC_QE_nu", "CC_RES_ppi+_nu", "CC_RES_ppi0_nu", "CC_RES_npi+_nu",
+    "CC_multi_pi_nu", "NC_RES_npi0_nu", "NC_RES_ppi0_nu", "NC_RES_ppi-_nu",
+    "NC_RES_npi+_nu", "NC_multi_pi_nu", "NC_elastic_free_p_nu",
+    "NC_elastic_bound_p_nu", "NC_elastic_n_nu", "CC_COH_nu", "NC_COH_nu",
+    "CC_eta_nu", "NC_eta_n_nu", "NC_eta_p_nu", "CC_kaon_nu", "NC_kaon_n_nu",
+    "NC_kaon_p_nu", "CC_DIS_nu", "NC_DIS_nu", "CC_1gamma_nu", "NC_1gamma_n_nu",
+    "NC_1gamma_p_nu", "CC_2p2h_nu", "CC_DIF_nu", "NC_DIF_nu",
+    "CC_QE_free_proton_nubar", "CC_RES_npi-_nubar", "CC_RES_ppi0_nubar",
+    "CC_RES_ppi-_nubar", "CC_multi_pi_nubar", "NC_RES_npi0_nubar",
+    "NC_RES_ppi0_nubar", "NC_RES_ppi-_nubar", "NC_RES_npi+_nubar",
+    "NC_multi_pi_nubar", "CC_QE_bound_proton_nubar", "NC_elastic_free_p_nubar",
+    "NC_elastic_bound_p_nubar", "NC_elastic_n_nubar", "CC_COH_nubar",
+    "NC_COH_nubar", "CC_eta_nubar", "NC_eta_n_nubar", "NC_eta_p_nubar",
+    "CC_kaon_nubar", "NC_kaon_n_nubar", "NC_kaon_p_nubar", "CC_DIS_nubar",
+    "NC_DIS_nubar", "CC_1gamma_nubar", "NC_1gamma_n_nubar", "NC_1gamma_p_nubar",
+    "CC_2p2h_nubar", "CC_DIF_nubar", "NC_DIF_nubar",
+)
+
+_BARE_TOML_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _toml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, str):
+        return json.dumps(value)  # a JSON string is a valid TOML basic string
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+    raise TypeError(f"Cannot render {value!r} as a TOML value")
+
+
+def render_toml(table: dict[str, Any], _prefix: tuple[str, ...] = ()) -> str:
+    """Render nested dicts as TOML: scalars first, then one ``[a.b]`` per sub-dict.
+
+    Covers exactly what the NEUT 6 card needs (strings, numbers, arrays, tables;
+    keys with ``+``/``-`` quoted), so the framework needs no TOML writer package.
+    """
+    key = lambda k: k if _BARE_TOML_KEY.match(k) else json.dumps(k)  # noqa: E731
+    lines = [f"{key(k)} = {_toml_value(v)}" for k, v in table.items() if not isinstance(v, dict)]
+    for k, v in table.items():
+        if isinstance(v, dict):
+            path = (*_prefix, k)
+            lines += ["", "[" + ".".join(key(p) for p in path) + "]", render_toml(v, path)]
+    return "\n".join(lines).strip("\n")
+
+
+def card_format(code_version: str) -> str:
+    """``"toml"`` for NEUT 6 code versions, ``"legacy"`` (the Fortran card) otherwise."""
+    from ..generators.neut import NeutAdapter  # the catalog; imported lazily (cycle)
+
+    entry = NeutAdapter.CODE_VERSIONS.get(str(code_version)) or {}
+    return str(entry.get("card_format", "legacy"))
+
+
 def _flux_grid(flux: Flux) -> tuple[np.ndarray, np.ndarray]:
     """Return the ``(bin_edges, bin_contents)`` grid to divide the flux out on.
 
@@ -117,11 +201,18 @@ class NeutTranslator(ConfigTranslator):
         current = physics_current(config)
 
         config_version = str(task["config_version"])
-        if config_version not in CONFIG_VERSION_CARDS:
+        fmt = card_format(task["code_version"])
+        known = CONFIG_VERSION_CARDS if fmt == "legacy" else NEUT6_CONFIG_VERSIONS
+        if config_version not in known:
             raise KeyError(
                 f"No NEUT card parameters defined for config_version "
-                f"'{config_version}'. Known: {', '.join(CONFIG_VERSION_CARDS)}"
+                f"'{config_version}'. Known: {', '.join(known)}"
             )
+        if fmt == "toml":
+            card = self._toml_card(task, particle, protons, neutrons, current)
+            _merge(card["neut"], NEUT6_CONFIG_VERSIONS[config_version])
+        else:
+            card = self._card(task, particle, protons, neutrons, config_version, current)
 
         return {
             "generator": self.name,
@@ -141,10 +232,62 @@ class NeutTranslator(ConfigTranslator):
             "code_version": task["code_version"],
             "config_version": config_version,
             "generator_version_id": task.get("generator_version_id"),
-            "neut_card": self._card(
-                task, particle, protons, neutrons, config_version, current
-            ),
+            "card_format": fmt,
+            "neut_card": card,
         }
+
+    @staticmethod
+    def _toml_card(
+        task: dict[str, Any],
+        particle: str,
+        protons: int,
+        neutrons: int,
+        current: str,
+    ) -> dict[str, Any]:
+        """NEUT 6's TOML card, as nested dicts (rendered by :func:`render_toml`).
+
+        NEUT 6 overlays this onto ``$NEUT_CARDS/NEUT.Defaults.toml``, so only the
+        framework's own settings are given here; the config version's model
+        overrides (:data:`NEUT6_CONFIG_VERSIONS`) are merged in by the caller. The
+        settings mirror :meth:`_card` key for key: histogram flux in GeV,
+        ``RANFILE`` seed, fixed vertex and direction, pure nucleus, FSI on, and
+        the weak current through per-mode scaling. The output format must be
+        pinned: NEUT 6 defaults to NuHepMC, and nf_flatten.C reads NeutVect.
+        """
+        card: dict[str, Any] = {
+            "neut": {
+                "number_of_events": int(task["event_count"]),
+                "rng_seed": "file",
+                "output_format": "neutroot",
+                "simulation_mode": "neutrino",
+                "vertex": {"position_type": "origin"},
+                # Same names as the framework's probes (numu, numubar, ...).
+                "probe": {
+                    "species": particle,
+                    "direction_type": "z",
+                    "energy_spectrum_type": "root",
+                    "energy_histogram": [FLUX_FILE, FLUX_HIST, "gev"],
+                },
+                "target": {
+                    "num_nucleons": protons + neutrons,
+                    "num_bound_protons": protons,
+                    "num_free_protons": 0,
+                    "hadron_FSI": {
+                        "pion_cascade": {"pion_rescattering": "on"},
+                        "nucleon_cascade": {"nucleon_rescattering": "on"},
+                    },
+                },
+                "interaction_model": {"mode_choice_type": "normal"},
+            }
+        }
+        if current != "inclusive":
+            model = card["neut"]["interaction_model"]
+            model["mode_choice_type"] = "rescaled"
+            model["mode_rescaling"] = {
+                name: 1.0 if name.lower().startswith(current + "_") else 0.0
+                for name in NEUT6_MODE_NAMES
+            }
+        return card
 
     @staticmethod
     def _crs_row(slot_currents: tuple[str | None, ...], current: str) -> str:

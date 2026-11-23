@@ -42,7 +42,14 @@ static void PrintProgress(const char* stage, Long64_t done, Long64_t total) {
 }
 
 void nf_flatten(const char* in_path, const char* out_path) {
-  gSystem->Load("libNEUTClass");
+  // NEUT 6 renamed the NeutVect dictionary library to libNEUTROOTClass.
+  // Probe quietly (kTRUE) so a NEUT 6 run does not log the NEUT 5 name as missing.
+  TString neut_lib = "libNEUTClass";
+  if (!gSystem->FindDynamicLibrary(neut_lib, kTRUE)) neut_lib = "libNEUTROOTClass";
+  if (gSystem->Load(neut_lib) < 0) {
+    Error("nf_flatten", "cannot load libNEUTClass (NEUT 5) or libNEUTROOTClass (NEUT 6)");
+    gSystem->Exit(1);
+  }
 
   TFile fin(in_path, "READ");
   if (fin.IsZombie()) {

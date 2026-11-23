@@ -174,7 +174,7 @@ EOF
     chmod +x "$PREFIX/bin/nf-neut-flatten"
 
     cat > "$PREFIX/nf-payload.json" <<EOF
-{"schema_version":1,"generator":"neut","code_version":"$CV","binaries":["neutroot2","nf-neut-flatten"],"default_binary":"neutroot2","smoke_paths":["neut/share/neut/crsdat/94mod_p.dat","neut/include/neutvect.h","share/nf_flatten.C"]}
+{"schema_version":1,"generator":"neut","code_version":"$CV","binaries":["neutroot2","nf-neut-flatten"],"default_binary":"neutroot2","smoke_paths":["neut/share/neut/crsdat","neut/include/neutvect.h","share/nf_flatten.C"]}
 EOF
 
 %environment
@@ -191,7 +191,8 @@ EOF
     test -x "$PREFIX/bin/nf-neut-flatten"
     test -x "$PREFIX/neut/bin/neutroot2"
     test -f "$PREFIX/neut/include/neutvect.h"
-    test -f "$PREFIX/neut/share/neut/crsdat/94mod_p.dat"
+    # NEUT 6 moved the Bodek-Yang tables into crsdat/BY/.
+    test -f "$PREFIX/neut/share/neut/crsdat/94mod_p.dat" || test -f "$PREFIX/neut/share/neut/crsdat/BY/94mod_p.dat"
 
     # `test -e` follows symlinks, so this fails on a *dangling* bin/root — the
     # relocation bug that let a broken payload ship and only surfaced at run

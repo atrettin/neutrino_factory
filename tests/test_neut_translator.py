@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import tomllib
 import unittest
 
 import numpy as np
 
 from neutrino_factory.flux import HistogramFlux, build_flux
-from neutrino_factory.translators.neut import NeutTranslator
+from neutrino_factory.translators.neut import NEUT6_MODE_NAMES, NeutTranslator, render_toml
 
 from .helpers import view_config
 
@@ -207,3 +208,77 @@ class NeutXsecWeightTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Neut6TomlCardTests(unittest.TestCase):
+    """NEUT 6 (code_version 6.2.4) gets a TOML card instead of the Fortran one."""
+
+    @staticmethod
+    def _translate(current: str = "cc", particle: str = "numu", nucleus: str = "C12") -> dict:
+        from .test_physics_current import _config as current_config
+
+        return NeutTranslator().translate(
+            current_config(current, particle=particle, nucleus=nucleus),
+            _task(code_version="6.2.4", config_version="b25", generator_version_id="6.2.4+b25"),
+        )
+
+    def _parsed(self, **kwargs) -> dict:
+        translated = self._translate(**kwargs)
+        self.assertEqual(translated["card_format"], "toml")
+        # What NEUT reads is the rendered text, so test it through a real parser.
+        return tomllib.loads(render_toml(translated["neut_card"]))["neut"]
+
+    def test_framework_keys(self) -> None:
+        card = self._parsed(particle="numubar", nucleus="Ar40")
+        self.assertEqual(card["number_of_events"], 10)
+        self.assertEqual(card["rng_seed"], "file")
+        # NEUT 6 defaults to NuHepMC; nf_flatten.C reads NeutVect.
+        self.assertEqual(card["output_format"], "neutroot")
+        self.assertEqual(card["probe"]["species"], "numubar")
+        self.assertEqual(card["probe"]["energy_spectrum_type"], "root")
+        self.assertEqual(card["probe"]["energy_histogram"], ["flux.root", "nf_flux", "gev"])
+        self.assertEqual(card["target"]["num_nucleons"], 40)
+        self.assertEqual(card["target"]["num_bound_protons"], 18)
+        self.assertEqual(card["target"]["num_free_protons"], 0)
+        fsi = card["target"]["hadron_FSI"]
+        self.assertEqual(fsi["pion_cascade"]["pion_rescattering"], "on")
+        self.assertEqual(fsi["nucleon_cascade"]["nucleon_rescattering"], "on")
+
+    def test_b25_is_shipped_defaults_plus_hybrid_fsi_pauli_blocking(self) -> None:
+        card = self._parsed()
+        # B25 keeps NEUT.Defaults.toml's models (Benhar SF, Rein-Sehgal) ...
+        self.assertNotIn("QE", card["interaction_model"])
+        self.assertNotIn("ResPP", card["interaction_model"])
+        # ... but the shipped default FSI Pauli blocking is "on", not B25's hybrid.
+        self.assertEqual(card["target"]["nuclear_effects"], {"pauli_blocking_fsi": "hybrid"})
+        # The merge must not drop the framework's FSI pins beside it.
+        self.assertIn("hadron_FSI", card["target"])
+
+    def test_neut6_rejects_the_neut5_default_config_version(self) -> None:
+        with self.assertRaises(KeyError):
+            NeutTranslator().translate(_config(), _task(code_version="6.2.4"))
+
+    def test_single_current_rescales_the_other_current_to_zero(self) -> None:
+        for current in ("cc", "nc"):
+            with self.subTest(current=current):
+                model = self._parsed(current=current)["interaction_model"]
+                self.assertEqual(model["mode_choice_type"], "rescaled")
+                scaling = model["mode_rescaling"]
+                # NEUT aborts on any missing name, so all 59 must be written.
+                self.assertEqual(set(scaling), set(NEUT6_MODE_NAMES))
+                self.assertEqual(len(NEUT6_MODE_NAMES), 59)
+                on = {name for name, factor in scaling.items() if factor == 1.0}
+                off = {name for name, factor in scaling.items() if factor == 0.0}
+                self.assertEqual(on | off, set(NEUT6_MODE_NAMES))
+                self.assertTrue(all(n.startswith(current.upper() + "_") for n in on))
+                self.assertFalse(any(n.startswith(current.upper() + "_") for n in off))
+
+    def test_inclusive_uses_normal_mode_choice(self) -> None:
+        model = self._parsed(current="inclusive")["interaction_model"]
+        self.assertEqual(model["mode_choice_type"], "normal")
+        self.assertNotIn("mode_rescaling", model)
+
+    def test_neut_5_versions_keep_the_fortran_card(self) -> None:
+        translated = NeutTranslator().translate(_config(), _task(code_version="5.4.2"))
+        self.assertEqual(translated["card_format"], "legacy")
+        self.assertIn("NEUT-MDLQE", translated["neut_card"])

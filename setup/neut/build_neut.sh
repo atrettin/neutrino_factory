@@ -33,6 +33,45 @@ export CERN=/opt/cernshim CERN_LEVEL=2005
 rm -rf "$BUILD" && mkdir -p "$BUILD"
 tar -xzf "$TARBALL" -C "$BUILD" --strip-components=1
 
+# $1: a cross-section table that must have been installed, relative to crsdat/.
+check_install() {
+  test -x "$PREFIX/bin/neutroot2"
+  test -f "$PREFIX/share/neut/crsdat/$1"
+  test -f "$PREFIX/include/neutvect.h"
+}
+
+# NEUT 6 builds with CMake from the repository root (NEUT 5 ships autotools under
+# src/). It bundles CERNLIB 2005 itself, so the shim above goes unused, and fetches
+# toml11, FortModGen, NucDeEx and Eigen at configure time (network needed). The
+# install layout matches NEUT 5's (bin, lib, include, share/neut/{crsdat,Cards}),
+# so the image's environment still applies. See docs/generators/neut.md, "NEUT 6".
+if [[ -f "$BUILD/CMakeLists.txt" ]]; then
+  # NEUT 6 needs CMake >= 3.17; bootstrap a newer one from PyPI if the image's is older.
+  if ! cmake -P <(echo 'if(CMAKE_VERSION VERSION_LESS 3.17)
+message(FATAL_ERROR "old")
+endif()') >/dev/null 2>&1; then
+    python3 -m pip install --no-cache-dir "cmake>=3.17,<4"
+    hash -r
+  fi
+  # DOWNLOAD_DATA: the ED-RMF tables come from the private neut-devel/neut-data repo (no access); only QE model "rmf" needs them.
+  # WERROR: NEUT's -Werror is tuned to its CI's compilers, not this gcc 11.
+  # NUHEPMC: we read the neutroot output only (it is the one nf_flatten.C reads).
+  cmake -S "$BUILD" -B "$BUILD/build" \
+    -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+    -DNEUT_DOWNLOAD_DATA=OFF \
+    -DNEUT_WERROR_ENABLED=OFF \
+    -DNEUT_NUHEPMC_ENABLED=OFF \
+    -DNEUT_BUILTIN_NUHEPMC=OFF
+  cmake --build "$BUILD/build" -j"$JOBS"
+  rm -rf "$PREFIX"
+  cmake --install "$BUILD/build"
+  # NEUT 6 moved the Bodek-Yang tables into crsdat/BY/.
+  check_install BY/94mod_p.dat
+  test -f "$PREFIX/share/neut/Cards/NEUT.Defaults.toml"
+  rm -rf "$BUILD"
+  exit 0
+fi
+
 # A GitHub tarball gives every file the same mtime, so make decides the
 # autotools outputs are stale and tries to rerun aclocal-1.13, which the image
 # lacks. Touch them in dependency order instead.
@@ -60,7 +99,5 @@ make -j"$JOBS"
 rm -rf "$PREFIX"
 make install
 
-test -x "$PREFIX/bin/neutroot2"
-test -f "$PREFIX/share/neut/crsdat/94mod_p.dat"
-test -f "$PREFIX/include/neutvect.h"
+check_install 94mod_p.dat
 rm -rf "$BUILD"
