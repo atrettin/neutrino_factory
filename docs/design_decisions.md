@@ -722,6 +722,41 @@ not possible either, because the merge built one Python dict per event.
   retries, and compressed they cost only ~0.5 TB.
 
 
+## Old generator versions: NEUT 5.4.2 from source, GENIE 2.12.8 without MEC (2026-10)
+
+**The need.** Production with NEUT 5.4.2 and GENIE R-2_12_8 with no 2p2h.
+Until now NEUT ran only as 5.7.0 extracted from a published image, and GENIE
+only at 3.x.
+
+**NEUT.** 5.4.2 is compiled inside `nuisancemc/tutorial:nuint2024`, the image
+the 5.7.0 payload already comes from, because that image carries a CERNLIB with
+every library NEUT 5.4.2 links and the ROOT and gfortran it needs; NEUT is
+installed over `/opt/neut`, so the image's environment and the existing
+`neut.def` stage 2 apply unchanged. One script, `setup/neut/build_neut.sh`, is
+shared by `setup/Dockerfile.neut` and `neut.def` stage 1. The source is
+access-restricted, so it is fetched on the host into a git-ignored
+`setup/neut/src/` and never inside a build. Details and the four build fixes are
+in [generators/neut.md](generators/neut.md#container-build).
+- *Ruled out: building CERNLIB 2005 from source.* A project of its own, for
+  libraries the image already has.
+- *Ruled out: a separate def per NEUT version.* `build_apptainer_images.sh` maps
+  one def per generator; the def branches on whether the tarball for
+  `CODE_VERSION` exists, and the script now passes `CODE_VERSION` to every def.
+
+**GENIE.** R-2_12_8 shares `Dockerfile.genie`/`genie.def` with GENIE 3, with a
+`GENIE_TAG` branch around configure. "No MEC" needs no switch: 2.12.8's `CC`,
+`NC` and `Default` event-generator lists contain no MEC generator. FNAL's
+2.12.8 splines exist only bundled with a MEC model, so the MEC splines are
+stripped at staging to keep the `xsec_weight` spline sum equal to what `gevgen`
+generates; the staged set is named `default`. Details in
+[generators/genie.md](generators/genie.md#genie-2-r-2_12_8).
+- *Ruled out: computing splines with `gmkspl`.* Hours per target under
+  emulation, for numbers FNAL already publishes.
+- *Ruled out: filtering MEC in the spline-sum code.* It would make a GENIE-wide
+  normalization path version-dependent; stripping at staging keeps the staged
+  file an exact description of the generated channels.
+
+
 ## NuWro QE model as config versions `sf` and `lfg`; legacy config versions (2026-11)
 
 **The problem.** NuWro's `default` config version wrote no QE parameters, so it
@@ -780,3 +815,61 @@ only as context, and the Slurm logs live in `work_root/logs/`.
   every generator's output files, and a file missed would accumulate silently.
 - *Keeping the jobcards as well.* They follow from the translated config, and
   chunk 0 of every job keeps its complete raw directory as a sample.
+
+## NEUT 6 stays the `neut` generator, not a new one (2026-11)
+
+**The question.** NEUT 6 rewrote the build (CMake in place of autotools) and the
+card format (TOML in place of the Fortran `KEY value` card). Would a separate
+generator with its own adapter, translator and normalizer fit it better than a
+new `code_version` of `neut`?
+
+**What the 6.2.4 source shows** (compared file by file against the 5.4.2 tag):
+- `neutroot2` still writes `neuttree` with NeutVect objects when
+  `output_format = "neutroot"`. NeutVect (ClassDef 6 → 8) and NeutPart only gain
+  members.
+- Interaction modes are unchanged: the `nemodsel` table is identical.
+- The flux histogram is sampled by the same `Ufm2TH1dist`. The same
+  `flux_<flavour>`/`evtrt_<flavour>`/`fluxhisto`/`ratehisto` histograms reach
+  the output.
+- The seed is read from `$RANFILE` by the same `nerdseed`.
+- `mode_choice_type = "rescaled"` fills the same CRSNEUT/CRSNEUTB arrays (with
+  NEMODFLG −1) that `NEUT-CRS`/`NEUT-CRSB` fill in NEUT 5.
+
+The adapter, the normalizer, `nf_flatten.C` and the cross-section weight
+therefore carry over unchanged. The two exceptions are a TOML card renderer
+(`NeutTranslator._toml_card`) and the dictionary library's new name
+(`libNEUTROOTClass`).
+
+**The decision.** NEUT 6.2.4 is a `code_version` of `neut`. Its catalog entry
+carries `card_format: "toml"`, and the translator picks the card from that.
+`setup/neut/build_neut.sh` picks CMake or autotools by whether the source tree
+has a top-level `CMakeLists.txt`.
+
+**Ruled out.** *A separate `neut6` generator.* It would duplicate about 1000
+lines that do not differ. It would also split one generator across two names in
+every cross-generator comparison and plot.
+
+## NEUT 6 config versions are named after T2K model sets (2026-11)
+
+**The question.** What should NEUT 6's `config_version` be called, and what
+should it select? It was first `default`, meaning NEUT 6's shipped
+`NEUT.Defaults.toml` unchanged.
+
+**What the evidence shows.** The NEUT 6.2 release-validation talk (linked from
+the 6.2.4 release notes; see `docs/generators/neut.md`, "NEUT 6 model sets")
+names two T2K model sets, B25 and A25, plus A25 with DCC binding energy off. The
+shipped defaults are not exactly B25: they leave FSI Pauli blocking `"on"`,
+where B25 lists hybrid blocking. A `default` label would therefore have meant a
+model nobody else uses, under a name that sounds as if it were NEUT's own
+choice.
+
+**The decision.** NEUT 6's only config version is `b25`, the shipped defaults
+plus `pauli_blocking_fsi = "hybrid"`. `a25` and `a25_Eb_off` are the planned
+names for the A25 sets. They are not catalogued: ED-RMF needs tensor tables from
+the private `neut-devel/neut-data` repository, and a catalogued config version
+that cannot run would pass `validate-config` and fail only in the generator.
+NEUT 5 keeps `default`, so the two major versions never share a config-version
+name for different physics.
+
+**Ruled out.** *Keeping `default` as an alias of `b25`.* That would bring back
+the ambiguity that the rename removes.
