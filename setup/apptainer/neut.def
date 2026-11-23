@@ -9,7 +9,8 @@
 #     setup/Dockerfile.neut runs. NEUT's source is access-restricted, so the
 #     tarball must already be at setup/neut/src/neut-5.4.2.tar.gz (copy it there
 #     by hand on the cluster; setup_neut.sh downloads it on a machine with `gh`).
-#     A source build is triggered by that tarball existing for CODE_VERSION.
+#     A source build is triggered by that tarball existing for CODE_VERSION;
+#     without it, any version but 5.7.0-nuint2024 fails the build.
 #
 # The source image is a ~5 GB kitchen sink (GENIE, NuWro, NUISANCE, GEANT4);
 # only NEUT and the ROOT build it links against are staged into the payload.
@@ -53,8 +54,12 @@ Stage: source
     tarball="/nf_neut_host/src/neut-{{ CODE_VERSION }}.tar.gz"
     if [ -f "$tarball" ]; then
         bash /nf_neut_host/build_neut.sh "$tarball" "{{ JOBS }}"
-    else
+    elif [ "{{ CODE_VERSION }}" = "5.7.0-nuint2024" ]; then
         echo "No $tarball: using the image's own NEUT build"
+    else
+        # Falling back would ship the image's NEUT 5.7.0 under this version's name.
+        echo "ERROR: $tarball missing; NEUT {{ CODE_VERSION }} must be built from source" >&2
+        exit 1
     fi
     rm -rf /nf_neut_host
 

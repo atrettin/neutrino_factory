@@ -368,7 +368,8 @@ retagged source image. For `5.4.2`, `setup/neut/build_neut.sh` compiles NEUT in
 the image and installs it over `/opt/neut`, so the image's environment
 (`PATH`, `LD_LIBRARY_PATH`, `NEUT_CRSPATH`, `neut-config`) and everything
 downstream apply unchanged. `setup/Dockerfile.neut` runs it for Docker; stage 1
-of `neut.def` runs it when `setup/neut/src/neut-<CODE_VERSION>.tar.gz` exists.
+of `neut.def` runs it when `setup/neut/src/neut-<CODE_VERSION>.tar.gz` exists,
+and fails the build when it is missing for any version but `5.7.0-nuint2024`.
 The source build needs four adjustments, each of which caused a real failure:
 
 - **CERNLIB layout shim.** NEUT 5.4.2's configure requires the CERNLIB 2005
