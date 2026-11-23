@@ -383,6 +383,11 @@ else
     # is cheap and must reflect the current payload set, so adding/removing a
     # generator version takes effect without requiring --force.
     log "Composing $NF_BASE_SIF from ${#PAYLOADS[@]} payload(s)"
+    # Apptainer's parallel unsquashfs (one thread per core, 128 on odslserv) ran
+    # out of file descriptors at the default soft limit while extracting the 7th
+    # payload; the hard limit is ours to take.
+    ulimit -n "$(ulimit -Hn)" || log "WARNING: could not raise the open-file limit ($(ulimit -n))"
+    log "Open-file limit: $(ulimit -n)"
     nice -n 15 apptainer build --force "$NF_BASE_SIF" "$tmp_nf_base_def"
     rm -f "$tmp_nf_base_def"
 
