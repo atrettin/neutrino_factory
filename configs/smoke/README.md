@@ -16,6 +16,7 @@ confirm the composed `nf-base.sif` actually works after (re)building images.
 | `gibuu_c12.yaml` | GiBUU `release2025` | 1000 | more events on purpose: GiBUU weights uniformly-sampled events by cross section (no rejection sampling), so a representative dataset needs many events — and it's fast |
 | `neut_c12.yaml` | NEUT `5.7.0-nuint2024` | 50 | two-stage: `neutroot2` then `nf-neut-flatten` |
 | `neut542_c12.yaml` | NEUT `5.4.2` | 50 | as above, NEUT built from source; slow to start: NEUT builds its Nieves 1p1h tables for all six flavours first |
+| `neut624_c12.yaml` | NEUT `6.2.4` / `b25` | 50 | as above, NEUT built from source; NEUT 6 TOML card instead of the legacy card |
 
 ## Run on the cluster (inside the composed image)
 
