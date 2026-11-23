@@ -11,7 +11,7 @@ run:
   name: example_run
   seed: 12345
   executor: local         # local | slurm
-  stub_mode: true         # keep true for local smoke tests without generator installs
+  stub_mode: false        # true writes synthetic events, for smoke tests without generator installs
   # How chatty the generator's own logs are (GENIE only, for now).
   # default | essential | quiet | verbose
   # essential = initial job configuration + output-file writes + warnings/errors

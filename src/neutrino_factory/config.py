@@ -65,7 +65,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "name": "neutrino_factory_run",
         "seed": 12345,
         "executor": "local",
-        "stub_mode": True,
+        "stub_mode": False,
         "log_level": "default",
     },
     # Reusable parameterized job templates; see neutrino_factory.jobs. Expanded
@@ -335,7 +335,7 @@ def validate_config(config: Dict[str, Any]) -> None:
     # In stub mode we generate synthetic events, so config-version availability
     # (e.g. staged GENIE cross-section splines) is not required. Real runs must
     # validate strictly so a valid config is guaranteed to run.
-    stub_mode = bool(run.get("stub_mode", True))
+    stub_mode = bool(run.get("stub_mode", False))
     if stub_mode and job_list:
         LOGGER.warning(
             "run.stub_mode is enabled: generator config_versions are NOT checked "

@@ -96,11 +96,19 @@ def run_task(config: dict[str, Any], task: dict[str, Any], execution_mode: str =
     )
 
     translated_config = adapter.translate_config(task)
-    stub_mode = bool(config["run"].get("stub_mode", True))
+    stub_mode = bool(config["run"].get("stub_mode", False))
 
     try:
-        if stub_mode or not adapter.is_available(task.get("code_version")):
+        if stub_mode:
             adapter.run_stub(translated_config, raw_path, task)
+        elif not adapter.is_available(task.get("code_version")):
+            # A real run must never fall back to synthetic events: they would
+            # land in the output looking like generator data.
+            raise RuntimeError(
+                f"{task['generator_name']} {task.get('code_version')} is not available "
+                f"(image or install missing) and run.stub_mode is false; build or stage "
+                f"the generator, or set run.stub_mode: true for synthetic events"
+            )
         else:
             command = adapter.build_run_command(translated_config, raw_path.parent)
             subprocess.run(command, check=True, cwd=raw_path.parent)
