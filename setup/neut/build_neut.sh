@@ -44,7 +44,7 @@ check_install() {
 # src/). It bundles CERNLIB 2005 itself, so the shim above goes unused, and fetches
 # toml11, FortModGen, NucDeEx and Eigen at configure time (network needed). The
 # install layout matches NEUT 5's (bin, lib, include, share/neut/{crsdat,Cards}),
-# so the image's environment still applies. See docs/generators/neut.md, "NEUT 6".
+# so the image's environment still applies. See docs/generators/neut.md, "Container build".
 if [[ -f "$BUILD/CMakeLists.txt" ]]; then
   # NEUT 6 needs CMake >= 3.17; bootstrap a newer one from PyPI if the image's is older.
   if ! cmake -P <(echo 'if(CMAKE_VERSION VERSION_LESS 3.17)

@@ -9,6 +9,21 @@ support, through GENIE Reweight. The conventions its output is normalized onto
 are in [../physics.md](../physics.md); the run pipeline is in
 [../architecture.md](../architecture.md).
 
+**Contents**
+
+- [At a glance](#at-a-glance)
+- [Setup](#setup)
+- [Configuring a job](#configuring-a-job)
+- [Reading the output](#reading-the-output)
+- [Model notes](#model-notes)
+- [Reweight universes](#reweight-universes)
+- [Known limitations](#known-limitations)
+- [Implementation](#implementation)
+- [Container build](#container-build)
+- [Design notes](#design-notes)
+- [Validation](#validation)
+- [Upstream issues](#upstream-issues)
+
 ## At a glance
 
 | | |
@@ -20,7 +35,7 @@ are in [../physics.md](../physics.md); the run pipeline is in
 | `physics.current` | `--event-generator-list CC`/`NC` ([Weak current](#weak-current)) |
 | FSI | the tune's own setting, not overridden; on in every R-3_06_00 tune |
 | `run.log_level` | honoured ([Log verbosity](#log-verbosity)) |
-| Reweight universes | yes, plus switch variations ([Reweight universes](#reweight-universes-and-variations)) |
+| Reweight universes | yes, plus switch variations ([Reweight universes](#reweight-universes)) |
 
 ## Setup
 
@@ -50,9 +65,11 @@ setup/setup_genie.sh --code-version R-2_12_8 --download-xsec
 
 Splines land in `<software_root>/genie/genie_xsec/<tag-safe-code-version>/<tune>/xsecs.xml`.
 
-**"No available config version"** in `neutrino-factory list-generators --generator
-genie` almost always means no tune's `xsecs.xml` has been staged yet. The image
-alone is not enough.
+The image alone is not enough: a tune is available only once its `xsecs.xml` is
+staged. Until then `neutrino-factory list-generators --generator genie` shows an
+empty `CONFIG_VERSIONS` column, and a real run (`stub_mode: false`) fails
+validation with "GENIE tune '…' has no staged cross-section spline … Available
+tunes: …".
 
 ## Configuring a job
 
@@ -217,7 +234,7 @@ They appear in `w_true_gev` as discrete lines at the Λ_c⁺ (2.285 GeV) and Σ_
 up ~0.4% of `qel` on a 0.5–5 GeV flux. No other generator produces them, so a
 `qel` sample above W ≈ 1.5 GeV is GENIE-specific and entirely charm.
 
-## Reweight universes and variations
+## Reweight universes
 
 A job with a `genie.universes` and/or `genie.variations` block (schema in
 [../configuration.md](../configuration.md#reweight-universes-and-variations))
@@ -234,10 +251,12 @@ Every dial is a **scale on the generation tune's own value**: central 1, and
 ### Supported dials
 
 Dials outside this table fail config validation. Every one is listed, at
-GENIE's default 1σ and with its incompatibilities as comments, in
+GENIE's default 1σ (the z-expansion coefficients at Meyer et al.'s, see
+[z-expansion dials](#z-expansion-dials)) and with its incompatibilities as
+comments, in
 `configs/schema/genie_dials.yaml`, a block to copy into a job. Every dial passed
 a per-dial check on a real sample ([Validation](#per-dial-checks)): the first
-round on G18_10a_02_11a numu CC events, the dials marked † (added 2026-10-23)
+round on G18_10a_02_11a numu CC events, the dials marked † (added 2026-10-26)
 on AR23_20i and G18_10a_02_11a samples of the probe and current they act on.
 
 | Dials (config names) | Engine | Moves | GENIE default 1σ |
@@ -379,8 +398,9 @@ high-energy configurations) as unknown.
 | `RPA_CCQE` | the Nieves CCQE model | it switches the `RPA` flag of the tune's CCQE model, which only `NievesQELCCPXSec` has; under any other model every weight would be 1 | Llewellyn Smith: G00_00a/b/z, G18_01a/b, G18_02a–d, GDM18_00a/b; SuSAv2 QE: G21_11a–d; GPRD18_10a |
 | `XSecShape_CCMEC` | a MEC model other than Empirical | the alternative shape is the Empirical model's own, so under an Empirical-MEC tune the column equals the nominal | G00_00a/b/z, G18_01a/b, G18_02a–d, GDM18_00a/b |
 
-**Warned.** If the model a dial's engine reads differs from G18_10a's,
-validation logs one warning per dial and CMC but accepts the dial. Examples:
+**Warned.** If the model a dial's engine reads differs from the one the dial
+was checked under (G18_10a's; AR23_20i's for the z-expansion dials), validation
+logs one warning per dial and CMC but accepts the dial. Examples:
 `NormCCMEC` under SuSAv2 MEC (AR23_20i, N24_20i, G21_11*, G24_20*), `MaCCRES`
 under Rein-Sehgal RES (G18_01*). The DIS dials never warn: every CMC uses the
 same DIS model as G18_10a.
@@ -488,7 +508,7 @@ uniform within a bin (`Apps/gEvGen.cxx`, `TH1FluxDriver`, R-3_06_00):
 
 The framework uses the ROOT branch. A power-law flux is written to the task work
 directory as `nf_flux.root`: `GENIE_FLUX_NBINS = 1000` log-spaced bins holding
-the flux *density* (~0.27%/bin over 0.1–50 GeV), passed as
+the flux *density* (bins ~0.62% wide over 0.1–50 GeV), passed as
 `-f nf_flux.root,nf_flux,WIDTH`. Contents are float64 so uproot emits a TH1D,
 which is what `gevgen` casts to. A user-supplied ROOT flux is passed through
 *without* `WIDTH`, since its content convention is unknown.
@@ -618,7 +638,8 @@ every further line is one column set. The output is TTree `weights`, branch
 
 The adapter writes one row per universe (every scale dial at its thrown value),
 then one row per variation (that switch at its value, everything else nominal),
-into `universes.txt` and `universes.json`, runs the driver, and the normalizer
+into `universes.txt`, records the resolved universes and variations in
+`universes.json`, runs the driver, and the normalizer
 splits the columns into the two datasets.
 
 **Batches.** The driver's memory grows with every `Reconfigure()`, by about
@@ -648,13 +669,16 @@ test compares it with the payload wherever the payload is present.
   return `nullptr` where 6.24 returned an empty string, which crashes R-3_06_00's
   `AlgConfigPool::LoadRegistries`.
 - **`-Dminuit2=ON` is required.** Without Minuit2, every Nieves-MEC event
-  segfaults in `MECGenerator::GetXSecMaxTlctl`. (This was first misattributed to
-  x86_64 emulation; native cluster builds ruled that out.)
+  segfaults in `MECGenerator::GetXSecMaxTlctl`, on native cluster builds as
+  well as under x86_64 emulation.
 - **The build stays in place.** GENIE resolves its tunes and data files from
   `$GENIE`, so relocating a `--prefix` install is fragile.
-- **Pythia6 sources are pre-staged**: pythia.org answers with a 302 redirect that
-  breaks `curl -f -O`. The shared builder is `setup/lib/build_pythia6.sh` (NuWro
-  needs it too).
+- **Pythia6 is built by GENIE's own upstream `build_pythia6.sh`**, fetched by
+  URL from the `GENIE-MC/Generator` repository at R-3_06_00 (R-2_12_8's older
+  copy fails to link). Its Fortran source is pre-staged where the script looks
+  (`v6_428/download/pythia6428.f_with_dummies`), because pythia.org answers with
+  a 302 redirect that the script's `curl -f -O` saves as the source file. The
+  NuWro image builds Pythia6 the same way.
 - **GENIE Reweight and `nf_genie_reweight` are built in the builder stage**
   against `$GENIE`. Reweight has no configure step and reads the Generator's
   `Make.config`. The driver's Makefile rule is `grwght1p`'s with the names
@@ -664,10 +688,9 @@ test compares it with the payload wherever the payload is present.
   cling "Missing FileEntry" errors for every Reweight class. The Apptainer
   payload exposes the driver as `bin/nf_genie_reweight` through the same wrapper
   body as `gevgen`.
-- **Pythia6, LHAPDF and ROOT come before the GENIE clone** and do not depend on
-  `GENIE_TAG`, so every GENIE version shares those (slow) Docker layers. Pythia6
-  is built with R-3_06_00's `build_pythia6.sh`, fetched by URL: R-2_12_8's older
-  copy fails to link.
+- **In the Dockerfile, Pythia6, LHAPDF and ROOT come before the GENIE clone**
+  and do not depend on `GENIE_TAG`, so every GENIE version shares those (slow)
+  Docker layers. `genie.def` clones GENIE first; Apptainer has no layer cache.
 - **GENIE 2 builds** with `--disable-lhapdf` (its DIS PDF, GRV98 LO, is built
   in; its configure predates the LHAPDF6/Pythia8 options) and two fixes:
   `Utils/AppInit.h` gets `#include <string>` / `using std::string;`, because
@@ -686,17 +709,17 @@ test compares it with the payload wherever the payload is present.
 
 ### The flux histogram is written by hand (2026-07)
 
-The framework used to pass a power-law flux as a TF1 string, assuming GENIE
-samples it continuously. A 1M-event run over 0.1–50 GeV then showed a sawtooth in
-the event rate below ~1 GeV. Two problems combined:
+A power-law flux passed as a TF1 string is not sampled continuously, and two
+problems combine:
 
 - The TF1 branch fills only 300 bins from 100k random entries: for E^-2 over
   0.1–50 GeV, ~63% land in the first bin and bins above ~15 GeV have >40%
   Poisson noise, with a different noise realization per chunk (each chunk reseeds
   `gRandom`).
-- The weight divided by a *different* grid rebuilt from the run config
-  (`flux.to_histogram(nbins=500)`), so events were divided by a flux they were
-  never drawn from. This was the sawtooth.
+- A weight divided by a *different* grid rebuilt from the run config divides
+  events by a flux they were never drawn from. Over 0.1–50 GeV with a 500-bin
+  rebuilt grid, a 1M-event run shows this as a sawtooth in the event rate below
+  ~1 GeV.
 
 Only the normalization half is needed for correctness: reading `input-flux.root`
 gives unbiased weights even against the noisy 300-bin histogram. Writing the
@@ -716,9 +739,9 @@ correlated with that channel's cross section.
 
 ### A probe with no spline is an error (2026-07)
 
-When no spline matched, the translator used to return zeros, so every event
-came out with `xsec_weight = 0`: physical-looking, silently unnormalized output.
-It now raises.
+Returning zeros when no spline matches would give every event
+`xsec_weight = 0`: physical-looking, silently unnormalized output. The
+translator raises instead.
 
 ### Why the shipped Reweight apps are not used
 
@@ -759,7 +782,7 @@ split for numu/C12 is in
 Over 0.1–50 GeV, `gevgen`'s `input-flux.root` came back with edges bit-identical
 to `nf_flux.root`, contents equal to density × bin width, and no zeroed bins:
 cloned, not resampled. `xsec_weight · E^-2` is constant to 1.25% across the
-events (the residual expected from 0.27%/bin binning), with no step structure.
+events (the residual expected from bins 0.62% wide: 1.0062² − 1), with no step structure.
 
 ### `Wcut` is a sharp cut on `w_true_gev`
 
@@ -827,8 +850,9 @@ expected channel at +20 %:
 coefficients: at +20 % the median CC qel weight is 0.85 and 8 % of the moved
 events fall below 0.5 (minimum 0.04; 2000-event AR23_20i sample). a₁ = 2.30
 is the leading coefficient and the axial form factor is negative, so raising a₁
-shrinks |F_A|. GENIE varies the four coefficients independently, although a
-z-expansion fit correlates them. `CoulombCCQE` lowers the numubar weight where
+shrinks |F_A|. Each dial scales its coefficient on its own, although a
+z-expansion fit correlates them; the correlation enters through the catalog's
+correlation group ([z-expansion dials](#z-expansion-dials)). `CoulombCCQE` lowers the numubar weight where
 it raises numu, as the Coulomb potential's sign follows the lepton charge.
 A closure of `ZExpA1CCQE` against a directly generated sample, as for `MaCCQE`,
 has not been done.
@@ -900,3 +924,16 @@ To report to the GENIE team.
    odslserv01 over 1000 H1 events: peak RSS 728 / 1198 / 2146 MiB for 50 / 100 /
    200 columns, i.e. ~260 MiB plus 9.4 MiB per column. *Workaround:* the adapter
    runs the driver in batches of 100 columns. Not yet narrowed down to an engine.
+7. **The Empirical MEC dials return the raw dσ ratio of an unnormalized
+   shape.** The mass, width and `Mq2d` dials are therefore not σ-preserving, and
+   the `Frac*` dials have no effect on the weight.
+8. **The MEC pn and Δ fraction dials are CC-only and not implemented for
+   SuSAv2 MEC.**
+9. **`CCQEMomDistroFGtoSF` fails on C12:** its spectral-function momentum draws
+   fail, and the event keeps weight 1.
+10. **`CCQEPauliSupViaKF` is one-sided under `kPSQELEvGen`.**
+
+Issues 7–10 were found while integrating GENIE Reweight; their dials are not
+accepted ([Rejected and untested dials](#rejected-and-untested-dials)). Only
+the summaries above were recorded: the tunes, samples and measured weights
+behind them were not kept, so a reproducer has to re-establish them.

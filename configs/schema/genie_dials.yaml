@@ -12,7 +12,7 @@
 # log: true everywhere except ZExpA1-4CCQE: the throw is exp(sigma*z), always
 #   positive. In linear mode (1 + sigma*z) a dial at sigma >= 0.5 throws a
 #   non-positive scale in a few percent of universes, which fails the run.
-# Full reference: docs/generators/genie.md#reweight-universes-and-variations.
+# Full reference: docs/generators/genie.md#reweight-universes.
 #
 # Universes need code_version R-3_06_00. `validate-config` refuses any dial
 # that cannot work under the job's tune, and warns about dials that can act

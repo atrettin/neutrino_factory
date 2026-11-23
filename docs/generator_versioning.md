@@ -2,10 +2,9 @@
 
 A generator's output depends on two independent axes — its *code version*
 (e.g. GENIE `R-3_06_00`) and its *config version* / physics parameter set
-(GENIE calls this a *tune*, e.g. `G18_10a_02_11a`). Every generator version
-entry in the config carries both keys: `code_version` and `config_version`
-(the latter is `"default"` for generators without a distinct parameter-set
-concept yet).
+(GENIE calls this a *tune*, e.g. `G18_10a_02_11a`). Every job in the config
+carries both keys: `code_version` and `config_version` (the latter is
+`"default"` for a generator version without distinct parameter sets).
 
 Each generator's **adapter class** is the single source of truth for its
 versions:
@@ -19,9 +18,10 @@ staged on disk (`available_config_versions` globs
 `<software_root>/genie/genie_xsec/<tag-safe>/<tune>/xsecs.xml`), so there is
 no hard-coded GENIE tune list.
 
-Config validation is *availability-only* for GENIE (known `code_version` +
-non-empty `config_version`) and strict against the static `config_versions`
-for the other generators.
+Config validation for GENIE checks a known `code_version` and a non-empty
+`config_version`; with `run.stub_mode: false` it also requires the tune's
+spline to be staged. For the other generators it is strict against the static
+`config_versions`, independent of stub mode.
 
 **Legacy config versions.** A retired config version moves from
 `config_versions` to `legacy_config_versions`, a map from its name to the

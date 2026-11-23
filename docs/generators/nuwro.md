@@ -7,6 +7,22 @@ axial form factor and the channel normalizations. The conventions its output is
 normalized onto are in [../physics.md](../physics.md); the run pipeline is in
 [../architecture.md](../architecture.md).
 
+**Contents**
+
+- [At a glance](#at-a-glance)
+- [Setup](#setup)
+- [Configuring a job](#configuring-a-job)
+- [Reading the output](#reading-the-output)
+- [Model notes](#model-notes)
+- [Reweight universes](#reweight-universes)
+- [Known limitations](#known-limitations)
+- [Implementation](#implementation)
+- [Container build](#container-build)
+- [Design notes](#design-notes)
+- [Validation](#validation)
+- [Upstream issues](#upstream-issues)
+- [Open questions](#open-questions)
+
 ## At a glance
 
 | | |
@@ -23,8 +39,7 @@ normalized onto are in [../physics.md](../physics.md); the run pipeline is in
 ## Setup
 
 `neutrino-factory setup` and the generic image build cover NuWro; there is no
-data staging step. Its image needs Pythia6, built by the shared
-`setup/lib/build_pythia6.sh` ([Container build](#container-build)).
+data staging step. Its image needs Pythia6 ([Container build](#container-build)).
 
 ## Configuring a job
 
@@ -229,18 +244,19 @@ channel norms have central 1.
 |---|---|---|
 | `qel_minerva_ff_scale` | **Works under the default `qel_axial_ff_set = 8`** (MINERvA axial FF). It is the axial form factor's 1σ band weight: `ff.cc` evaluates `zExp − bandWeight·√uncSq`, central 0, documented range −1…+1. | ±1 (absolute) |
 | `qel_deuterium_ff_scale` | The same, for `qel_axial_ff_set = 9`. | ±1 (absolute) |
-| `qel_cc_axial_mass`, `qel_nc_axial_mass` | Act only under the dipole axial FF (`qel_axial_ff_set` 1–3). Under the default set 8 the axial mass has no effect, and the adapter refuses them. | ±20 %, ±16 % |
+| `qel_cc_axial_mass`, `qel_nc_axial_mass` | Act only under the dipole axial FF (`qel_axial_ff_set` 1–3). Under the default set 8 the axial mass has no effect, and the reweight stage refuses them: it reads `qel_axial_ff_set` from the generated events, so `validate-config` accepts the job and the refusal comes after generation. | ±20 %, ±16 % |
 | `qel_s_axial_mass`, `delta_s` | Strange axial FF. Accepted, but act on NC only. The normalizer refuses a sample in which no universe moves any weight off 1. | ±16 %, ±10 % |
 | `qelNorm resNorm disNorm cohNorm mecNorm ccNorm ncNorm antyNorm` | Applied by the framework as flat factors from the event flags (central 1), because NuWro's own norm engine never runs ([upstream issue 1](#upstream-issues)). | `qelNorm` +15 / −10 %, `mecNorm` ±25 %; none for the others |
 | `pion_axial_mass`, `pion_C5A` | **Rejected.** Under the hybrid RES model `rewRES` returns NaN for every RES event ([upstream issue 2](#upstream-issues)). Generation does not depend on them either. | — |
-| bba07, zexp, 2comp/3comp, `qel_cc_vector_mass`, `SPPBkgScale`, `dynNorm*` | Rejected ([upstream issues 3–4](#upstream-issues)). | — |
+| bba07, zexp, 2comp/3comp, `qel_cc_vector_mass`, `SPPBkgScale` | Rejected ([upstream issues 3–4](#upstream-issues)). | — |
+| `dynNorm*` | Rejected: the named channel norms above replace them. | — |
 
 **Choosing `sigma`.** The last column is NuWro's own uncertainty, the
 `errPlus`/`errMinus` pair in `src/rew/rewparams.h`. NuWro applies them as
 fractions of the run's value. Since a linear `sigma` here is absolute, a
 fractional default becomes either `log: true` with that fraction as `sigma`, or a
 linear `sigma` equal to the fraction times the central value: ±20 % on
-`qel_cc_axial_mass = 1200` MeV is a linear `sigma` of 240. Caveats:
+`qel_cc_axial_mass = 1200` MeV (under a dipole set) is a linear `sigma` of 240. Caveats:
 
 - **MINERvA and deuterium band scales.** Their table entry is meaningless as a
   fraction (their central is 0). The 1σ that applies is the band's own ±1, hence
@@ -314,10 +330,8 @@ generator wrapper that must `cd`.
 task's work directory. NuWro writes one `events.root.<dyn>.part` per dynamics
 channel (`dyn` 0–10) and merges them into `events.root`, and `normalize_output`
 takes an existing `events.root` as is. A run that ends early rewrites only the
-channels it reached: in `keystone_prod_v3_rejection` task 2475 (nuebar C12),
-NuWro stopped at 59.5 % of DISnc (`dyn` 5) with an empty `events.root` of 6 KB,
-while `events.root.{6,7,8,10}.part` still held channels of two overlapping
-earlier attempts. `build_run_command` and `run_stub` therefore remove
+channels it reached, so parts of an earlier attempt can sit beside an empty
+`events.root` ([Validation](#leftover-parts-on-retry)). `build_run_command` and `run_stub` therefore remove
 `events.root` and `events.root.*.part` and log a warning for each (GENIE and
 NEUT do the same for their event files). Whether NuWro's merge would pick up
 such leftover parts was not checked.
@@ -328,8 +342,9 @@ Like every adapter, `build_run_command` runs a binary found on `$PATH` before co
 to its `params.txt` overrides, and `CONFIG_VERSION_NUCLEI` to the nuclei it can
 predict (absent: every nucleus). The translator's `validate_target` checks the
 nucleus during config validation, and `translate` checks it again. A new
-parameter set is an entry in both tables plus a `config_versions` entry on
-`NuWroAdapter`; a retired one moves to `legacy_config_versions` with its
+parameter set is an entry in `CONFIG_VERSION_PARAMS`, one in
+`CONFIG_VERSION_NUCLEI` if it predicts only some nuclei, and a `config_versions`
+entry on `NuWroAdapter`; a retired one moves to `legacy_config_versions` with its
 reason.
 
 ### Flux
@@ -447,8 +462,11 @@ call; the norms are applied in Python from the event flags.
 `setup/apptainer/nuwro.def` mirrors `setup/Dockerfile.nuwro` (see
 [../containers.md](../containers.md)). Non-obvious points:
 
-- **Pythia6 is required** and built by the shared `setup/lib/build_pythia6.sh`
-  (GENIE needs it too).
+- **Pythia6 is required** and built as for GENIE
+  ([genie.md](genie.md#container-build)): GENIE's upstream `build_pythia6.sh`
+  with the Fortran source pre-staged. The NuWro build takes the script from a
+  shallow clone of `GENIE-MC/Generator`'s default branch rather than by URL at a
+  fixed tag.
 - ROOT 6.26+ dropped `TPythia6`/`libEGPythia6`, so the build adds the standalone
   **ROOTEGPythia6** package with `BUILTIN=ON`.
 - **That build must not happen under `/tmp`.** The build path is baked into the
@@ -489,8 +507,9 @@ and NuWro reads the bins as given, with no reinterpretation in between.
 
 ### `w_true_gev` from the outgoing hadrons (2026-09)
 
-`w_true_gev` used to be computed from `e/in` like every other generator's, and
-2.8% of `res` fell above `res_dis_cut`. Two alternatives were ruled out: taking
+Computed from `e/in` like every other generator's, `w_true_gev` puts 2.8% of
+`res` above `res_dis_cut` ([Validation](#w_true_gev-reproduces-res_dis_cut)),
+because NuWro subtracts a binding energy at the vertex. Two alternatives were ruled out: taking
 NuWro's W directly (`event::W()` is a method, not a stored branch), and
 subtracting the binding energy ourselves (it would mean reimplementing NuWro's
 density profile). Dated entry:
@@ -535,7 +554,7 @@ fresh 100k-event run agrees (1.89994 / 1.90005).
 
 `e/out`'s outgoing nucleon has invariant mass 0.9383 at the 1st, 50th and 99th
 percentiles. A reconstruction from `e/in` puts 83% of QE events within 30 MeV of
-`m_p`. Over 6576 QE events the stored vertex has a median energy deficit of
+`m_p`. Over the 6576 QE events without an SRC partner, the stored vertex has a median energy deficit of
 5.9 MeV and median missing three-momentum of 18 MeV. 1642 of 8218 QE events carry
 an SRC partner, exactly those with `flag.isCorrelated`; that flag is set on 13424
 of all 20k events.
@@ -582,6 +601,13 @@ Fe56 chunk of 333k). NuWro's own summary (`events.root.txt`) lists σ = 0 for
 maps (Z, N) to C12, O16, Ar40 or Fe56 and returns 0 for any other target.
 NuWro's own test presets (`src/simulations.h`) run every nucleus with
 `sf_method = 0`.
+
+### Leftover parts on retry
+
+In `keystone_prod_v3_rejection` task 2475 (nuebar C12), NuWro stopped at 59.5 %
+of DISnc (`dyn` 5) with an empty `events.root` of 6 KB, while
+`events.root.{6,7,8,10}.part` still held channels of two overlapping earlier
+attempts.
 
 ## Upstream issues
 

@@ -53,6 +53,8 @@ def run_config(jobs: list[dict[str, Any]] | None = None, **overrides: Any) -> di
     """A resolved run configuration with at least one job."""
     payload: dict[str, Any] = {"jobs": jobs if jobs is not None else [job()]}
     payload.update(overrides)
+    # Tests run without generator installs, so synthetic events unless a test says otherwise.
+    payload["run"] = {"stub_mode": True, **payload.get("run", {})}
     return resolve_config(payload)
 
 

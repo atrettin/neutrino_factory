@@ -5,6 +5,17 @@ MPCDF/ODSL cluster. The cluster has **no Docker**, **no module system**, and a
 system Python (3.9) too old for a native install — everything Python runs
 inside Apptainer containers.
 
+**Contents**
+
+- [Execution model](#execution-model)
+- [Filesystems](#filesystems)
+- [Slurm: the NEW MPP cluster requires `--partition=alma`](#slurm-the-new-mpp-cluster-requires---partitionalma)
+- [First-time setup](#first-time-setup)
+- [Submitting a run](#submitting-a-run)
+- [Diagnosing and retrying failed tasks](#diagnosing-and-retrying-failed-tasks)
+- [First submission on a new cluster](#first-submission-on-a-new-cluster)
+- [Troubleshooting](#troubleshooting)
+
 ## Execution model
 
 - **Build on odslserv01/02** (interactive nodes) — unprivileged `apptainer
@@ -64,9 +75,9 @@ GiBUU chunk of ~1.3M stored events. Cap how many run at once with
 `slurm.array_limit` (see
 [configuration.md](configuration.md#slurm-manifest-schema-v4)), e.g. 500
 rejection tasks hold at most ~1.5 TB. Every task also leaves two Slurm logs, a
-chunk and its sidecar: ~5 files. Chunks written before 2026-10 are uncompressed
-(~250 B per event); re-merging them through the current code writes a
-compressed copy.
+chunk and its sidecar: ~5 files. Chunks and merged files are gzip-compressed;
+`merge` writes through the same compressed writer whatever its input, so merging
+an uncompressed chunk (~250 B per event) produces a compressed file.
 
 `merge` streams: it holds one chunk in memory at a time (0.8 GB peak for a
 9M-event GiBUU job of 0.9M-event chunks), so its memory does not grow with the
@@ -168,12 +179,17 @@ The macro is baked into the NEUT payload. To update it, rebuild the payload and
 recompose `nf-base.sif` from a host shell:
 
 ```bash
-bash setup/build_apptainer_images.sh --only neut --force
+bash setup/build_apptainer_images.sh --only neut --code-version 5.7.0-nuint2024 --force
 ```
+
+`--code-version` selects one payload. Without it the script rebuilds every
+catalogued NEUT version, and the source-built ones abort the build when their
+restricted tarball is not staged
+([generators/neut.md](generators/neut.md#container-build)).
 
 `nf-dev.sif` is built on `nf-base.sif` and keeps the old macro until it is
 rebuilt with `--dev-tools --force`; adding `--dev-tools` to the command above
-rebuilds all three.
+rebuilds the payload, `nf-base.sif` and `nf-dev.sif`.
 
 ## First-time setup
 
@@ -190,8 +206,8 @@ bash setup/build_apptainer_images.sh [--dev-tools]
 
 # 3. Stage GENIE cross-section splines and check the catalog in nf-base.sif
 bash setup/download_genie_xsec.sh
-apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" env PYTHONPATH="$PWD/src" \
-  python3 -m neutrino_factory.cli list-generators --built
+apptainer exec "$NF_IMAGE_ROOT/nf-base.sif" env NF_CONTAINER_RUNTIME=apptainer \
+  PYTHONPATH="$PWD/src" python3 -m neutrino_factory.cli list-generators --built
 
 # 4. For regular production runs, create and enter the base environment
 cenv --create nf-env "$NF_IMAGE_ROOT/nf-base.sif"
@@ -216,9 +232,16 @@ neutrino-factory setup --pathway apptainer --no-build
 #       Your shell will automatically be inside the nf-dev container.
 ```
 
-If you later change `NF_IMAGE_ROOT` (via `.env` or the wizard), rerun
-`bash setup/build_apptainer_images.sh --bootstrap` — it re-creates nf-base at
-the new location quickly.
+`NF_CONTAINER_RUNTIME=apptainer` is set explicitly in step 3 because `.env`
+does not exist until step 5, and the default, `auto`, resolves to no runtime
+inside the container (it has no `apptainer` binary), so every image would show
+as not built.
+
+The image paths derive from `NF_IMAGE_ROOT`. If it changes (via `.env` or the
+wizard), move the SIFs to the new directory, or rerun
+`bash setup/build_apptainer_images.sh`, which builds the payloads missing there
+and recomposes `nf-base.sif`. `--bootstrap` alone is not enough: it writes the
+payload-less bootstrap image as `nf-base.sif`, so every generator task fails.
 
 ## Submitting a run
 
@@ -243,9 +266,9 @@ squeue --me
 neutrino-factory check-status --config configs/examples/power_law_numu_Ar.yaml
 ```
 
-Per-generator merged HDF5 files appear under `$NF_OUTPUT_ROOT/merged/`. Chunk
-merging currently happens in the local pipeline; after a Slurm run, merge
-chunks explicitly with `neutrino-factory merge` if needed.
+Merged HDF5 files, one per job, appear under `$NF_OUTPUT_ROOT/merged/`. The
+local executor merges at the end of its run; a Slurm run does not, so merge
+after it with `neutrino-factory merge --config <config>`.
 
 `merge --config` writes one merged file per job, under a `.partial` name that is
 renamed into place only when the file is complete, so a merge that is killed
@@ -280,7 +303,7 @@ waiting in the queue puts every queued task in it as `no_output`:
 
 | mode | meaning | evidence |
 |---|---|---|
-| `crash` | the generator or normalization raised | sidecar `failed`; reason = last Python exception in stderr (a traceback's last line, or the CLI's own `Error: ...` line) plus the last error-like line of generator stdout: one containing a word such as `error`, `abort` or `fatal` (also inside `FATAL_ERROR`, but not `errors`), or a crash marker such as `SIGSEGV`, `*** Break ***`, `terminate called after throwing`, `Killed`, `Assertion ... failed`, `buffer overflow detected` or `core dumped`. A line containing `WARNING`, such as NEUT's `*** WARNING *** KINEMATICAL ERROR AT NECOHVCT`, gives way to a non-warning error line at most 30 lines before it |
+| `crash` | the generator or normalization raised, or the task died before reaching Python | sidecar `failed`, or a log but no sidecar and no activity for `--hung-after` hours; reason = last Python exception in stderr (a traceback's last line, or the CLI's own `Error: ...` line) plus the last error-like line of generator stdout: one containing a word such as `error`, `abort` or `fatal` (also inside `FATAL_ERROR`, but not `errors`), or a crash marker such as `SIGSEGV`, `*** Break ***`, `terminate called after throwing`, `Killed`, `Assertion ... failed`, `buffer overflow detected` or `core dumped`. A line containing `WARNING`, such as NEUT's `*** WARNING *** KINEMATICAL ERROR AT NECOHVCT`, gives way to a non-warning error line at most 30 lines before it |
 | `oom` | killed for exceeding `slurm.mem` | Slurm's `oom_kill event` line in stderr |
 | `timeout` | killed at the Slurm time limit | Slurm's `CANCELLED ... DUE TO TIME LIMIT` line, or still `running` past the limit |
 | `cancelled` | `scancel`led | Slurm's `CANCELLED AT ...` line with no `DUE TO`, or another reason such as `PREEMPTION` |
@@ -312,7 +335,7 @@ modes). Running and hung tasks are never retried: they still hold their Slurm
 slot and write to the chunk's paths.
 
 Each `retry` writes its own script, `<run>_retry_<modes>_<timestamp>.sbatch`
-under `$NF_WORK_ROOT/<run>/slurm/`, so a later retry never overwrites an earlier
+under `$NF_WORK_ROOT/slurm/` (`<storage.work_root>/slurm/`), so a later retry never overwrites an earlier
 one before it is submitted. The script's path is printed (and, when `sbatch` is
 not available, is the one to submit from the host shell). `retry` also records
 the tasks of every script it renders or submits in
@@ -379,7 +402,8 @@ neutrino-factory validate-config --config <config>
 neutrino-factory submit --config <config> --executor slurm --dry-run
 ```
 
-Inspect what lands under `work/manifests/`, `work/slurm/` and `work/logs/`. The
+Inspect what lands under `$NF_WORK_ROOT/manifests/`, `$NF_WORK_ROOT/slurm/` and
+`$NF_WORK_ROOT/logs/`. The
 manifest schema is documented in [configuration.md](configuration.md); check that
 the rendered sbatch script enters `nf-base.sif` before Python, and that the
 partition is right (on the new MPP cluster, `alma` — see above).
@@ -387,12 +411,11 @@ partition is right (on the new MPP cluster, `alma` — see above).
 **4. Submit, then monitor.**
 
 ```bash
-sbatch work/slurm/<run_name>.sbatch
+sbatch "$NF_WORK_ROOT/slurm/<run_name>.sbatch"
 squeue --me
 sacct -j <jobid> --format=JobID,State,Elapsed,MaxRSS
 ```
 
-`jobs/submit_mpp.sh <config> --submit` wraps the render-and-submit pair.
 
 **5. Confirm the outputs**: logs under `$NF_WORK_ROOT/logs/`, normalized chunk
 outputs under `$NF_OUTPUT_ROOT/chunks/`, merged HDF5 under
@@ -408,12 +431,23 @@ scaling to a multi-generator production run.
 - `apptainer build` fails → are you on odslserv01/02? Builds fail on mppui1.
 - "binary not on $PATH and runtime is not docker" from a task → the task was
   launched outside the unified runtime image; use the rendered sbatch script.
-- `nf-base.sif` missing → run
-  `bash setup/build_apptainer_images.sh --bootstrap` on an odslserv node.
+- `nf-base.sif` missing → run `bash setup/build_apptainer_images.sh
+  --compose-only` on an odslserv node; it recomposes `nf-base.sif` from the
+  payload SIFs already in `NF_IMAGE_ROOT`.
+- Composing `nf-base.sif` fails with `unpackSIF failed … Too many open files`
+  → Apptainer's parallel `unsquashfs` (128 threads on odslserv) ran past the
+  shell's soft open-file limit; seen on 2026-11-23 while extracting the 7th
+  payload. `build_apptainer_images.sh` raises the soft limit to the hard limit
+  before composing and logs the result; if it still fails, check
+  `ulimit -Hn`.
+- A NEUT payload's `%test` prints `cling::CIFactory::createCI(): cannot extract
+  standard library include paths` and `'new' file not found` → harmless: the
+  payload's final stage has no `g++`, so `root --version` cannot find C++
+  headers, but it prints the version and exits 0. The flattener runs in
+  `nf-base.sif`, which installs `g++`.
 - `neutrino-factory: command not found` in cenv → run one-time `pip install -e .`
   from the repo root inside that cenv session.
-- GENIE MEC (2p2h) segfault on the first MEC event → the SIF was built from a
-  def that lacked `-Dminuit2=ON` in the ROOT build (root cause diagnosed
-  2026-07-15: GENIE null-derefs the Minuit2 minimizer it requests from
-  ROOT::Math::Factory). Rebuild `genie_R-3_06_00.sif` from the current
-  `setup/apptainer/genie.def` (see STUBS.md).
+- GENIE MEC (2p2h) segfault on the first MEC event → the SIF's ROOT lacks
+  Minuit2: GENIE null-derefs the Minuit2 minimizer it requests from
+  `ROOT::Math::Factory`. `setup/apptainer/genie.def` builds ROOT with
+  `-Dminuit2=ON`; rebuild the GENIE payload from it.

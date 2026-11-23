@@ -21,7 +21,7 @@ FLUX_NBINS = 500
 # (Apps/gEvGen.cxx, TH1FluxDriver, the `else` branch), so the generated spectrum
 # is both coarse and Poisson-noisy at high energy. Handing gevgen a ROOT file
 # instead takes the branch that clones our histogram verbatim. Log spacing gives
-# constant relative resolution (~0.27%/bin over 0.1-50 GeV at 1000 bins), which
+# constant relative resolution (~0.62% bin width over 0.1-50 GeV at 1000 bins), which
 # a uniform binning cannot deliver for a steeply falling spectrum.
 GENIE_FLUX_NBINS = 1000
 GENIE_FLUX_SPACING = "log"

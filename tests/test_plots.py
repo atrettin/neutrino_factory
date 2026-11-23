@@ -131,7 +131,7 @@ class MakeConfigPlotsTests(unittest.TestCase):
     def _config(self, root: Path, jobs: list[dict] | None = None) -> dict:
         return resolve_config(
             {
-                "run": {"name": "unit_run", "seed": 1},
+                "run": {"name": "unit_run", "seed": 1, "stub_mode": True},
                 "jobs": jobs
                 if jobs is not None
                 else [

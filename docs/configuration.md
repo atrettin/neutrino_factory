@@ -6,9 +6,28 @@ execution paths. This document is the schema; see
 [design_decisions.md](design_decisions.md) for the rationale behind specific
 choices.
 
+**Contents**
+
+- [Top-level sections](#top-level-sections)
+- [Jobs](#jobs)
+- [Macros and matrix expansion](#macros-and-matrix-expansion)
+- [Job labels and output layout](#job-labels-and-output-layout)
+- [Target PDG](#target-pdg)
+- [Seeds](#seeds)
+- [Generator sections](#generator-sections)
+- [Reweight universes and variations](#reweight-universes-and-variations)
+- [GiBUU QE oversampling: `gibuu.qes_oversampling`](#gibuu-qe-oversampling-gibuuqes_oversampling)
+- [Weak current: `physics.current`](#weak-current-physicscurrent)
+- [Generator log verbosity: `run.log_level`](#generator-log-verbosity-runlog_level)
+- [Environment: `.env` and precedence](#environment-env-and-precedence)
+- [Raw generator output: `storage.keep_raw`](#raw-generator-output-storagekeep_raw)
+- [Slurm manifest schema (v4)](#slurm-manifest-schema-v4)
+- [Example](#example)
+- [Stub mode: `run.stub_mode`](#stub-mode-runstub_mode)
+
 ## Top-level sections
 
-- `run`: run name, seed, executor mode, stub-mode toggle, and default generator log verbosity
+- `run`: run name, seed, executor mode, stub mode (default `false`, [below](#stub-mode-runstub_mode)), and default generator log verbosity
 - `macros` (optional): reusable parameterized job templates
 - `jobs`: the run itself — one entry per generator version x initial state
 - `storage`: roots for software, outputs, working files, and container images
@@ -41,7 +60,7 @@ possible. The generators do not agree on what a run is: GiBUU samples phase
 space and weights events by cross section rather than rejection-sampling them,
 so it needs a flatter spectrum (`gamma = -1`, flat in ln E) and an order of
 magnitude more events than GENIE, NuWro or NEUT to reach the same statistical
-uncertainty. Under a single global `flux` and `events` those runs had to live in
+uncertainty. A single global `flux` and `events` would force such runs into
 separate files and separate submissions.
 
 ## Macros and matrix expansion
@@ -112,6 +131,7 @@ its parameters are whatever `matrix`/`with` supply. For example:
 jobs:
   - generator: "{{generator}}"
     code_version: "{{code_version}}"
+    config_version: "{{config_version}}"
     events: 10000
     chunks: 1
     flux:
@@ -128,8 +148,8 @@ jobs:
     matrix:
       nucleus: [C12, O16]
       include:
-        - {generator: genie, code_version: "R-3_06_00"}
-        - {generator: nuwro, code_version: "nuwro_25.11"}
+        - {generator: genie, code_version: "R-3_06_00", config_version: "G18_10a_02_11a"}
+        - {generator: nuwro, code_version: "nuwro_25.11", config_version: "sf"}
 ```
 
 This produces four jobs: genie on C12, genie on O16, nuwro on C12, nuwro on O16.
@@ -143,7 +163,9 @@ Each job gets a label, used in every path it produces:
 ```
 
 tokenized so it is filesystem-safe (`+` and other non-`[A-Za-z0-9._-]`
-characters become `_`), or the job's explicit `name:` verbatim. So:
+characters become `_`), or the job's explicit `name:`, tokenized the same way.
+The version identifier `<code_version>+<config_version>` is the same for every
+generator. So:
 
 ```
 work/raw/<label>/<run>_<label>_chunkNNN/
@@ -156,14 +178,14 @@ its neighbours. Labels end up in filenames of physics samples, and adding an
 unrelated job to a configuration must not silently rename another job's outputs.
 Two jobs whose labels collide are therefore a hard error naming both entries;
 give one of them an explicit `name:` (a macro can template it, e.g.
-`name: "{{particle}}_{{nucleus}}_{{emin}}to{{emax}}"`).
+`name: "{{particle}}_{{nucleus}}_{{emin}}to{{emax}}"`). Explicit names collide
+too if they differ only in characters that tokenization maps to `_`.
 
 ## Target PDG
 
 `target.pdg` is derived from `target.nucleus` using the standard `10LZZZAAAI`
-nuclear code (`C12` -> `1000060120`), so a hand-written PDG can no longer
-disagree with the nucleus it claims to describe. An explicit `pdg:` still
-overrides and logs a warning when the two disagree. Nucleus names are parsed as
+nuclear code (`C12` -> `1000060120`), so it always agrees with the nucleus.
+An explicit `pdg:` overrides and logs a warning when the two disagree. Nucleus names are parsed as
 an element symbol plus mass number (`C12`, `Ar40`, `Fe56`, `Xe136`); an
 unparsable or impossible name fails at configuration time rather than inside a
 running Slurm task. The generators' (Z, N) composition is derived the same way,
@@ -177,7 +199,12 @@ generators need. Hashing rather than offset arithmetic (`run.seed +
 generator_index * 1000 + chunk`) means a seed depends only on the run seed and
 the chunk's own identity, so inserting or removing a job never shifts another
 job's random stream, and there is no chunk count at which the layout collides.
-`build_task_manifest` still asserts that all seeds in a manifest are distinct.
+`build_task_manifest` also asserts that all seeds in a manifest are distinct.
+
+`retry --new-seed` re-runs a chunk with a fresh seed: it appends
+`|attempt<n>` to the hashed key, where `n` is the task's `seed_attempt`
+(incremented on each reseed), and keeps the first seed as `original_seed` in the
+manifest ([manifest schema](#slurm-manifest-schema-v4)).
 
 ## Generator sections
 
@@ -210,7 +237,7 @@ optionally `events/variation_weights` with a `variations` entry (see
 nuwro:
   universes:
     seed: 20261005        # required; universe k is identical in every job using it
-    count: 100
+    count: 100            # required; number of universes
     parameters:
       qel_minerva_ff_scale: {sigma: 1.0}
       mecNorm: {sigma: 0.25, log: true, source: "<citation>"}
@@ -267,7 +294,10 @@ genie:
   refuses dial combinations that select incompatible engine modes (`MaCCQE`
   with `NormCCQE`; `MaCCRES`/`MvCCRES` with `NormCCRES`), and all four hA2018
   fates of one hadron type at once.
-- **GENIE dials are checked against the job's tune.** Validation refuses a dial
+- **GENIE dials are checked against the job's tune.** Universes and variations
+  are refused for a tune whose model configuration (the first two `_`-separated
+  fields of its name, e.g. `G18_10a`) is not in the reweighting model table in
+  `universes.py`. Validation refuses a dial
   that cannot work under the tune's models, for example an FSI dial under hN2018
   or `MaCCQE` under a z-expansion form factor. It also refuses universes on a
   code version without `nf_genie_reweight`. A dial whose model differs from the
@@ -289,8 +319,8 @@ gibuu:
 Runs that many extra quasi-elastic-only GiBUU passes per weak current, inside
 each task, and averages their QE events with the full pass's, so `xsec_weight`
 still sums to the same cross section. QE dominates the statistical error of
-GiBUU's cross section below a few GeV; K = 10 cuts it there ~3×. Each chunk file
-grows by ~7% of its events per unit of K. Details, cost and the evidence:
+GiBUU's cross section below a few GeV, which is what the extra passes reduce.
+The gain, the cost in run time and file size, and the evidence are in
 [generators/gibuu.md](generators/gibuu.md#qe-oversampling).
 
 ## Weak current: `physics.current`
@@ -349,18 +379,18 @@ their own output reaches stdout (and hence `work/logs/*.out` under Slurm):
 | `essential` | The initial job configuration, the output-file writes, and warnings/errors. |
 | `quiet` | The initial job configuration plus warnings/errors only — constant-size output. |
 
-Measured on a 5-event GENIE run (`configs/smoke/genie_c12.yaml`): 32928 lines at
-`default`, 270 at `essential`.
+Measured on a 5-event GENIE C12 run: 32928 lines at `default`, 270 at
+`essential`.
 
 **Picking between `essential` and `quiet`:** GENIE emits the output-file writes
 and a one-line-per-event `Adding event N to output tree` on the *same* stream at
 the same priority, so `essential` keeps one short line per generated event —
-still ~200x less than `default`, but it grows with the event count. For large
+still far less than `default`, but it grows with the event count. For large
 production arrays where even that is too much, use `quiet`, whose output size
 does not depend on the event count.
 
-The names are generator-agnostic, but **only the GENIE adapter acts on them so
-far**; NuWro, NEUT and GiBUU currently ignore the setting.
+The names are generator-agnostic, but **only the GENIE adapter acts on them**;
+NuWro, NEUT and GiBUU ignore the setting.
 
 For GENIE the level is mapped onto `gevgen`/`gntpc`'s `--message-thresholds`
 option, using the messenger presets shipped inside the GENIE image
@@ -379,13 +409,19 @@ rays that did not interact, and the per-event GHEP record dumps — is silenced.
 
 `neutrino-factory setup` writes the storage roots and the container runtime
 choice (`NF_CONTAINER_RUNTIME=docker|apptainer|auto`) to a `.env` file at the
-repo root. Every CLI invocation, setup script, rendered sbatch script, and
-task launcher loads this file automatically with **setdefault semantics**, giving
-the precedence order:
+repo root. Every CLI invocation, setup script and task launcher
+(`jobs/run_task.sh`) loads this file automatically with **setdefault
+semantics**, giving the precedence order:
 
 1. real environment variables (always win),
 2. `.env` values,
 3. built-in defaults (`./software`, `./output`, `./work`, `./software/images`).
+
+Rendered sbatch scripts are the exception: they `source` `.env` with `set -a`,
+so inside a Slurm task the `.env` values override variables exported in the
+submitting shell. The `.env` on the cluster holds the cluster's paths, and a
+Slurm task should run with those rather than whatever the submitting shell
+happened to export.
 
 The `storage` config values reference the same variables via `${VAR:-default}`
 expansion, so one `.env` drives the YAML config, the shell scripts, and the
@@ -447,6 +483,7 @@ Task keys:
 - `seed`
 - `run_name`
 - `flux`
+- `seed_attempt`, `original_seed` — only on tasks reseeded by `retry --new-seed`
 
 One task is produced per (job, chunk). Jobs are heterogeneous, so the total task
 count is the **sum** over jobs of each job's own chunk count, never a product.
@@ -457,7 +494,7 @@ configuration was edited is detected and reported instead of silently running
 the wrong job.
 
 **One array, one set of resources.** `slurm.time`, `mem` and `cpus_per_task`
-apply to the whole array, but jobs are now heterogeneous — a 200k-event GENIE job
+apply to the whole array, but jobs are heterogeneous — a 200k-event GENIE job
 and a 2M-event GiBUU job share one wall clock. Size them for the longest and
 largest job, not the average.
 
@@ -490,24 +527,27 @@ jobs:
 
 If `genie/genie_xsec/<tag-safe>/<config_version>/xsecs.xml` exists under
 `storage.software_root`, GENIE execution adds `--cross-sections` automatically
-(staged from FNAL's `gxspl-NUsmall.xml` by `setup/download_genie_xsec.sh`).
-Computing splines on the fly is expensive, and flux-driven runs require them, so
-staging these files is strongly recommended. `neutrino-factory list-generators`
-only lists a GENIE tune as available once its `xsecs.xml` is present on disk.
+(staged by `setup/download_genie_xsec.sh` from FNAL's `gxspl-NUsmall.xml`, or
+`gxspl-FNALsmall.xml` for GENIE 2). With `stub_mode: false` the spline is
+mandatory: validation refuses a tune whose `xsecs.xml` is not staged.
+`neutrino-factory list-generators` only lists a GENIE tune as available once its
+`xsecs.xml` is present on disk.
 
-Each job computes a generator-specific version identifier. For GENIE this is
-`<code_version>+<config_version>`. It forms part of the job label, so multiple
-versions of one generator can run in the same campaign without their outputs
-colliding.
+## Stub mode: `run.stub_mode`
 
-## Stub-mode recommendation
-
-For development on a machine without generator images:
+`run.stub_mode` defaults to `false`. A task in stub mode does not run the
+generator: the adapter writes synthetic events drawn from the job's flux, which
+exercises translation, normalization, merging and Slurm rendering on a machine
+without generator images. Stub mode is opt-in:
 
 ```yaml
 run:
-  executor: local
   stub_mode: true
 ```
 
-This keeps the pipeline fully testable while the real generator commands and cluster deployment are being refined.
+With `stub_mode: false`, a task whose generator is not available (no binary on
+`PATH` and no built image for the code version) fails with an error naming the
+generator and code version (`local.run_task`); it never falls back to synthetic
+events. Validation catches a missing generator up front only for GENIE, whose
+staged spline it requires; for the other generators the task fails when it
+starts, so check `neutrino-factory list-generators --built` before submitting.

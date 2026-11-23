@@ -242,7 +242,7 @@ class FormatReportTests(unittest.TestCase):
 class AnalyzeConfigTests(unittest.TestCase):
     def _config(self, output_root: Path) -> dict:
         return resolve_config({
-            "run": {"name": "unit_run", "seed": 1},
+            "run": {"name": "unit_run", "seed": 1, "stub_mode": True},
             "jobs": [{
                 "generator": "genie",
                 "code_version": "R-3_06_00",
