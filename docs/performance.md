@@ -6,6 +6,16 @@ single-point measurement on one machine (facts below); treat the absolute
 numbers as machine-specific and use them for relative comparisons and for
 sizing Slurm time limits, not as portable constants.
 
+**Contents**
+
+- [Scope of this measurement](#scope-of-this-measurement)
+- [Machine](#machine)
+- [Generators and tunes benchmarked](#generators-and-tunes-benchmarked)
+- [Method](#method)
+- [Results](#results)
+- [Findings](#findings)
+- [Caveats](#caveats)
+
 ## Scope of this measurement
 
 - Probe: **μ neutrino (PDG 14)** only; target: **Fe56** (PDG 1000260560) only.
@@ -16,12 +26,12 @@ sizing Slurm time limits, not as portable constants.
 - `physics.mode: inclusive`, `current: cc` (single generation pass for every
   generator — GiBUU's `inclusive` two-pass mode is not exercised).
 - One chunk per job, so each measured run is one generator invocation.
-- GiBUU ran with `numTimeSteps = 0`, i.e. **without FSI transport**, the jobcard
-  setting at the time. The jobcards now transport for 150 steps (see
-  [generators/gibuu.md](generators/gibuu.md#fsi-transport)),
-  so the GiBUU numbers below are a lower bound. Transport cost about 4× the wall
-  clock in one Ar40 comparison on a different machine (65.6 s against 15.9 s,
-  same seed, Apple Silicon under Docker); this table has not been re-measured.
+- GiBUU ran with `numTimeSteps = 0`, i.e. **without FSI transport**. The
+  framework's jobcards transport for 150 steps (see
+  [generators/gibuu.md](generators/gibuu.md#fsi-transport)), so the GiBUU
+  numbers below are a lower bound. Transport cost about 4× the wall clock in one
+  Ar40 comparison on a different machine (65.6 s against 15.9 s, same seed,
+  Apple Silicon under Docker).
 - Executed 2026-09-08 (UTC) on the machine described below.
 
 ## Machine
@@ -159,7 +169,8 @@ timestamps of the 1k runs, identical across all seven runnable tunes):
   a per-run fixed cost and the slope is a per-event (per-tune) rate.
 - **GENIE's fixed cost is dominated by the spline load (~23 s)**, which is paid
   once per chunk. Small runs (≲ 10k events) are mostly fixed cost: a 1k-event
-  GENIE job takes ~30–50 s regardless of tune family.
+  GENIE job takes ~30–40 s for every tune except the G18_10a_02_11a/11b pair,
+  whose per-event cost already dominates at 1k (~145 s).
 - **The per-event rate is tune-dependent by a factor of ~27** on Fe56 CC:
   2.8 ms/event for G18_01a/G18_02a, ~4.4 for G21_11a, ~7.7 for
   AR23_20i/N24_20i, and ~75 for the G18_10a_02_11a/11b pair.
@@ -170,10 +181,12 @@ timestamps of the 1k runs, identical across all seven runnable tunes):
   RES/COH; **G18_10[a-d] additionally replace the QEL and multinucleon models
   with the Valencia (Nieves) models on a local Fermi gas with tabulated
   hadron tensors** (Tena Vidal 2021, arXiv:2104.09179, §4.2.1–4.2.3). The
-  The R-3_06_00 runtime confirms the heavier machinery is active: the two
+  R-3_06_00 runtime confirms the heavier machinery is active: the two
   G18_10a_02_11x runs load four 120×120 Nieves hadron-tensor tables for Fe56
   (`TabulatedHadronTensorModelI`, `HadTensor120-Nieves-1000280560-*.dat`)
-  that none of the other five runnable tunes loads.
+  that none of the other five runnable tunes loads. **Unverified:** the code
+  `1000280560` in that file name is Ni56 (Z = 28), not Fe56 (Z = 26), and the
+  name has not been rechecked against a run.
   Measured at 10k events, the interaction mix is comparable across all seven
   runnable tunes (~29–33 % each of qel/res/dis, 7–11 % mec), so the rate gap
   is per-event model cost.

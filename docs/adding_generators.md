@@ -1,6 +1,6 @@
 # Adding a new generator
 
-To add a new backend, keep changes isolated to four places:
+To add a new backend, the Python and setup changes are isolated to four places:
 
 1. add a setup script under `setup/`
 2. add a translator under `src/neutrino_factory/translators/`
@@ -22,6 +22,11 @@ To add a new backend, keep changes isolated to four places:
   `config["job"][<name>]`. Physics settings belong in a `config_version` instead
   ([configuration.md](configuration.md#generator-sections))
 - register the adapter in `src/neutrino_factory/generators/registry.py`
+- declare the catalogued versions in the adapter's `CODE_VERSIONS`
+  ([generator_versioning.md](generator_versioning.md))
+- write the Apptainer payload `setup/apptainer/<name>.def`
+  ([below](#apptainer-payload-cluster-runtime))
+- write `docs/generators/<name>.md` ([below](#documenting-the-generator))
 - add a config example or defaults if needed
 - add at least one local smoke test
 
@@ -82,8 +87,8 @@ existing payloads' contract:
 1. **Version-namespaced, self-contained staging.** Stage everything the generator
    needs at run time (binaries, ROOT, data) under one tree:
    `/opt/nf/generators/<name>/<code_version>/…`. Do not depend on files outside
-   that tree except the fixed base runtime libs installed by `nf-base.def`
-   (`libgfortran5 libgomp1 libfreetype6 g++ libpcre3`); bundle anything else.
+   that tree except the base runtime libraries `nf-base.def` installs (its
+   `apt-get install` list); bundle anything else.
 2. **Ship a wrapper per binary** at
    `/opt/nf/generators/<name>/<code_version>/bin/<binary>`. It is the single
    source of truth for that generator's `PATH`/`LD_LIBRARY_PATH`/launch logic.
@@ -118,7 +123,8 @@ names resolve to the default (highest, sorted-last) version.
 
 NEUT is the one backend whose source is not publicly available, so its 5.7.0
 payload is *extracted from a published container image* rather than built (its
-5.4.2 is built from an access-restricted tarball on top of the same image; see
+5.4.2 and 6.2.4 are built from access-restricted tarballs on top of the same
+image; see
 [generators/neut.md](generators/neut.md#container-build)). If you add another
 generator in the first situation, follow `setup/apptainer/neut.def` and
 `setup/setup_neut.sh`:

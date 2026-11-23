@@ -5,7 +5,7 @@ Both versions build and pass their smoke tests under local Docker
 [generators/genie.md](generators/genie.md#genie-2128-against-r-3_06_00)). The
 Apptainer side — `setup/apptainer/neut.def`'s stage-1 source build,
 `setup/apptainer/genie.def`'s `R-2_*` branch, and the `CODE_VERSION` build arg
-`setup/build_apptainer_images.sh` now passes — has not been run. This is the
+`setup/build_apptainer_images.sh` passes — has not been run. This is the
 checklist for running it on odslserv01/02, following
 [mpp_cluster_usage.md](mpp_cluster_usage.md).
 
@@ -15,13 +15,13 @@ NEUT's source is access-restricted, and the cluster build cannot fetch it. Copy
 the tarball from a machine where `setup/setup_neut.sh 5.4.2` has downloaded it:
 
 ```bash
-# on the laptop
-scp setup/neut/src/neut-5.4.2.tar.gz <cluster>:/ptmp/mpp/$USER/neutrino_factory/setup/neut/src/
+# on the laptop; <user> is the cluster login
+scp setup/neut/src/neut-5.4.2.tar.gz <cluster>:/ptmp/mpp/<user>/neutrino_factory/repo/setup/neut/src/
 ```
 
 Expected: `ls -l setup/neut/src/neut-5.4.2.tar.gz` on the cluster shows ~19 MB.
-Without it, `neut.def` silently packages the image's own NEUT 5.7.0 under the
-`5.4.2` name; step 2's version check catches that.
+Without it, `neut.def` fails the build with `ERROR: … missing; NEUT 5.4.2 must
+be built from source`.
 
 ## 2. Build the payloads (bare host shell, repo root)
 
@@ -33,8 +33,6 @@ bash setup/build_apptainer_images.sh --only genie --code-version R-2_12_8 --acce
 Expected:
 - NEUT build log: `bash /nf_neut_host/build_neut.sh` runs configure and make
   (several minutes), then `%test` passes and `root --version` prints 6.30/04.
-  The log must **not** contain `No .../neut-5.4.2.tar.gz: using the image's own
-  NEUT build`.
 - GENIE build log: `***** The source tree corresponds to GENIE version 2.12.8`;
   the first `make -j` may fail at `bin/gevgen` (link before libraries) and the
   second pass completes. `%test` passes.

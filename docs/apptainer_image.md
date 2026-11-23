@@ -44,7 +44,7 @@ directly rather than falling through to a container-wrapping branch.
 
 Each `<gen>.def` mirrors its `setup/Dockerfile.<gen>` build steps, so the two are
 parallel implementations of one build and only stay correct while they agree (the
-`/opt/nf/generators/<cv>` staging + wrappers are Apptainer-composition-only
+`/opt/nf/generators/<gen>/<cv>` staging + wrappers are Apptainer-composition-only
 and have no Docker counterpart). Project code still comes from the repo
 checkout via `PYTHONPATH`, so code changes need no image rebuild.
 

@@ -8,6 +8,53 @@ what is true of the code today is described in the topic documents listed in
 Entries whose subject matter later moved into a topic document are kept here as
 dated pointers, so the chronology stays navigable.
 
+**Contents**
+
+- [Dual container pathways: Docker locally, Apptainer on the cluster (2026-07)](#dual-container-pathways-docker-locally-apptainer-on-the-cluster-2026-07)
+- [Unified Apptainer runtime image on the cluster](#unified-apptainer-runtime-image-on-the-cluster)
+- [Hand-written Apptainer definitions (no spython, no image transfer)](#hand-written-apptainer-definitions-no-spython-no-image-transfer)
+- [Discovery-based, version-namespaced Apptainer composition](#discovery-based-version-namespaced-apptainer-composition)
+- [GENIE flux: a histogram we write, divided out from the one GENIE saved (2026-07)](#genie-flux-a-histogram-we-write-divided-out-from-the-one-genie-saved-2026-07)
+- [GiBUU cross-section weight (`xsec_weight`) normalization](#gibuu-cross-section-weight-xsec_weight-normalization)
+- [GiBUU non-resonant background events are `dis`, and every channel is enabled (2026-07)](#gibuu-non-resonant-background-events-are-dis-and-every-channel-is-enabled-2026-07)
+- [NEUT 5.7.0: a payload extracted from a published image, not built from source](#neut-570-a-payload-extracted-from-a-published-image-not-built-from-source)
+- [NEUT output flattening (`nf_flatten.C`)](#neut-output-flattening-nf_flattenc)
+- [NEUT cross-section weight (`xsec_weight`) normalization](#neut-cross-section-weight-xsec_weight-normalization)
+- [NEUT flux: log bins of per-bin integrals, divided out on NEUT's own grid (2026-07)](#neut-flux-log-bins-of-per-bin-integrals-divided-out-on-neuts-own-grid-2026-07)
+- [NEUT paths are limited to 80 characters](#neut-paths-are-limited-to-80-characters)
+- [NEUT is not bit-reproducible from its seed](#neut-is-not-bit-reproducible-from-its-seed)
+- [Derived kinematic variables in the common output](#derived-kinematic-variables-in-the-common-output)
+- [Final-state content in the common output (2026-07-30)](#final-state-content-in-the-common-output-2026-07-30)
+- [`analyze-kinematics`: weighted by default, with the weight efficiency in view](#analyze-kinematics-weighted-by-default-with-the-weight-efficiency-in-view)
+- [Merging chunks averages cross-section weights, it does not sum them](#merging-chunks-averages-cross-section-weights-it-does-not-sum-them)
+- [Weak current: enforced natively, recorded per event as `is_cc`](#weak-current-enforced-natively-recorded-per-event-as-is_cc)
+- [Plots decide CC vs. NC from the data, not from `physics.current`](#plots-decide-cc-vs-nc-from-the-data-not-from-physicscurrent)
+- [The probe flavour is one table, validated at config time (2026-07)](#the-probe-flavour-is-one-table-validated-at-config-time-2026-07)
+- [GENIE: a probe with no staged spline is an error, not a zero weight (2026-07)](#genie-a-probe-with-no-staged-spline-is-an-error-not-a-zero-weight-2026-07)
+- [A job label is a pure function of its own job](#a-job-label-is-a-pure-function-of-its-own-job)
+- [Seeds are hashed, not laid out arithmetically](#seeds-are-hashed-not-laid-out-arithmetically)
+- [GiBUU runs without FSI transport, because the output is inclusive (2026-08)](#gibuu-runs-without-fsi-transport-because-the-output-is-inclusive-2026-08)
+- [Plots are grouped by the configuration, not by the events](#plots-are-grouped-by-the-configuration-not-by-the-events)
+- [Two W columns, and negative W² blanked rather than clamped (2026-08-05)](#two-w-columns-and-negative-w²-blanked-rather-than-clamped-2026-08-05)
+- [`resonant_primary` as a column, rather than relabelling NuWro's `res` (2026-08-05)](#resonant_primary-as-a-column-rather-than-relabelling-nuwros-res-2026-08-05)
+- [Per-chunk sidecars record run progress and timing (2026-09)](#per-chunk-sidecars-record-run-progress-and-timing-2026-09)
+- [NuWro's `w_true_gev` is taken from the outgoing hadrons (2026-09)](#nuwros-w_true_gev-is-taken-from-the-outgoing-hadrons-2026-09)
+- [FSI is on in every generator, set by the framework or the GENIE tune (2026-10)](#fsi-is-on-in-every-generator-set-by-the-framework-or-the-genie-tune-2026-10)
+- [Reweight universes for NuWro (2026-10)](#reweight-universes-for-nuwro-2026-10)
+- [Reweight universes for GENIE, and switch variations (2026-10)](#reweight-universes-for-genie-and-switch-variations-2026-10)
+- [GENIE dials checked against the tune at validation (2026-10)](#genie-dials-checked-against-the-tune-at-validation-2026-10)
+- [GENIE dials for z-expansion tunes and every probe (2026-10)](#genie-dials-for-z-expansion-tunes-and-every-probe-2026-10)
+- [Correlated universe parameters, and Meyer et al. for the z-expansion (2026-10)](#correlated-universe-parameters-and-meyer-et-al-for-the-z-expansion-2026-10)
+- [Label columns: `interaction` as an HDF5 enum, the rest as metadata (2026-10)](#label-columns-interaction-as-an-hdf5-enum-the-rest-as-metadata-2026-10)
+- [Failure diagnosis from files, and retries chosen by failure mode (2026-10)](#failure-diagnosis-from-files-and-retries-chosen-by-failure-mode-2026-10)
+- [GiBUU QE oversampling, as passes in a `gibuu:` job section (2026-10)](#gibuu-qe-oversampling-as-passes-in-a-gibuu-job-section-2026-10)
+- [Disk footprint: compressed narrow columns, NaN placeholders, raw pruning, streaming merge (2026-10)](#disk-footprint-compressed-narrow-columns-nan-placeholders-raw-pruning-streaming-merge-2026-10)
+- [Old generator versions: NEUT 5.4.2 from source, GENIE 2.12.8 without MEC (2026-10)](#old-generator-versions-neut-542-from-source-genie-2128-without-mec-2026-10)
+- [NuWro QE model as config versions `sf` and `lfg`; legacy config versions (2026-11)](#nuwro-qe-model-as-config-versions-sf-and-lfg-legacy-config-versions-2026-11)
+- [Pruning removes every raw file but `translated_config.json` (2026-11)](#pruning-removes-every-raw-file-but-translated_configjson-2026-11)
+- [NEUT 6 stays the `neut` generator, not a new one (2026-11)](#neut-6-stays-the-neut-generator-not-a-new-one-2026-11)
+- [NEUT 6 config versions are named after T2K model sets (2026-11)](#neut-6-config-versions-are-named-after-t2k-model-sets-2026-11)
+
 ## Dual container pathways: Docker locally, Apptainer on the cluster (2026-07)
 
 **Decision.** Generators (and, on the cluster, the CLI itself) run in
@@ -89,7 +136,8 @@ via `containers.apptainer_dispatch`.
 - Extensibility was the requirement: adding a generator or a new version of an
   existing one must not touch `nf-base.def` or the build script's generator
   logic. Discovery + generated stages achieve that; the only inputs are a
-  `<gen>.def` and a `CODE_VERSIONS` entry (with `build_arg_name`).
+  `<gen>.def` and a `CODE_VERSIONS` entry (plus the adapter's
+  `build_arg_name` when the build takes a version argument).
 - **Multiple versions of one generator must coexist** in the same image.
   Version-namespaced payload paths + explicit `nf-run` version dispatch make
   that possible; distinct image tags (`<name>:<code_version>`) already yield
@@ -131,9 +179,11 @@ via `containers.apptainer_dispatch`.
 
 ## GiBUU non-resonant background events are `dis`, and every channel is enabled (2026-07)
 
-2026-07 — moved to [generators/gibuu.md](generators/gibuu.md#the-non-resonant-background-is-counted-as-dis-2026-07).
+2026-07 — moved to [generators/gibuu.md](generators/gibuu.md#the-non-resonant-background-is-counted-as-dis-2026-07)
+(the `dis` label) and [generators/gibuu.md](generators/gibuu.md#configuring-a-job)
+(the enabled channels).
 
-## NEUT: a payload extracted from a published image, not built from source
+## NEUT 5.7.0: a payload extracted from a published image, not built from source
 
 2026-07 — moved to [generators/neut.md](generators/neut.md#a-payload-extracted-from-a-published-image).
 
@@ -155,7 +205,7 @@ via `containers.apptainer_dispatch`.
 
 ## NEUT is not bit-reproducible from its seed
 
-2026-07 — moved to [generators/neut.md](generators/neut.md#seeding).
+2026-07 — moved to [generators/neut.md](generators/neut.md#seed-reproducibility).
 
 ## Derived kinematic variables in the common output
 
@@ -241,7 +291,10 @@ events for all the others. Hashing the job's own identity makes a seed
 reproducible from `run.seed` alone and independent of its neighbours.
 
 The modulus keeps a seed (plus GiBUU's `PASS_SEED_OFFSET` of 1e6 for the NC pass
-of an inclusive run) inside the signed 32-bit range Fortran generators require.
+of an inclusive run) inside the signed 32-bit range Fortran generators require;
+GiBUU's QE-oversampling passes add further multiples of the offset, and
+`MAX_QES_OVERSAMPLING` in `translators/gibuu.py` caps the pass count so the sum
+stays in range.
 `build_task_manifest` asserts all seeds in a manifest are distinct: a hash
 collision is astronomically unlikely and silently catastrophic, since two tasks
 would generate identical events and inflate the sample's statistics.
@@ -508,7 +561,7 @@ antineutrino variants and the z-expansion dials for AR23_20i were not ruled out,
 only unchecked; they were added in the second round (2026-10, below). Under a tune without
 hA2018 FSI the FSI dials cannot work at all, and validation refuses them (see
 the 2026-10 section on checking dials against the tune). Details and measurements are in
-[generators/genie.md](generators/genie.md#reweight-universes-and-variations).
+[generators/genie.md](generators/genie.md#reweight-universes).
 
 ## GENIE dials checked against the tune at validation (2026-10)
 

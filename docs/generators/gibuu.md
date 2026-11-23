@@ -8,6 +8,21 @@ HEPForge release tarballs and run from a generated jobcard, with full transport
 [../physics.md](../physics.md); the run pipeline is in
 [../architecture.md](../architecture.md).
 
+**Contents**
+
+- [At a glance](#at-a-glance)
+- [Setup](#setup)
+- [Configuring a job](#configuring-a-job)
+- [Reading the output](#reading-the-output)
+- [Model notes](#model-notes)
+- [Reweight universes](#reweight-universes)
+- [Known limitations](#known-limitations)
+- [Implementation](#implementation)
+- [Container build](#container-build)
+- [Design notes](#design-notes)
+- [Validation](#validation)
+- [Upstream issues](#upstream-issues)
+
 ## At a glance
 
 | | |
@@ -43,7 +58,8 @@ step. The GitHub mirror is stale and not used.
   fixed-energy mode).
 - **Oversample QE for low-energy precision** with `gibuu.qes_oversampling`
   ([below](#qe-oversampling)).
-- **Transport costs about 4× the wall clock** of a run without it.
+- **Transport costs about 4× the wall clock** of a run without it (one Ar40
+  comparison, 65.6 s against 15.9 s; [Validation](#transport)).
 
 ### QE oversampling
 
@@ -70,7 +86,7 @@ pass's:
   ran 4.9 h on C12 and 5.7 h on Ar40.
 - **Choosing K.** The best K is 5–10. The optimum is ~10 where QE carries ≥ 98%
   of the variance (below 1 GeV), and 3–6 at 1–5 GeV.
-- **Files grow ~3.3×.** A QE-only pass writes ~2.5–3× as many QE events as the
+- **Files grow ~3.4×.** A QE-only pass writes 2.3–3.3× as many QE events as the
   full pass, but they carry the same effective sample size: the extra events
   have small weights. At K = 10 a chunk holds ~3.4× the events of a K = 0 chunk.
 - **The cross section is unchanged.** Every pass estimates the σ of the channels
@@ -102,8 +118,8 @@ carries no normalization. In practice:
   σ.
 - **Negative weights are physical** (interference terms) and must be summed as
   they are.
-- **Weights are heavy-tailed.** A 100k-event run's quasi-elastic sample had an
-  effective size of 35 events. Check `analyze-kinematics`'s weight-efficiency
+- **Weights are heavy-tailed.** The quasi-elastic sample of an 83k-event numu CC
+  C12 run had an effective size of 35 events ([Validation](#heavy-tails)). Check `analyze-kinematics`'s weight-efficiency
   table and quote bootstrap intervals for channel statistics
   ([physics.md](../physics.md#weighted-statistics-and-weight-efficiency)).
 - **Merged files are large** for the information they carry. `merge
@@ -197,9 +213,9 @@ GiBUU has no reweight support in this framework.
 - **Weights are heavy-tailed**; effective sample sizes can be orders of
   magnitude below the event count.
 - **Flux resolution is untested.** GiBUU gets 500 *equidistant* flux bins, the
-  same choice that produced a visible staircase below ~1 GeV in NEUT before it
-  moved to log bins. Whether GiBUU shows the same effect over a wide energy range
-  has not been checked. GiBUU requires equidistant bins, so log spacing is not an
+  a binning that produces a visible staircase below ~1 GeV in NEUT, which
+  therefore gets log bins. Whether GiBUU shows the same effect over a wide
+  energy range has not been checked. GiBUU requires equidistant bins, so log spacing is not an
   option.
 - `config_version` is `"default"` only.
 - `run.log_level` is ignored.
@@ -256,8 +272,11 @@ Fortran namelist, rendered by `_render_jobcard`:
 | `numEnsembles` | from the event count | see below |
 | `includeQE`, `includeDELTA`, `includeRES`, `includeDIS`, `include1pi`, `include2pi`, `include2p2hQE` | all `.true.` | all but `includeQE` default to `.false.`; a QE pass keeps only `includeQE` |
 
-**Ensemble sizing.** `numEnsembles = ceil(events / (A/2 · n_passes))`, from the
-empirical yield of ~A/2 events per ensemble (~6 on carbon). GiBUU aborts for
+**Ensemble sizing.** `numEnsembles = max(1, ceil(events / (max(1, A/2) ·
+n_currents)))`, from the empirical yield of ~A/2 events per ensemble (~6 on
+carbon); `n_currents` counts the weak-current passes (2 for `inclusive`, else 1),
+not the QE passes, which reuse their current's `numEnsembles`. The `max(1, A/2)`
+floor applies to H1. GiBUU aborts for
 `numEnsembles < 100` unless the value is negative (its documented "enforce
 anyway" override), so small counts are negated.
 
@@ -326,8 +345,8 @@ weight and leaves the sum invariant. `num_runs_sameEnergy` never enters
 
 `NUM_RUNS_SAME_ENERGY` is 1 and lives in one place, so the jobcard and the weight
 normalization cannot drift. The normalizer reads *every*
-`EventOutput.Pert.*.root` part and fails loudly if it finds fewer than
-`num_runs`.
+`EventOutput.Pert.*.root` part and fails loudly if a pass holds any number of
+parts other than `num_runs`.
 
 ### Weak current
 
@@ -416,7 +435,8 @@ and `doStoreNeutrinoInfo` (`initNeutrino.f90`) passes it `eN%nucleon`, never
 ### Weighting determines everything
 
 Because the raw weight *is* a cross section, three things follow that would be
-wrong for the other generators: `D` is the run count, not the event count;
+wrong for the other generators: the merge denominator (`xsec_norm_count`) is
+the run count, not the event count;
 `inclusive` can be two passes concatenated; and statistics must be weighted.
 
 ### `num_runs`, not the event count, as the merge denominator
@@ -478,14 +498,14 @@ runtime- and version-dependent.
 ### A closed `evType` table
 
 An out-of-range `evType` means our reading of the output is wrong, not that GiBUU
-invented a channel, so it raises. A catch-all `other` is what hid the missing
-32/33 mapping (see below).
+invented a channel, so it raises. A catch-all `other` lets an unmapped channel
+pass unnoticed, at a size that matters ([Background mapping](#background-mapping)).
 
 ### The non-resonant background is counted, as `dis` (2026-07)
 
-A high-statistics run once put ~10% of its events into `other`, more than all of
-`res`: the mapping covered only 1, 2–31, 34 and 35/36. These events must be
-counted, since dropping them would understate the inclusive cross section
+GiBUU's non-resonant background (`evType` 32/33) is ~10% of the events of a
+high-statistics run, more than all of `res`
+([Validation](#background-mapping)). These events must be counted, since dropping them would understate the inclusive cross section
 (`neutrinoXsection.f90:564-700`: a MAID-like amplitude with resonances
 subtracted, or the Bosted–Christy background fit). `res` would be wrong, because
 GENIE's `res` is purely resonant and GiBUU's background has the resonances
@@ -499,10 +519,10 @@ comparability.
 
 ### FSI on (2026-10)
 
-The jobcards used to set `numTimeSteps = 0`, GiBUU's documented setting for
-*inclusive* cross sections, correct while the common output recorded no hadronic
-observable. With it the list is the primary-vertex one. The final-state columns
-need the post-transport list. GiBUU can cut bound nucleons itself
+`numTimeSteps = 0` is GiBUU's documented setting for *inclusive* cross sections;
+with it the particle list is the primary-vertex one. The final-state columns
+need the post-transport list, so the jobcards transport, which leaves the
+cross section and the vertex columns unchanged ([Transport](#transport)). GiBUU can cut bound nucleons itself
 (`applyCuts = 2` in `&neutrinoAnalysis`), but only for `FinalEvents.dat`, not the
 RootTuple, hence `_leave_nucleus`.
 
@@ -518,10 +538,6 @@ per event 1.867 → 3.077.
 **Ar40** (2026-10-05, 4000 requested events, same seed both ways): 3435 events
 both ways, `weight`, `evType` and `lepOut_E` bit-identical, `sum(weight)` =
 1.131102. Wall clock 65.6 s against 15.9 s (Apple Silicon, Docker under Rosetta).
-
-> **Unverified:** these notes and physics.md quote 1.867 and 1.87 hadrons per event
-> before transport, on C12 and Ar40 respectively. The near-identical baseline on
-> two different nuclei is suspicious and should be rechecked.
 
 ### Bound nucleons
 
@@ -547,8 +563,9 @@ NuWro give 2.18–2.25 GeV with a floor at 2 `M_N`.
 
 ### Heavy tails
 
-In one 100k-event run the quasi-elastic sample had Kish `n_eff = 35` out of 14579
-events, with the top 1% of events carrying 86% of the weight. Pooled over
+In an 83k-event run (release2025, numu CC on C12, E^-2 power law over
+0.5–5 GeV, without FSI transport, which leaves weights unchanged) the
+quasi-elastic sample had Kish `n_eff = 35` out of 14579 events, with the top 1% of events carrying 86% of the weight. Pooled over
 0.1–500 GeV, `n_eff` is even lower (2–30 per 1.8M events in
 `keystone_prod_v3_pilot`), but that mostly reflects the flux division spreading
 weights across energies; per energy bin the QE efficiency is ~2%.
@@ -571,7 +588,7 @@ numubar Ar40 and the other flavors and nuclei. Every other channel stays at
 9.6–9.96× from one chunk to ten.
 
 The gain at K passes follows from the variance shares: with QE at a fraction f of
-the variance, the variance becomes f/(K+1) + (1−f) of today's.
+the variance, the variance becomes f/(K+1) + (1−f) of its value at K = 0.
 
 `gibuu_qes_oversampling_pilot` (2026-10-29; numu, 4 chunks of 2.5e5 requested
 events, K = 10) measured the cost and checked the QE-only jobcard:
@@ -629,10 +646,8 @@ The high-statistics run that exposed the missing 32/33 mapping put 31 885 of
 ### Per-nucleon normalization
 
 From GiBUU's source and the km3buu cross-check only (see
-[Cross-section weight](#cross-section-weight)).
-
-> **Unverified:** physics.md used to say this was checked by rerunning the same
-> flux on several nuclei; no such GiBUU measurement is recorded.
+[Cross-section weight](#cross-section-weight)); no run of the same flux on
+several nuclei is recorded.
 
 ## Upstream issues
 

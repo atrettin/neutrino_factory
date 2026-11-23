@@ -86,7 +86,7 @@ class NeutAdapter(GeneratorAdapter):
         # NEUT 6: CMake build (build_neut.sh dispatches on the tree) and a TOML
         # card in place of the Fortran one; output, modes, seeding and flux
         # sampling are unchanged, which is why it stays the same generator (see
-        # docs/generators/neut.md, "NEUT 6"). config_version "b25" is NEUT 6's
+        # docs/generators/neut.md, "NEUT 6 card and output"). config_version "b25" is NEUT 6's
         # shipped defaults plus hybrid FSI Pauli blocking.
         "6.2.4": {
             "repo": "https://github.com/neut-devel/neut",

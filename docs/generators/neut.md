@@ -1,17 +1,33 @@
 # NEUT
 
 NEUT's source is access-restricted (`github.com/neut-devel/neut`, granted on
-request). The framework runs three NEUT versions: 5.7.0, extracted from a published
-image, whose DIS mode distorts high-energy kinematics
-([Known limitations](#known-limitations)); 5.4.2 and 6.2.4, both built from source
-on top of that same image. NEUT 6 changed the build system and the card format,
-but not the output, the mode numbers or the seeding, so it is a `code_version` of
-the same generator ([NEUT 6](#neut-6)). It runs in two stages: NEUT's
-`neutroot2`, then a project-owned flattener, because NEUT's native output cannot
-be read from Python. It has no CC/NC switch; a single current is selected through
-its per-channel cross-section scale arrays. The conventions its output is
-normalized onto are in [../physics.md](../physics.md); the run pipeline is in
+request). The framework runs three NEUT versions: 5.7.0, extracted from a
+published image, whose DIS mode distorts high-energy kinematics ([Known
+limitations](#known-limitations)); 5.4.2 and 6.2.4, both built from source on
+top of that same image. NEUT 6 changed the build system and the card format, but
+not the output, the mode numbers or the seeding, so it is a `code_version` of
+the same generator ([NEUT 6 card and output](#neut-6-card-and-output)). It runs
+in two stages: NEUT's `neutroot2`, then a project-owned flattener, because
+NEUT's native output cannot be read from Python. It has no CC/NC switch; a
+single current is selected through its per-channel cross-section scale arrays.
+The conventions its output is normalized onto are in
+[../physics.md](../physics.md); the run pipeline is in
 [../architecture.md](../architecture.md).
+
+**Contents**
+
+- [At a glance](#at-a-glance)
+- [Setup](#setup)
+- [Configuring a job](#configuring-a-job)
+- [Reading the output](#reading-the-output)
+- [Model notes](#model-notes)
+- [Reweight universes](#reweight-universes)
+- [Known limitations](#known-limitations)
+- [Implementation](#implementation)
+- [Container build](#container-build)
+- [Design notes](#design-notes)
+- [Validation](#validation)
+- [Upstream issues](#upstream-issues)
 
 ## At a glance
 
@@ -28,8 +44,9 @@ normalized onto are in [../physics.md](../physics.md); the run pipeline is in
 
 ## Setup
 
-`setup/setup_neut.sh [--jobs N] <code_version>` makes `neut:<code_version>` for
-Docker (`--platform linux/amd64`). For `5.7.0-nuint2024` it pulls the source image,
+`setup/setup_neut.sh [--jobs N] [<code_version>]` makes `neut:<code_version>`
+for Docker (`--platform linux/amd64`); `<code_version>` defaults to
+`5.7.0-nuint2024`. For `5.7.0-nuint2024` it pulls the source image,
 `nuisancemc/tutorial:nuint2024` pinned by digest ([Container build](#container-build)),
 ~5 GB, and retags it. For `5.4.2` and `6.2.4` it builds
 `setup/Dockerfile.neut` on top of that image from the source tarball
@@ -91,9 +108,11 @@ mode:
 NEUT emits no invariant mass of its own; both W columns are derived. `p_N` is the
 sum of the struck initial-state nucleons (`nuc_*_gev`): one normally, the
 correlated pair for 2p2h, matching GENIE's two-nucleon cluster. NEUT stores the
-nucleon **on shell**, unlike the other generators, so `qel` `w_true_gev` sits
+nucleon **on shell**, unlike the other generators, and `qel` `w_true_gev` sits
 ~50 MeV above the nucleon mass rather than on it
-([physics.md](../physics.md#how-each-generators-qe-vertex-closes)).
+([physics.md](../physics.md#how-each-generators-qe-vertex-closes)). Whether the
+first causes the second is not established
+([physics.md](../physics.md#open-questions)).
 
 ### Final-state content
 
@@ -111,7 +130,7 @@ nucleons (status −1) and particles killed or replaced during the cascade (e.g.
   within a flux bin, so the reconstructed σ(E) has no structure finer than the
   1000 log bins (~0.62%/bin over 0.1–50 GeV) the framework hands over.
 
-## NEUT 6 model sets
+### NEUT 6 model sets
 
 NEUT 6 ships one defaults card but T2K names two model sets, B25 and A25. The
 source for this section is the release-validation talk linked from the 6.2.4
@@ -196,15 +215,18 @@ NEUT has no reweight support in this framework.
   distribution rising towards 1. Negligible below ~5 GeV, clearly biased by
   10–20 GeV; QE, 2p2h, RES and multi-π are unaffected. Fixed in NEUT 5.9.0
   ([upstream issue 4](#upstream-issues), [Validation](#dis-lepton-angle-cut)).
-  5.4.2's `nejet.F` has no forward cut, only a backward one (`COSTH < -0.75`);
-  its high-energy DIS kinematics have not been measured.
+  5.4.2's `nejet.F` has no forward cut, only a backward one (`COSTH < -0.75`),
+  and 6.2.4's (`src/models/MPiDIS/nejet.F`) keeps only the backward cut
+  `RFCOSTH < -0.999`; this is read from the source, and neither version's
+  high-energy DIS kinematics have been measured.
 - **NEUT 5.4.2 reports itself as 5.4.1** (`neut-config --version`, library
   suffix `.541`): the tag's `configure.ac` was not bumped. Likewise **6.2.4
   reports itself as 6.2.0**: its `CMakeLists.txt` says `project(NEUT VERSION 6.2.0)`.
-- **5.7.0 is not bit-reproducible from its seed.** Different seeds give different,
-  independent event sets, so chunking is safe; but two runs with the *same* seed
-  diverge after a few events. 6.2.4 does not show this; 5.4.2 was not tested. Configs are reproducible in distribution, not in
-  individual events. This is inside NEUT ([upstream issue 1](#upstream-issues)).
+- **5.7.0 is not bit-reproducible from its seed.** Different seeds give
+  different, independent event sets, so chunking is safe; but two runs with the
+  *same* seed diverge after a few events. 6.2.4 does not show this; 5.4.2 was
+  not tested. Configs are reproducible in distribution, not in individual
+  events. This is inside NEUT ([upstream issue 1](#upstream-issues)).
 - **A very wide topmost flux bin is truncated**: energies are drawn over only
   part of the bin. The production binning (top bin ~0.17 GeV wide at 50 GeV) is
   two orders of magnitude narrower than the widths that showed it
@@ -224,10 +246,9 @@ NEUT has no reweight support in this framework.
   has only the small `rmfData/{maxDiff,totXsec}` tables (828 KB), and a card
   selecting `rmf` would stop with a `runtime_error` when it opens the first
   tensor file (`src/models/contrib/rmf/RMFTensor.cpp`). This blocks T2K's A25
-  model set. Access to `neut-data` would unblock it ([NEUT 6](#neut-6)).
-- `config_version` is `"default"` only for NEUT 5 and `"b25"` only for NEUT 6;
-  `a25` and `a25_Eb_off` wait on the ED-RMF tables above
-  ([NEUT 6 model sets](#neut-6-model-sets)).
+  model set, and with it the config versions `a25` and `a25_Eb_off`
+  ([NEUT 6 model sets](#neut-6-model-sets)); access to `neut-data` would
+  unblock them ([Container build](#container-build)).
 - `run.log_level` is ignored.
 
 ---
@@ -251,15 +272,19 @@ Files: `generators/neut.py`, `translators/neut.py`, `normalizers/neut.py`,
    exists.
 
 Artifacts in the work directory: `neut.card` (NEUT 6: `neut.toml`), `flux.root`,
-`ranseed.dat`, `events.neut.root`, `events.flat.root`. NEUT 6 also leaves
+`ranseed.dat`, `events.neut.root`, `events.flat.root`, and the
+`translated_config.json` sidecar the normalizer requires. NEUT 6 also leaves
 `nf_flux_o.root`. It writes the flux and event-rate histograms there first and
 then copies them into `events.neut.root` (`loadflx_`, `NEUTROOT::AddFlux`).
 
-Like every adapter, `build_run_command` runs a binary found on `$PATH` before considering a container, since a cluster task already runs inside the Apptainer image, which cannot nest ([../apptainer_image.md](../apptainer_image.md)).
+Like every adapter, `build_run_command` runs a binary found on `$PATH` before
+considering a container, since a cluster task already runs inside the Apptainer
+image, which cannot nest ([../apptainer_image.md](../apptainer_image.md)).
 
-`CONFIG_VERSION_CARDS` in `translators/neut.py` maps `config_version` to card
-keys. A new parameter set is a new entry there plus a new `config_versions` entry
-on the adapter.
+`CONFIG_VERSION_CARDS` in `translators/neut.py` maps a NEUT 5 `config_version`
+to card keys, and `NEUT6_CONFIG_VERSIONS` maps a NEUT 6 one to TOML overrides. A
+new parameter set is a new entry in the table for its card format plus a new
+`config_versions` entry on the adapter's catalog row.
 
 ### Paths must be bare filenames
 
@@ -450,23 +475,55 @@ converted from MeV to GeV in the macro.
 `n_fs`/`fs_*` final-state branches. `pdgnu` and `totcrs` are written but not
 read.
 
+### NEUT 6 card and output
+
+NEUT 6 changed the card format and the output defaults but not the event model
+the adapter reads, so it is a `code_version` of this generator, not a separate
+one ([../design_decisions.md](../design_decisions.md), 2026-11). Against the
+5.4.2 source (the build is in [Container build](#container-build), the physics
+defaults in [NEUT 6 model sets](#neut-6-model-sets)):
+
+| Area | NEUT 6.2.4 | Effect here |
+|---|---|---|
+| Card | TOML (`neutroot2 card.toml out.root`), merged key by key onto `$NEUT_CARDS/NEUT.Defaults.toml` (`toml_h::update_table`). | `NeutTranslator._toml_card` writes only the framework's keys, rendered by `render_toml`. Each mirrors a NEUT 5 card key: probe `species`, `energy_histogram = ["flux.root", "nf_flux", "gev"]`, target nucleon counts, `rng_seed = "file"`, FSI on. |
+| Output | Defaults to NuHepMC; `output_format = "neutroot"` gives the same `neuttree` of NeutVect (ClassDef 6 → 8, members only added). The dictionary library is now `libNEUTROOTClass`. | The card pins `neutroot`. `nf_flatten.C` loads whichever of the two libraries exists. |
+| Modes, flux, seed | Same `nemodsel` mode table, same `Ufm2TH1dist` sampling and histogram names, same `nerdseed` reading `$RANFILE`. | Normalizer, `compute_xsec_weight` and the seed file are unchanged. |
+
 ## Container build
 
-Both code versions start from `nuisancemc/tutorial:nuint2024`, pinned by digest.
+All three code versions start from `nuisancemc/tutorial:nuint2024`, pinned by digest.
 `setup/apptainer/neut.def` bootstraps stage 1 from it and stages only
 `/opt/neut` (including `share/neut/crsdat` and `include/`; the headers are needed
 because the flattener compiles through Cling) plus the ROOT 6.30/04 build NEUT
 links against: ~1.5 GB of the ~5 GB image. `build_apptainer_images.sh` passes
 `CODE_VERSION`, which names the payload directory.
 
-For `5.7.0-nuint2024` the image's NEUT is used as is, and the Docker image is the
-retagged source image. For `5.4.2`, `setup/neut/build_neut.sh` compiles NEUT in
-the image and installs it over `/opt/neut`, so the image's environment
-(`PATH`, `LD_LIBRARY_PATH`, `NEUT_CRSPATH`, `neut-config`) and everything
-downstream apply unchanged. `setup/Dockerfile.neut` runs it for Docker; stage 1
-of `neut.def` runs it when `setup/neut/src/neut-<CODE_VERSION>.tar.gz` exists,
-and fails the build when it is missing for any version but `5.7.0-nuint2024`.
-The source build needs four adjustments, each of which caused a real failure:
+For `5.7.0-nuint2024` the image's NEUT is used as is, and the Docker image is
+the retagged source image. For `5.4.2` and `6.2.4`, `setup/neut/build_neut.sh`
+compiles NEUT in the image and installs it over `/opt/neut`, so the image's
+environment (`PATH`, `LD_LIBRARY_PATH`, `NEUT_CRSPATH`, `neut-config`) and
+everything downstream apply unchanged. `setup/Dockerfile.neut` runs it for
+Docker; stage 1 of `neut.def` runs it when
+`setup/neut/src/neut-<CODE_VERSION>.tar.gz` exists, and fails the build when it
+is missing for any version but `5.7.0-nuint2024`.
+
+`build_neut.sh` takes NEUT 6's CMake path when the tree has a top-level
+`CMakeLists.txt`, and NEUT 5's autotools path otherwise. **NEUT 6** builds with
+CMake ≥ 3.17 from the repository root (the script installs a newer CMake from
+PyPI when the image's is older). It bundles CERNLIB 2005 (`ext/cernlib2005`), so
+the shim below goes unused, and fetches toml11, FortModGen, NucDeEx and Eigen at
+configure time, so the build needs network access. The script turns off
+`NEUT_DOWNLOAD_DATA`, `NEUT_WERROR_ENABLED` and NuHepMC. `NEUT_DOWNLOAD_DATA`
+adds only an install step that runs `src/utils/CLI/neut-fetch-data --model
+ED-RMF`, which clones the private `neut-devel/neut-data` repository (or fetches
+from it with a `GITHUB_TOKEN`) into `crsdat/rmfData/tensors/`; the RMF code is
+compiled either way ([Known limitations](#known-limitations)). The install
+layout matches NEUT 5's (`bin`, `lib`, `include`, `share/neut/{crsdat,Cards}`),
+except that the Bodek-Yang tables are in `crsdat/BY/`. NEUT 6 raises its C++
+standard to ROOT's (17).
+
+The **NEUT 5.4.2** build needs four adjustments, each of which caused a real
+failure:
 
 - **CERNLIB layout shim.** NEUT 5.4.2's configure requires the CERNLIB 2005
   layout, `$CERN/$CERN_LEVEL/{bin/cernlib,lib,include/pdf804/pilot.h}`, and links
@@ -490,8 +547,9 @@ The source build needs four adjustments, each of which caused a real failure:
   match.
 
 NEUT is installed directly at `/opt/neut` rather than built elsewhere and moved:
-`neut-config` bakes in its install prefix (`INSTALL_ROOT`), which the
-flattener's include-directory lookup relies on.
+`neut-config` and the binaries' rpath bake in the install prefix, and the
+flattener's wrapper asks `neut-config --incdir` for the NEUT headers unless
+`NF_NEUT_INCDIR` is set (`setup/neut/nf-neut-flatten`).
 
 - **The source image is pinned by digest.** `NeutAdapter.CODE_VERSIONS` and the
   def's defaults name `nuisancemc/tutorial@sha256:24239bd216fed290eb60057addbe6df91605eb3bb6f3dd99b023bafb6d766ead`,
@@ -504,10 +562,13 @@ flattener's include-directory lookup relies on.
   generator-specific code, and overrides `build_arg` to pass
   `NEUT_SOURCE_IMAGE`.
 - **Built from the repo root.** `build_apptainer_images.sh` runs `apptainer build`
-  from the repo root so `neut.def`'s `%files` can stage the flattener by
-  repo-relative path. No other def has a host `%files` block. Changing the macro
-  therefore means rebuilding the NEUT payload SIF and recomposing `nf-base.sif`,
-  from a host shell: `bash setup/build_apptainer_images.sh --only neut --force`.
+  from the repo root so `neut.def`'s `%files` can stage the flattener and the
+  source tarball by repo-relative path. Changing the macro therefore means
+  rebuilding each NEUT payload SIF in use and recomposing `nf-base.sif`, from a
+  host shell, one code version at a time:
+  `bash setup/build_apptainer_images.sh --only neut --code-version 5.7.0-nuint2024 --force`.
+  Without `--code-version` the script rebuilds every catalogued NEUT version and
+  aborts on the first source build whose tarball is not staged.
   `nf-dev.sif` is built on `nf-base.sif` and keeps the old macro until it is
   rebuilt with `--dev-tools --force` (adding `--dev-tools` to that command does
   all three). Under local Docker the macro is bind-mounted and takes effect
@@ -515,13 +576,19 @@ flattener's include-directory lookup relies on.
 
 Three relocation fixes in `%post`, each of which caused a real failure:
 
-- **Three dangling absolute symlinks are repointed.** ROOT's `bin/root` is an
-  absolute symlink to `/opt/root/v6-30-04/bin/root.exe` in the source image and
-  dangles once relocated, which bash reports as the confusing `root: not found`.
-  `%test` runs `root --version` from the payload, so this fails at build time.
+- **Three dangling absolute symlinks are repointed**: ROOT's `bin/root`, and
+  NEUT's `src/neutclass` and `include/include` (both to `/opt/neut/include`).
+  `bin/root` is an absolute symlink to `/opt/root/v6-30-04/bin/root.exe` in the
+  source image and dangles once relocated, which bash reports as the confusing
+  `root: not found`. `%test` runs `root --version` from the payload, so this
+  fails at build time.
 - **`neut-config`'s install prefix is repointed**: in 5.7.0 through `NEUT.pc`'s
   `prefix=` (`neut-config` refuses to run when it disagrees with its own
-  location), in 5.4.2 through `INSTALL_ROOT` in the script itself.
+  location), in 5.4.2 through `INSTALL_ROOT` in the script itself. 6.2.4's
+  CMake-generated `neut-config` locates `INSTALL_ROOT` itself but prints the
+  configure-time `/opt/neut` for `--incdir` and `--libdir`, which neither edit
+  touches (read from `cmake/Templates/neut-config.in`, untested in the payload).
+  The payload's flattener does not ask it: the wrapper sets `NF_NEUT_INCDIR`.
 - The wrapper exports `NF_NEUT_INCDIR` so Cling finds the NEUT headers, plus
   `$NEUT_CRSPATH` and `$RANFILE`.
 
@@ -536,20 +603,6 @@ Harmless noise from the flatten stage: `Error in cling::AutoLoadingVisitor:
 Missing FileEntry for /opt/neut-src/neutclass/*.h`. The image has no NEUT source
 tree, so Cling cannot autoload; the macro still compiles because the wrapper
 passes `NF_NEUT_INCDIR`.
-
-## NEUT 6
-
-NEUT 6 is a `code_version` of this generator, not a separate one
-([../design_decisions.md](../design_decisions.md), 2026-11). Compared against the
-5.4.2 source:
-
-| Area | NEUT 6.2.4 | Effect here |
-|---|---|---|
-| Build | CMake ≥ 3.17 from the repository root. CERNLIB 2005 is bundled (`ext/cernlib2005`); toml11, FortModGen, NucDeEx and Eigen are fetched at configure time. Installs to the same `bin`, `lib`, `include`, `share/neut/{crsdat,Cards}` layout, except that the Bodek-Yang tables moved to `crsdat/BY/`. | `build_neut.sh` takes a CMake branch when the tree has a top-level `CMakeLists.txt`. It turns off `NEUT_DOWNLOAD_DATA`, `NEUT_WERROR_ENABLED` and NuHepMC. `NEUT_DOWNLOAD_DATA` adds only an install step that runs `src/utils/CLI/neut-fetch-data --model ED-RMF`, which clones the private `neut-devel/neut-data` repository (or fetches from it with a `GITHUB_TOKEN`) into `crsdat/rmfData/tensors/`; the RMF code is compiled either way, but without the tables QE `model = "rmf"` cannot run ([Known limitations](#known-limitations)). `neut-fetch-data` is not installed into `bin/`. NEUT raises its C++ standard to ROOT's (17). |
-| Card | TOML (`neutroot2 card.toml out.root`), merged key by key onto `$NEUT_CARDS/NEUT.Defaults.toml` (`toml_h::update_table`). | `NeutTranslator._toml_card` writes only the framework's keys, rendered by `render_toml`. Each mirrors a NEUT 5 card key: probe `species`, `energy_histogram = ["flux.root", "nf_flux", "gev"]`, target nucleon counts, `rng_seed = "file"`, FSI on. |
-| Output | Defaults to NuHepMC; `output_format = "neutroot"` gives the same `neuttree` of NeutVect (ClassDef 6 → 8, members only added). The dictionary library is now `libNEUTROOTClass`. | The card pins `neutroot`. `nf_flatten.C` loads whichever of the two libraries exists. |
-| Modes, flux, seed | Same `nemodsel` mode table, same `Ufm2TH1dist` sampling and histogram names, same `nerdseed` reading `$RANFILE`. | Normalizer, `compute_xsec_weight` and the seed file are unchanged. |
-| Physics defaults | QE: Benhar spectral function (`"rome"`), plus new FSI and de-excitation options. | `config_version: b25` adopts them and overrides only `pauli_blocking_fsi` ([NEUT 6 model sets](#neut-6-model-sets)). |
 
 ## Design notes
 
@@ -577,8 +630,8 @@ token (`numu`, **`numub`** not `numubar`, `nue`, `nueb`, read off the binary), a
 falls back to `fluxhisto` / `ratehisto` for a beam it has no token for, e.g. ν_τ.
 None of that is a documented contract, so the framework does not encode the
 mapping. NUISANCE solves the same problem the same way
-(`PlotUtils::GetObjectWithName`). Hardcoding `flux_numu` made every non-numu NEUT
-run fail at normalization.
+(`PlotUtils::GetObjectWithName`). A fixed name such as `flux_numu` fails at
+normalization for every other flavour.
 
 ### Slot numbers are not mode numbers
 
@@ -622,13 +675,13 @@ a neighbouring category.
 
 ### Log-spaced per-bin integrals (2026-07)
 
-A 1M-event 0.1–50 GeV run with the previous 500 equal-width flux bins showed, below
-~1 GeV, a raw `dN/dE` staircase with ~0.1 GeV steps (the bin width) and a σ(E)/E
-plot with an inverse sawtooth; NuWro and GiBUU on the same config looked smooth.
-The 0.1 GeV steps swallowed the region where σ(E) rises by orders of magnitude.
-The fix is 1000 log bins of per-bin integrals, normalized against NEUT's own
-stamped flux. Falling back to the configured flux would restore the bug and still
-look physical.
+Equal-width bins are too coarse at low energy: with 500 bins over 0.1–50 GeV, a
+1M-event run shows, below ~1 GeV, a raw `dN/dE` staircase with ~0.1 GeV steps
+(the bin width) and a σ(E)/E plot with an inverse sawtooth, while NuWro and GiBUU
+on the same config are smooth. The 0.1 GeV steps swallow the region where σ(E)
+rises by orders of magnitude. The flux is therefore 1000 log bins of per-bin
+integrals, normalized against NEUT's own stamped flux. Falling back to the
+configured flux would restore the staircase and still look physical.
 
 ## Validation
 
@@ -694,9 +747,8 @@ NC mode to one it marks NC, for both arrays, and leaves ν slot 22 unassigned.
 | ν̄_μ 5.7.0 | 0.073 | 0.180 | 0.316 | 0.488 |
 
 The largest gap, ν_μ at 1–2 GeV, is 1.9σ; 5.4.2 sits low at 1–3 GeV in both
-currents. Startup time is dominated,
-as in 5.7.0, by the Nieves 1p1h tables built for all six flavours before the
-first event.
+currents. Startup time is dominated, as in 5.7.0, by the Nieves 1p1h tables
+built for all six flavours before the first event.
 
 ### NEUT 6.2.4
 
@@ -727,8 +779,8 @@ So `mode_rescaling` is folded into `evtrt` exactly as `NEUT-CRS` is in NEUT 5.
 
 The CC cross section at 0.5–1 GeV is 11% (2.4σ) above 5.7.0. Mode 1 (CCQE) makes
 up 39% of CC events, against 34% in 5.4.2. The QE model differs between NEUT 5's
-`default` and NEUT 6's defaults ([NEUT 6](#neut-6)), but no run has isolated it
-as the cause.
+`default` and NEUT 6's defaults ([NEUT 6 model sets](#neut-6-model-sets)), but
+no run has isolated it as the cause.
 
 ### Slot mapping
 
@@ -776,15 +828,15 @@ branch by branch and histogram by histogram to the files the leaking macro wrote
 
 These peaks match `keystone_prod_v3_rejection` on the cluster, which ran the
 leaking macro at `slurm.mem: 8G` (8 GiB); outcomes from `check-status`. Its
-1e6-event C12 chunks finished, except three that crashed in `neutroot2`. Every 1e6-event O16 and Ar40 chunk
-that did not crash earlier in `neutroot2` hit the time limit in the flatten step,
-where the process stalls at the limit instead of being killed. NEUT Fe56 had
-1e6-event chunks in three jobs, numubar, nue and nuebar (10 chunks each), and
-none of the 30 finished: 26 hit the time limit (those inspected after
-`neutroot2` had written all 1e6 events, with a partial `events.flat.root`), 3
-crashed earlier in `neutroot2` (SIGFPE) and 1 lost its node. The numu Fe56 job,
-65 chunks of 153 847 events, finished. In `keystone_prod_v3_smoke`, Ar40 chunks
-of 1e6 events finished at 12G.
+1e6-event C12 chunks finished, except three that crashed in `neutroot2`. Every
+1e6-event O16 and Ar40 chunk that did not crash earlier in `neutroot2` hit the
+time limit in the flatten step, where the process stalls at the limit instead of
+being killed. NEUT Fe56 had 1e6-event chunks in three jobs, numubar, nue and
+nuebar (10 chunks each), and none of the 30 finished: 26 hit the time limit
+(those inspected after `neutroot2` had written all 1e6 events, with a partial
+`events.flat.root`), 3 crashed earlier in `neutroot2` (SIGFPE) and 1 lost its
+node. The numu Fe56 job, 65 chunks of 153 847 events, finished. In
+`keystone_prod_v3_smoke`, Ar40 chunks of 1e6 events finished at 12G.
 
 ### Source image
 
@@ -869,8 +921,9 @@ Issues 1–3 are not reported, and their causes are unconfirmed.
    Fixed upstream by commit `f7cf2d04` (2024-10-09, PR #80
    `feature/dis_clep_cut`), which keeps only the backward cut
    `RFCOSTH < -0.999`; it is the only change to `nejet.F` after 5.7.0. First
-   released in 5.9.0, not in 5.8.0. The framework needs a newer NEUT, built from
-   source, to pick it up.
+   released in 5.9.0, not in 5.8.0. Of the framework's versions, 6.2.4 carries
+   the fix in its source ([Known limitations](#known-limitations)); 5.7.0 does
+   not.
 5. **Reading `NeutVect` or `NeutVtx` from a tree leaks every entry's particle
    arrays.** The LinkDef declares both classes without `+`
    (`src/neutclass/neutclassLinkDef.h` in 5.7.0, still so in

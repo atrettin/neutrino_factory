@@ -12,7 +12,7 @@ choices lives in [design_decisions.md](design_decisions.md).
 ## Source layout
 
 - `src/neutrino_factory/cli.py` — CLI entry point (subcommands: `setup`,
-  `validate-config`, `expand`, `plan`, `submit`, `run-task`, `merge`,
+  `validate-config`, `expand`, `plan`, `submit`, `retry`, `run-task`, `merge`,
   `list-generators`, `check-status`, `plot-output`, `analyze-kinematics`);
   `main()` loads the repo-root `.env` first
 - `src/neutrino_factory/config.py` — YAML loading, env-var expansion,
@@ -26,12 +26,22 @@ choices lives in [design_decisions.md](design_decisions.md).
   `validate_output.py`
 - `src/neutrino_factory/containers.py` — container runtime selection
   (`NF_CONTAINER_RUNTIME`: docker/apptainer/auto), SIF path mapping under
-  `NF_IMAGE_ROOT`, runtime-aware `image_available`, and `docker_wrap` (the only
-  place a container command is constructed)
+  `NF_IMAGE_ROOT`, runtime-aware `image_available`, and the generator command
+  builders: `docker_wrap` (a `docker run` around a native command) and
+  `apptainer_dispatch` / `apptainer_dispatch_prefix` (the `nf-run <gen> <cv>`
+  form inside `nf-base.sif`). The rendered sbatch scripts in `slurm.py` write
+  their own `apptainer exec` line
 - `src/neutrino_factory/setup_wizard.py` — interactive `neutrino-factory setup`
   (pathway choice, storage directories, writes `.env`, offers builds)
 - `src/neutrino_factory/slurm.py` — task manifest building, sbatch script
   rendering, retry scripts and reseeding (`reseed_tasks`)
+- `src/neutrino_factory/retry_ledger.py` — record of the retry scripts a run has
+  issued, so a second `retry` does not select tasks an earlier one queued
+- `src/neutrino_factory/status.py` — per-chunk JSON sidecars written by
+  `local.run_task`, and the per-job statistics behind `check-status`
+- `src/neutrino_factory/validate_output.py` — checks a chunk or merged file
+  against the common output format (`expected_outputs` predicts paths via
+  `layout.py`)
 - `src/neutrino_factory/diagnosis.py` — classifies each task (`crash`, `oom`,
   `timeout`, `cancelled`, `node_failure`, `hung`, `invalid`, `no_output`) from its
   sidecar, Slurm logs and output activity, for `check-status` and `retry`
@@ -48,23 +58,29 @@ choices lives in [design_decisions.md](design_decisions.md).
   `image_built`, `_tag_safe`). Per-generator version knowledge lives on the
   adapters (`CODE_VERSIONS` + version-API classmethods in `generators/base.py`),
   not here
+- `src/neutrino_factory/flux.py` — the flux abstraction (`PowerLawFlux`,
+  `HistogramFlux`, `build_flux`, `validate_flux`) the translators sample and
+  integrate
 - `src/neutrino_factory/particles.py` — the six neutrino probes and their PDG
   codes, plus nucleus name parsing (`nucleus_pdg`, `nucleus_composition`)
-- `src/neutrino_factory/generators/` — `GeneratorAdapter` base class + the
-  per-generator adapters
+- `src/neutrino_factory/generators/` — `GeneratorAdapter` base class, the
+  per-generator adapters, and `registry.py` (`REGISTRY`, generator name →
+  adapter class)
 - `src/neutrino_factory/translators/` — `ConfigTranslator` per generator
   (neutrino_factory config → generator-native params)
 - `src/neutrino_factory/normalizers/` — `OutputNormalizer` per generator (raw
   output → common HDF5)
 - `src/neutrino_factory/kinematics.py` — the derived kinematic columns, one
   shared formula for every generator (see [physics.md](physics.md))
+- `src/neutrino_factory/final_state.py` — the final-state summary columns, from
+  each generator's post-FSI particle list
 - `src/neutrino_factory/universes.py` — generator-agnostic reweight-universe
   throws (seeded, linear/log) and switch variations, the per-generator parameter
   tables (NuWro, GENIE), and the shared spec/weight files the adapters write and
   the normalizers read; the weights themselves come from `nf_reweight` (see
   [generators/nuwro.md](generators/nuwro.md#reweight-universes)) and
   `nf_genie_reweight` (see
-  [generators/genie.md](generators/genie.md#reweight-universes-and-variations))
+  [generators/genie.md](generators/genie.md#reweight-universes))
 - `src/neutrino_factory/plots.py` — plotting of common-output files. Split into
   axis-level helpers that draw onto a caller-owned axes (`plot_interactions`,
   `plot_energy`, `plot_xsec_by_interaction`), figure builders (`figure_xsec`,
@@ -108,9 +124,11 @@ from each other; see [configuration.md](configuration.md) for the schema and
 [design_decisions.md](design_decisions.md) for why.
 
 **Adapters, translators and normalizers never see the jobs list.** They read
-`config["flux"]`, `config["target"]` and `config["physics"]` exactly as before;
+`config["flux"]`, `config["target"]` and `config["physics"]` as single blocks;
 `local.job_view_config` grafts the running job's blocks onto the global
-configuration at the one point where a task becomes work. Those three blocks are
+configuration at the one point where a task becomes work. It also sets
+`config["job"]` to the job itself and `config["run"]["log_level"]` to the job's
+own `log_level` where it has one. The three physics blocks are
 *replaced* rather than merged — a histogram-flux job merged over a power-law base
 would carry both sets of keys and describe two different fluxes at once.
 
